@@ -44,8 +44,7 @@ public final class EtEngine extends Engine {
 
     @Override
     public Model newModel(String name, Device device) {
-        // STUB: EtModel is implemented in a later task. No test in this task calls newModel.
-        throw new UnsupportedOperationException("newModel is implemented in a later task");
+        return new EtModel(name, newBaseManager(device));
     }
 
     @Override
