@@ -1,0 +1,25 @@
+plugins {
+    `java-library`
+}
+
+group = "org.measly"
+version = "0.1.0-SNAPSHOT"
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
+}
+
+repositories { mavenCentral() }
+
+val djlVersion = "0.36.0"
+
+dependencies {
+    compileOnly("ai.djl:api:$djlVersion")
+
+    testImplementation("ai.djl:api:$djlVersion")
+    testImplementation(platform("org.junit:junit-bom:5.10.2"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.test { useJUnitPlatform() }
