@@ -4,20 +4,28 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import org.measly.executorch.TestSupport;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import org.junit.jupiter.api.Test;
 
 class EtNativeTest {
+    private static EtTensor floatScalar(float v) {
+        ByteBuffer b = ByteBuffer.allocateDirect(4).order(ByteOrder.nativeOrder());
+        b.putFloat(0, v);
+        return new EtTensor(new long[] {1}, 6 /*Float*/, b);
+    }
+
     @Test
     void forwardAddsTwoScalars() {
         TestSupport.assumeNativeAvailable();
         long handle = EtNative.loadModule(TestSupport.addPtePath());
         try {
-            EtTensor a = new EtTensor(new long[] {1}, new float[] {2f});
-            EtTensor b = new EtTensor(new long[] {1}, new float[] {3f});
-            EtTensor[] out = EtNative.forward(handle, new EtTensor[] {a, b});
+            EtTensor[] out = EtNative.forward(
+                    handle, new EtTensor[] {floatScalar(2f), floatScalar(3f)});
             assertEquals(1, out.length);
             assertArrayEquals(new long[] {1}, out[0].shape);
-            assertArrayEquals(new float[] {5f}, out[0].data);
+            assertEquals(6, out[0].scalarType);
+            assertEquals(5f, out[0].data.order(ByteOrder.nativeOrder()).getFloat(0), 1e-6);
         } finally {
             EtNative.destroy(handle);
         }

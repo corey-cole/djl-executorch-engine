@@ -10,11 +10,15 @@ using executorch::extension::from_blob;
 
 static jclass g_etTensorClass = nullptr;
 static jfieldID g_fShape = nullptr;
+static jfieldID g_fScalarType = nullptr;
 static jfieldID g_fData = nullptr;
 static jmethodID g_ctor = nullptr;
 
 static jclass g_etMethodMetaClass = nullptr;
 static jmethodID g_metaCtor = nullptr;
+
+static jclass g_byteBufferClass = nullptr;
+static jmethodID g_byteBufferWrap = nullptr;
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   JNIEnv* env = nullptr;
@@ -28,9 +32,10 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   g_etTensorClass = static_cast<jclass>(env->NewGlobalRef(local));
   env->DeleteLocalRef(local);
   g_fShape = env->GetFieldID(g_etTensorClass, "shape", "[J");
-  g_fData = env->GetFieldID(g_etTensorClass, "data", "[F");
-  g_ctor = env->GetMethodID(g_etTensorClass, "<init>", "([J[F)V");
-  if (g_fShape == nullptr || g_fData == nullptr || g_ctor == nullptr) {
+  g_fScalarType = env->GetFieldID(g_etTensorClass, "scalarType", "I");
+  g_fData = env->GetFieldID(g_etTensorClass, "data", "Ljava/nio/ByteBuffer;");
+  g_ctor = env->GetMethodID(g_etTensorClass, "<init>", "([JILjava/nio/ByteBuffer;)V");
+  if (g_fShape == nullptr || g_fScalarType == nullptr || g_fData == nullptr || g_ctor == nullptr) {
     return JNI_ERR;
   }
   jclass mlocal = env->FindClass("org/measly/executorch/jni/EtMethodMeta");
@@ -41,6 +46,16 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   env->DeleteLocalRef(mlocal);
   g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I)V");
   if (g_metaCtor == nullptr) {
+    return JNI_ERR;
+  }
+  jclass bblocal = env->FindClass("java/nio/ByteBuffer");
+  if (bblocal == nullptr) {
+    return JNI_ERR;
+  }
+  g_byteBufferClass = static_cast<jclass>(env->NewGlobalRef(bblocal));
+  env->DeleteLocalRef(bblocal);
+  g_byteBufferWrap = env->GetStaticMethodID(g_byteBufferClass, "wrap", "([B)Ljava/nio/ByteBuffer;");
+  if (g_byteBufferWrap == nullptr) {
     return JNI_ERR;
   }
   return JNI_VERSION_1_6;
@@ -86,19 +101,19 @@ Java_org_measly_executorch_jni_EtNative_forward(
   auto* module = reinterpret_cast<Module*>(handle);
 
   jsize nIn = env->GetArrayLength(jinputs);
-
-  // Backing storage must outlive forward(); from_blob does not copy.
-  std::vector<std::vector<float>> inData(nIn);
   std::vector<std::vector<executorch::aten::SizesType>> inShape(nIn);
   std::vector<executorch::extension::TensorPtr> tensors;
   std::vector<executorch::runtime::EValue> evalues;
   tensors.reserve(nIn);
   evalues.reserve(nIn);
 
+  // from_blob does not copy: each input EtTensor.data (a direct ByteBuffer) must stay valid
+  // through module->forward(). The jinputs array and its elements are live for the whole call.
   for (jsize i = 0; i < nIn; ++i) {
     jobject jt = env->GetObjectArrayElement(jinputs, i);
     auto jshape = static_cast<jlongArray>(env->GetObjectField(jt, g_fShape));
-    auto jdata = static_cast<jfloatArray>(env->GetObjectField(jt, g_fData));
+    jint st = env->GetIntField(jt, g_fScalarType);
+    jobject jbuf = env->GetObjectField(jt, g_fData);
 
     jsize nd = env->GetArrayLength(jshape);
     inShape[i].resize(nd);
@@ -109,14 +124,18 @@ Java_org_measly_executorch_jni_EtNative_forward(
         inShape[i][k] = static_cast<executorch::aten::SizesType>(tmp[k]);
       }
     }
-    jsize nElem = env->GetArrayLength(jdata);
-    inData[i].resize(nElem);
-    env->GetFloatArrayRegion(jdata, 0, nElem, inData[i].data());
-
-    tensors.push_back(from_blob(inData[i].data(), inShape[i]));
+    void* addr = env->GetDirectBufferAddress(jbuf);
+    if (addr == nullptr) {
+      env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),
+                    "EtTensor.data must be a direct ByteBuffer");
+      return nullptr;
+    }
+    tensors.push_back(from_blob(
+        addr, inShape[i], static_cast<executorch::aten::ScalarType>(st)));
     evalues.emplace_back(tensors[i]);
+
     env->DeleteLocalRef(jshape);
-    env->DeleteLocalRef(jdata);
+    env->DeleteLocalRef(jbuf);
     env->DeleteLocalRef(jt);
   }
 
@@ -133,6 +152,7 @@ Java_org_measly_executorch_jni_EtNative_forward(
 
   for (jsize i = 0; i < nOut; ++i) {
     auto t = outputs[i].toTensor();
+
     jsize ndim = static_cast<jsize>(t.dim());
     jlongArray jshape = env->NewLongArray(ndim);
     {
@@ -142,14 +162,20 @@ Java_org_measly_executorch_jni_EtNative_forward(
       }
       env->SetLongArrayRegion(jshape, 0, ndim, sh.data());
     }
-    jsize nElem = static_cast<jsize>(t.numel());
-    jfloatArray jdata = env->NewFloatArray(nElem);
-    env->SetFloatArrayRegion(jdata, 0, nElem, t.const_data_ptr<float>());
 
-    jobject obj = env->NewObject(g_etTensorClass, g_ctor, jshape, jdata);
+    jsize nbytes = static_cast<jsize>(t.nbytes());
+    jbyteArray jbytes = env->NewByteArray(nbytes);
+    env->SetByteArrayRegion(
+        jbytes, 0, nbytes, reinterpret_cast<const jbyte*>(t.const_data_ptr()));
+    jobject jbuf = env->CallStaticObjectMethod(g_byteBufferClass, g_byteBufferWrap, jbytes);
+
+    jint st = static_cast<jint>(t.scalar_type());
+    jobject obj = env->NewObject(g_etTensorClass, g_ctor, jshape, st, jbuf);
     env->SetObjectArrayElement(jout, i, obj);
+
     env->DeleteLocalRef(jshape);
-    env->DeleteLocalRef(jdata);
+    env->DeleteLocalRef(jbytes);
+    env->DeleteLocalRef(jbuf);
     env->DeleteLocalRef(obj);
   }
   return jout;

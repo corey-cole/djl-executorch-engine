@@ -1,7 +1,7 @@
 package org.measly.executorch.engine;
 
-import ai.djl.ndarray.NDArray;
 import ai.djl.ndarray.NDList;
+import ai.djl.ndarray.NDManager;
 import ai.djl.ndarray.types.DataType;
 import ai.djl.ndarray.types.Shape;
 import ai.djl.nn.AbstractSymbolBlock;
@@ -37,30 +37,36 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
             NDList inputs,
             boolean training,
             PairList<String, Object> params) {
-        if (inputs.size() != meta.numInputs) {
-            throw new IllegalArgumentException(
-                    "ExecuTorch model expects " + meta.numInputs + " inputs, got " + inputs.size());
-        }
         final int count = inputs.size();
+        if (count != meta.numInputs) {
+            throw new IllegalArgumentException(
+                    "ExecuTorch model expects " + meta.numInputs + " inputs, got " + count);
+        }
         EtTensor[] in = new EtTensor[count];
         for (int i = 0; i < count; ++i) {
-            NDArray arr = inputs.get(i);
-            if (arr.getDataType() != DataType.FLOAT32) {
+            EtNDArray et = manager.from(inputs.get(i));
+            int st = EtDataTypes.toScalarType(et.getDataType());
+            if (st != meta.inputScalarTypes[i]) {
                 throw new IllegalArgumentException(
-                        "ExecuTorch Phase 1 supports only FLOAT32 inputs, got "
-                                + arr.getDataType() + " at index " + i);
+                        "Input " + i + " dtype " + et.getDataType()
+                                + " != model's expected ScalarType " + meta.inputScalarTypes[i]);
             }
-            in[i] = new EtTensor(arr.getShape().getShape(), arr.toFloatArray());
+            java.nio.ByteBuffer buf = et.toByteBuffer();
+            if (!buf.isDirect()) {
+                java.nio.ByteBuffer direct = manager.allocateDirect(buf.remaining());
+                direct.put(buf);
+                direct.rewind();
+                buf = direct;
+            }
+            in[i] = new EtTensor(et.getShape().getShape(), st, buf);
         }
         EtTensor[] out = EtNative.forward(handle, in);
+        NDManager rm = inputs.isEmpty() ? manager : inputs.head().getManager();
+        EtNDManager target = (rm instanceof EtNDManager) ? (EtNDManager) rm : manager;
         NDList ret = new NDList(out.length);
         for (EtTensor t : out) {
-            // Outputs are created on the model-scoped manager, then re-attached below to the
-            // request's manager so they are freed with the inference call, not the model.
-            ret.add(manager.create(t.data, new Shape(t.shape)));
-        }
-        if (!inputs.isEmpty()) {
-            ret.attach(inputs.head().getManager());
+            DataType dt = EtDataTypes.fromScalarType(t.scalarType);
+            ret.add(target.wrap(t.data, new Shape(t.shape), dt));
         }
         return ret;
     }
