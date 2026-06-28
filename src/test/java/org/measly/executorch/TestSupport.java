@@ -7,12 +7,17 @@ public final class TestSupport {
 
     private TestSupport() {}
 
-    /** Skips the test (assumption) if libexecutorch_djl.so cannot be loaded. */
+    /** Skips the test (assumption) if the native lib or the test model fixture is unavailable. */
     public static void assumeNativeAvailable() {
         try {
             Class.forName("org.measly.executorch.jni.EtNative");
         } catch (Throwable t) { // UnsatisfiedLinkError, ExceptionInInitializerError, etc.
             Assumptions.abort("Native library not available: " + t.getMessage());
+        }
+        if (!new java.io.File("native/spike/add.pte").isFile()) {
+            Assumptions.abort(
+                    "Test model native/spike/add.pte not found"
+                            + " (build it via native/spike/export_add.py).");
         }
     }
 
