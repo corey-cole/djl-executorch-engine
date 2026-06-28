@@ -13,6 +13,8 @@ public final class EtNative {
 
     public static native long loadModule(String ptePath);
 
+    public static native EtMethodMeta methodMeta(long handle);
+
     public static native EtTensor[] forward(long handle, EtTensor[] inputs);
 
     public static native void destroy(long handle);

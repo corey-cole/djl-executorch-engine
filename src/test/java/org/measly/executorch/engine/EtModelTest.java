@@ -12,6 +12,21 @@ import java.nio.file.Paths;
 import org.junit.jupiter.api.Test;
 
 class EtModelTest {
+    @org.junit.jupiter.api.Test
+    void wrongArityThrows() throws Exception {
+        org.measly.executorch.TestSupport.assumeNativeAvailable();
+        try (ai.djl.Model model = ai.djl.Model.newInstance("add", "ExecuTorch")) {
+            model.load(java.nio.file.Paths.get("native/spike"), "add");
+            try (ai.djl.ndarray.NDManager m = model.getNDManager().newSubManager()) {
+                ai.djl.ndarray.NDArray only =
+                        m.create(new float[] {2f}, new ai.djl.ndarray.types.Shape(1));
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        IllegalArgumentException.class,
+                        () -> model.getBlock().forward(null, new ai.djl.ndarray.NDList(only), false));
+            }
+        }
+    }
+
     @Test
     void loadAndForwardAddModel() throws Exception {
         TestSupport.assumeNativeAvailable();

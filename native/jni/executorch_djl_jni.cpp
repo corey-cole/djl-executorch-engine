@@ -3,6 +3,7 @@
 #include <vector>
 #include <executorch/extension/module/module.h>
 #include <executorch/extension/tensor/tensor.h>
+#include <executorch/runtime/executor/method_meta.h>
 
 using executorch::extension::Module;
 using executorch::extension::from_blob;
@@ -11,6 +12,9 @@ static jclass g_etTensorClass = nullptr;
 static jfieldID g_fShape = nullptr;
 static jfieldID g_fData = nullptr;
 static jmethodID g_ctor = nullptr;
+
+static jclass g_etMethodMetaClass = nullptr;
+static jmethodID g_metaCtor = nullptr;
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   JNIEnv* env = nullptr;
@@ -29,6 +33,16 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   if (g_fShape == nullptr || g_fData == nullptr || g_ctor == nullptr) {
     return JNI_ERR;
   }
+  jclass mlocal = env->FindClass("org/measly/executorch/jni/EtMethodMeta");
+  if (mlocal == nullptr) {
+    return JNI_ERR;
+  }
+  g_etMethodMetaClass = static_cast<jclass>(env->NewGlobalRef(mlocal));
+  env->DeleteLocalRef(mlocal);
+  g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I)V");
+  if (g_metaCtor == nullptr) {
+    return JNI_ERR;
+  }
   return JNI_VERSION_1_6;
 }
 
@@ -39,6 +53,31 @@ Java_org_measly_executorch_jni_EtNative_loadModule(
   auto* module = new Module(path);
   env->ReleaseStringUTFChars(jpath, path);
   return reinterpret_cast<jlong>(module);
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_org_measly_executorch_jni_EtNative_methodMeta(
+    JNIEnv* env, jclass, jlong handle) {
+  auto* module = reinterpret_cast<Module*>(handle);
+  auto meta = module->method_meta("forward");
+  if (!meta.ok()) {
+    env->ThrowNew(env->FindClass("java/lang/RuntimeException"),
+                  "method_meta(\"forward\") failed");
+    return nullptr;
+  }
+  const auto n = static_cast<jsize>(meta->num_inputs());
+  jintArray types = env->NewIntArray(n);
+  if (types == nullptr) {
+    return nullptr; // OOM: exception already pending
+  }
+  std::vector<jint> tmp(n);
+  // Non-tensor inputs (scalars/optional args) have no tensor meta -> encoded as -1.
+  for (jsize i = 0; i < n; ++i) {
+    auto info = meta->input_tensor_meta(i);
+    tmp[i] = info.ok() ? static_cast<jint>(info->scalar_type()) : -1;
+  }
+  env->SetIntArrayRegion(types, 0, n, tmp.data());
+  return env->NewObject(g_etMethodMetaClass, g_metaCtor, static_cast<jint>(n), types);
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL

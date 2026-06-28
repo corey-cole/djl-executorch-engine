@@ -8,6 +8,7 @@ import ai.djl.nn.AbstractSymbolBlock;
 import ai.djl.nn.ParameterList;
 import ai.djl.training.ParameterStore;
 import ai.djl.util.PairList;
+import org.measly.executorch.jni.EtMethodMeta;
 import org.measly.executorch.jni.EtNative;
 import org.measly.executorch.jni.EtTensor;
 
@@ -22,10 +23,12 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
 
     private volatile long handle;
     private EtNDManager manager;
+    private final EtMethodMeta meta;
 
-    EtSymbolBlock(long handle, EtNDManager manager) {
+    EtSymbolBlock(long handle, EtNDManager manager, EtMethodMeta meta) {
         this.handle = handle;
         this.manager = manager;
+        this.meta = java.util.Objects.requireNonNull(meta, "meta");
     }
 
     @Override
@@ -34,8 +37,13 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
             NDList inputs,
             boolean training,
             PairList<String, Object> params) {
-        EtTensor[] in = new EtTensor[inputs.size()];
-        for (int i = 0; i < inputs.size(); ++i) {
+        if (inputs.size() != meta.numInputs) {
+            throw new IllegalArgumentException(
+                    "ExecuTorch model expects " + meta.numInputs + " inputs, got " + inputs.size());
+        }
+        final int count = inputs.size();
+        EtTensor[] in = new EtTensor[count];
+        for (int i = 0; i < count; ++i) {
             NDArray arr = inputs.get(i);
             if (arr.getDataType() != DataType.FLOAT32) {
                 throw new IllegalArgumentException(
