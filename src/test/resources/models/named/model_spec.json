@@ -1,5 +1,6 @@
 {
   "runtime": "executorch",
+  "executorch_version": "1.3.1+e2f18eb",
   "inputs": [
     {
       "name": "price",

@@ -10,11 +10,12 @@ import org.junit.jupiter.api.Test;
 class ModelSpecTest {
     @Test
     void parsesAndIgnoresUnknownFields() {
-        // TODO: Use a Java 17 string block for this
         String json =
-                "{ \"runtime\":\"executorch\", \"extra\":123, \"inputs\":["
-                    + "{\"name\":\"price\",\"position\":0,\"dtype\":\"float32\",\"shape\":[1],\"desc\":\"x\"},"
-                    + "{\"name\":\"qty\",\"position\":1,\"dtype\":\"int64\",\"shape\":[1]}]}";
+                """
+                { "runtime":"executorch", "extra":123, "inputs":[
+                  {"name":"price","position":0,"dtype":"float32","shape":[1],"desc":"x"},
+                  {"name":"qty","position":1,"dtype":"int64","shape":[1]}]}
+                """;
         List<ParamSpec> specs = ModelSpec.parse(new StringReader(json));
         assertEquals(2, specs.size());
         assertEquals("price", specs.get(0).name());
@@ -26,9 +27,11 @@ class ModelSpecTest {
     @Test
     void sortsByPosition() {
         String json =
-                "{\"inputs\":["
-                    + "{\"name\":\"b\",\"position\":1,\"dtype\":\"int64\",\"shape\":[1]},"
-                    + "{\"name\":\"a\",\"position\":0,\"dtype\":\"float32\",\"shape\":[1]}]}";
+                """
+                {"inputs":[
+                  {"name":"b","position":1,"dtype":"int64","shape":[1]},
+                  {"name":"a","position":0,"dtype":"float32","shape":[1]}]}
+                """;
         List<ParamSpec> specs = ModelSpec.parse(new StringReader(json));
         assertEquals("a", specs.get(0).name());
         assertEquals("b", specs.get(1).name());

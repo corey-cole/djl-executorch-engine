@@ -12,6 +12,7 @@ graph's input order for simple models (no *args/**kwargs/elided inputs).
 """
 import inspect
 import json
+from importlib.metadata import PackageNotFoundError, version
 import torch
 from torch.export import export
 from executorch.exir import to_edge_transform_and_lower
@@ -40,9 +41,16 @@ def main() -> None:
     lowered = to_edge_transform_and_lower(export(model, example_inputs)).to_executorch()
     with open("priced.pte", "wb") as f:
         f.write(lowered.buffer)
-    # TODO: Probably good idea to include executorch version in the model_spec.json
+    try:
+        et_version = version("executorch")
+    except PackageNotFoundError:
+        et_version = "unknown"
     with open("model_spec.json", "w") as f:
-        json.dump({"runtime": "executorch", "inputs": inputs_meta}, f, indent=2)
+        json.dump(
+            {"runtime": "executorch", "executorch_version": et_version, "inputs": inputs_meta},
+            f,
+            indent=2,
+        )
     print("wrote priced.pte and model_spec.json")
 
 
