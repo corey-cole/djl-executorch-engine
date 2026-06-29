@@ -629,9 +629,41 @@ Suggested order for incremental development:
 
 ### Phase 2: Named parameter support
 
-6. Implement `ParamSpec`, `DType`, `MapTranslator`.
-7. Implement `model_spec.json` parsing.
-8. Test: load a multi-parameter, mixed-type model; run via `Map<String, Number>`.
+> **Start Phase 2 by reworking the JNI tensor surface for zero-copy marshalling.** Phase 1's
+> `EtTensor` carries a `float[]`, which forces redundant copies on the inference hot path
+> (input: direct `ByteBuffer`→`float[]`→native = **2 copies**; output: native→`float[]`→fresh
+> direct `ByteBuffer` = **2 copies**, where **0** and **1** suffice). Phase 2 must generalize
+> `EtTensor` to a **direct `ByteBuffer` + dtype** anyway (for non-float types) — do the zero-copy
+> rework in the same stroke:
+> - **Input:** pass `EtNDArray.toByteBuffer()` (already direct) across JNI; native reads it via
+>   `GetDirectBufferAddress` + `from_blob` with no copy (the input NDArray stays alive for the
+>   whole call). Fall back to a copy only for a non-direct foreign `NDArray`.
+> - **Output:** copy native→a single Java-owned direct `ByteBuffer` once (ExecuTorch frees its
+>   tensor after `forward()`), wrapped directly by the result `EtNDArray` — eliminating the
+>   `float[]` round-trip and the second copy in `EtNDManager.create`.
+>
+> This touches `EtTensor`, `EtNative`, `native/jni/executorch_djl_jni.cpp`, and
+> `EtSymbolBlock.forwardInternal`. Rationale and copy-count detail: Phase 1 spec §3 (hot-path note).
+>
+> **Adjacent `forwardInternal` improvements to fold in:**
+> - **Output manager:** create output NDArrays directly on the request manager
+>   (`inputs.head().getManager()`) instead of on the model manager and re-attaching, dropping the
+>   per-output detach/attach churn.
+> - **Input-arity validation (the idiomatic place for `IllegalArgumentException`):** Phase 1 cannot
+>   validate input count because the JNI surface does not expose the model's expected inputs. When
+>   the surface gains method metadata (ExecuTorch `Module::method_meta` / `num_inputs`), add the
+>   ONNX-style check — `if (inputs.size() != expectedInputCount) throw new IllegalArgumentException(...)`
+>   (cf. `OrtSymbolBlock`). Note this must permit `expectedInputCount == 0`: ExecuTorch methods may
+>   legitimately take no user inputs, so **do not** throw merely because `inputs` is empty.
+> - **Empty-input lifecycle tidy-up:** the current `if (!inputs.isEmpty())` guard only avoids
+>   `inputs.head()` throwing on an empty list; in that branch the outputs stay on the model-scoped
+>   manager (they'd accumulate across repeated zero-input calls). Tidy with
+>   `ret.attach(inputs.isEmpty() ? manager : inputs.head().getManager())`.
+
+6. Rework the JNI surface to a zero-copy direct-`ByteBuffer` + dtype `EtTensor` (see above).
+7. Implement `ParamSpec`, `DType`, `MapTranslator`.
+8. Implement `model_spec.json` parsing.
+9. Test: load a multi-parameter, mixed-type model; run via `Map<String, Number>`.
 
 ### Phase 3: Hybrid mode and robustness
 

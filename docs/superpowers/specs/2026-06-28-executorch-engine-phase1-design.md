@@ -59,6 +59,16 @@ final class EtTensor {
   copies outputs into fresh `EtTensor[]`, frees the native tensors before returning.
 - `static native void destroy(long handle);`
 
+> **Phase 2 hot-path note (added after Phase 1 review of `EtSymbolBlock.forwardInternal`).** The
+> `float[]` payload is a deliberate Phase-1 simplification, but it forces redundant data copies on
+> the inference path: input goes ByteBuffer→`float[]` (`toFloatArray`)→native vector = **2 copies**;
+> output goes native→`float[]`→fresh direct ByteBuffer (`EtNDManager.create`) = **2 copies** — when
+> 0 and 1 respectively suffice. `EtNDArray` already holds a *direct* `ByteBuffer`. When Phase 2
+> generalizes `EtTensor` to a direct `ByteBuffer` + dtype (needed for non-float types anyway), make
+> it a **zero-copy** surface in the same change: input via `GetDirectBufferAddress` + `from_blob`
+> (the input NDArray stays alive for the call); output via a single native→Java-owned-direct-buffer
+> copy wrapped straight into the result `EtNDArray`. See design doc §8 Phase 2.
+
 The existing `native/jni/executorch_djl_jni.cpp` is extended from the two-input float demo to this
 general form (constructing `EtTensor[]` in JNI via cached `jclass`/`jmethodID` for
 `EtTensor.<init>([J[F)`). No `fbjni`.
