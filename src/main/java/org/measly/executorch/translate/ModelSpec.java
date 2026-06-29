@@ -2,6 +2,8 @@ package org.measly.executorch.translate;
 
 import ai.djl.util.JsonUtils;
 
+import com.google.gson.JsonSyntaxException;
+
 import java.io.IOException;
 import java.io.Reader;
 import java.nio.file.Files;
@@ -34,7 +36,7 @@ final class ModelSpec {
         Dto dto;
         try {
             dto = JsonUtils.GSON.fromJson(reader, Dto.class);
-        } catch (com.google.gson.JsonSyntaxException e) {
+        } catch (JsonSyntaxException e) {
             throw new IllegalArgumentException("Malformed model_spec.json", e);
         }
         if (dto == null || dto.inputs == null || dto.inputs.isEmpty()) {
