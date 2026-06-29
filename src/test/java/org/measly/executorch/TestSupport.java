@@ -25,4 +25,21 @@ public final class TestSupport {
     public static String addPtePath() {
         return new java.io.File("native/spike/add.pte").getAbsolutePath();
     }
+
+    /**
+     * Skips the test (assumption) if the native lib or the dtypes multi-dtype fixture is
+     * unavailable.
+     */
+    public static void assumeDtypesModelAvailable() {
+        try {
+            Class.forName("org.measly.executorch.jni.EtNative");
+        } catch (Throwable t) {
+            Assumptions.abort("Native library not available: " + t.getMessage());
+        }
+        if (!new java.io.File("native/spike/dtypes.pte").isFile()) {
+            Assumptions.abort(
+                    "Test model native/spike/dtypes.pte not found"
+                            + " (build it via native/spike/export_dtypes.py).");
+        }
+    }
 }
