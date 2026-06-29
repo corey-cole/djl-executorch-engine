@@ -33,7 +33,7 @@ class MapTranslatorTest {
     }
 
     @Test
-    void rejectsMissingUnexpectedAndNull() {
+    void rejectsMissingAndUnexpected() {
         try (NDManager m = NDManager.newBaseManager("ExecuTorch")) {
             assertTrue(assertThrows(IllegalArgumentException.class,
                     () -> translator().buildInputs(m, Map.of("price", 1.0)))
@@ -45,12 +45,35 @@ class MapTranslatorTest {
     }
 
     @Test
-    void outputWidensFloat32AndInt64() {
+    void rejectsNullValue() {
         try (NDManager m = NDManager.newBaseManager("ExecuTorch")) {
-            NDArray f = m.create(new float[] {10f}, new Shape(1));
-            assertArrayEquals(new double[] {10.0}, MapTranslator.toDoubleArray(f), 0.0);
-            NDArray l = m.create(new long[] {7L}, new Shape(1));
-            assertArrayEquals(new double[] {7.0}, MapTranslator.toDoubleArray(l), 0.0);
+            java.util.Map<String, Number> in = new java.util.HashMap<>();
+            in.put("price", 1.0);
+            in.put("qty", null);
+            assertTrue(assertThrows(IllegalArgumentException.class,
+                    () -> translator().buildInputs(m, in)).getMessage().contains("qty"));
+        }
+    }
+
+    @Test
+    void outputWidensAllNumericDtypes() {
+        try (NDManager m = NDManager.newBaseManager("ExecuTorch")) {
+            assertArrayEquals(new double[] {10.0},
+                    MapTranslator.toDoubleArray(m.create(new float[] {10f}, new Shape(1))), 0.0);
+            assertArrayEquals(new double[] {7.0},
+                    MapTranslator.toDoubleArray(m.create(new long[] {7L}, new Shape(1))), 0.0);
+            assertArrayEquals(new double[] {3.0},
+                    MapTranslator.toDoubleArray(m.create(new int[] {3}, new Shape(1))), 0.0);
+            assertArrayEquals(new double[] {2.5},
+                    MapTranslator.toDoubleArray(m.create(new double[] {2.5}, new Shape(1))), 0.0);
+        }
+    }
+
+    @Test
+    void rejectsUnsupportedOutputDtype() {
+        try (NDManager m = NDManager.newBaseManager("ExecuTorch")) {
+            ai.djl.ndarray.NDArray b = m.create(new boolean[] {true}, new Shape(1));
+            assertThrows(IllegalArgumentException.class, () -> MapTranslator.toDoubleArray(b));
         }
     }
 

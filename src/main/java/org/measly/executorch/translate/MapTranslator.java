@@ -23,7 +23,7 @@ public class MapTranslator implements Translator<Map<String, Number>, double[]> 
     private final Set<String> expectedNames;
 
     public MapTranslator(List<ParamSpec> paramSpecs) {
-        this.paramSpecs = paramSpecs;
+        this.paramSpecs = List.copyOf(paramSpecs);
         this.expectedNames = new LinkedHashSet<>();
         for (ParamSpec s : paramSpecs) {
             expectedNames.add(s.name());
@@ -111,6 +111,7 @@ public class MapTranslator implements Translator<Map<String, Number>, double[]> 
         return d;
     }
 
+    // Note: long -> double loses precision for |v| > 2^53.
     private static double[] widen(long[] a) {
         double[] d = new double[a.length];
         for (int i = 0; i < a.length; i++) {
