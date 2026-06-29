@@ -45,9 +45,9 @@ public class EtNDManager extends BaseNDManager {
     }
 
     /** Wraps an existing buffer as an EtNDArray WITHOUT copying (for adopting forward() outputs). */
-    EtNDArray wrap(java.nio.ByteBuffer data, Shape shape, DataType dataType) {
+    EtNDArray wrap(ByteBuffer data, Shape shape, DataType dataType) {
         return new EtNDArray(
-                this, alternativeManager, data.order(java.nio.ByteOrder.nativeOrder()), shape, dataType);
+                this, alternativeManager, data.order(ByteOrder.nativeOrder()), shape, dataType);
     }
 
     @Override
