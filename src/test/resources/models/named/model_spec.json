@@ -1,0 +1,21 @@
+{
+  "runtime": "executorch",
+  "inputs": [
+    {
+      "name": "price",
+      "position": 0,
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    {
+      "name": "qty",
+      "position": 1,
+      "dtype": "int64",
+      "shape": [
+        1
+      ]
+    }
+  ]
+}
