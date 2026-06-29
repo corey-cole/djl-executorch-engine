@@ -22,4 +22,16 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-tasks.test { useJUnitPlatform() }
+tasks.test {
+    useJUnitPlatform { excludeTags("leak") }
+    jvmArgs("-XX:+HeapDumpOnOutOfMemoryError")
+}
+
+tasks.register<Test>("leakTest") {
+    description = "Memory-leak stress tests under constrained heap/direct memory."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("leak") }
+    jvmArgs("-Xmx256m", "-XX:MaxDirectMemorySize=64m", "-XX:+HeapDumpOnOutOfMemoryError")
+}

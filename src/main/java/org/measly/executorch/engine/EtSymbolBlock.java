@@ -88,4 +88,9 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
             handle = 0;
         }
     }
+
+    /** @return true once the native handle has been released by {@link #close()}. */
+    boolean isClosed() {
+        return handle == 0;
+    }
 }

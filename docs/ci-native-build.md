@@ -171,6 +171,58 @@ build and release.
   the static linking didn't silently regress to dynamic.
 - **License bundling.** XNNPACK, cpuinfo, pthreadpool, eigen_blas (and tokenizers, if linked)
   are now *inside* the `.so`. Their (BSD-family) licenses and notices must ship in the JAR.
+- **Native memory-leak gate.** A nightly/manual sanitizer run over a JNI-free harness — see
+  [Native memory-leak gate](#native-memory-leak-gate-the-region-jvm-tools-cannot-see) below. The
+  per-commit JVM-side leak stress test (constrained `-XX:MaxDirectMemorySize`) lives in the engine
+  test suite and covers only the Java-heap + direct-buffer regions.
+
+## Native memory-leak gate (the region JVM tools cannot see)
+
+The engine has three memory regions; **JVM leak tooling reaches only two of them.** Java-heap
+wrapper objects (`EtNDArray`, `EtModel`, …) and off-heap direct input buffers are visible to heap
+histograms / JFR `OldObjectSample` / `BufferPoolMXBean`, and are covered by a JVM-side
+constrained-memory stress test (run a predict loop under a small `-XX:MaxDirectMemorySize` +
+`-Xmx` so a lifecycle leak becomes a deterministic `OutOfMemoryError`; see the engine test suite).
+
+But the **pure-native ExecuTorch `Module`** allocated in our JNI (`new Module` in `loadModule`,
+`from_blob` tensors / `EValue`s during `forward`) is **invisible to every JVM tool.** Per Oracle's
+JDK 17 leak guide, Native Memory Tracking *"cannot track native memory allocated outside of the
+JVM, for example by JNI code"* — and heap dumps / JFR / JMC are equally blind. A leaked `Module`
+handle (a missing `destroy`) or a per-`forward` native allocation that isn't freed will not show up
+in any Java-side gate.
+
+**The gate: a JNI-free native harness under a leak sanitizer.** Extend `native/spike/cpp_smoke.cpp`
+into a small harness that, in a loop, loads a `.pte`, runs `Module::forward`, and lets the `Module`
+destruct — then build it with **AddressSanitizer + LeakSanitizer** (`-fsanitize=address`) or run it
+under **Valgrind**. LSan reports unfreed allocations at process exit; CI fails on the non-zero exit
+code. The loop catches both the load/destroy imbalance and per-`forward` native leaks.
+
+**Why a JNI-free harness instead of sanitizing the JVM:** running ASan/Valgrind against a live JVM
+drowns the signal — JIT, GC, and class loading produce enormous volumes of "still-reachable"/interior
+allocations that demand large, brittle suppression files (the Oracle guide's valgrind-the-JVM path
+exists precisely because of this). Exercising ExecuTorch in a plain C++ process with **no JVM** gives
+clean sanitizer output and pinpoints leaks to our code. This is the first real customer for the
+deferred Catch2 native suite (assertions optional — the sanitizer's exit code *is* the gate).
+
+**Concrete (two equivalent options):**
+- **ASan/LSan (faster to run, needs an instrumented build):**
+  ```bash
+  cmake -B native/asan -S native \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g"
+  cmake --build native/asan --target et_leak_harness
+  ./native/asan/et_leak_harness native/spike/add.pte 1000   # leak -> non-zero exit (LSan on by default on Linux)
+  ```
+  Note: for the cleanest report the ExecuTorch static libs should ideally also be ASan-built; an
+  un-instrumented runtime still works but may surface interceptor noise.
+- **Valgrind (no special build, slower at runtime):**
+  ```bash
+  valgrind --leak-check=full --error-exitcode=1 ./native/build/et_leak_harness native/spike/add.pte 1000
+  ```
+
+**Cadence:** a **nightly or manual** CI job, **not per-commit** — the instrumented build + sanitized
+run is slow and (for ASan) requires a build distinct from the shipping artifact. It belongs with the
+Stage-A native pipeline, not the fast per-commit Stage-B shim build.
 
 ## Open questions for the packaging task
 
@@ -182,3 +234,7 @@ build and release.
 - **aarch64 strategy** — native ARM runners vs. cross-compile vs. emulation (slow).
 - **Reproducibility** — pin ExecuTorch submodule SHAs (the spike used `--depth 1
   --shallow-submodules`, which is *not* reproducible and must be replaced for CI).
+- **Leak-gate depth** — run the native harness under **ASan/LSan** (requires an ASan-instrumented
+  ExecuTorch runtime build for a clean report — extra build cost) or under **Valgrind** (no special
+  build, but slow at runtime and needs a small ExecuTorch/XNNPACK suppression file)? Valgrind is the
+  cheaper starting point; ASan is faster per-run once the instrumented runtime is cached.
