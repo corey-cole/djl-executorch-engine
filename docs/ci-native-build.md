@@ -204,6 +204,18 @@ exists precisely because of this). Exercising ExecuTorch in a plain C++ process 
 clean sanitizer output and pinpoints leaks to our code. This is the first real customer for the
 deferred Catch2 native suite (assertions optional — the sanitizer's exit code *is* the gate).
 
+**Couple the C++ refactor to this harness — not to Phase 2b.** `executorch_djl_jni.cpp` is mostly
+JNI boilerplate with a thin run of pure logic (read input `(void* data, shape, scalarType)` →
+`from_blob` → `Module::forward` → output descriptors). Extracting that into a **JNIEnv-free
+`EtRuntime`** core (JNI reduced to a translation shell) is worth doing precisely *because this
+harness needs it*: you cannot ASan/LSan-test `load → forward → destroy` without a JVM unless that
+path exists free of `JNIEnv`. So the extraction and the harness are the **same piece of work**, and
+the harness is the core's first consumer. **Phase 2b does not trigger this** — 2b is a pure-Java
+layer (`MapTranslator` / `model_spec.json` / `ParamSpec`) on the already-general 2a native surface
+and adds essentially no C++. The genuine amplifiers of native logic are this harness and the
+deferred native-heavy phases (autoregressive direct-buffer / native-lifecycle outputs; multi-method
+or non-tensor `EValue` handling) — fold the `EtRuntime` split into whichever of those lands first.
+
 **Concrete (two equivalent options):**
 - **ASan/LSan (faster to run, needs an instrumented build):**
   ```bash
