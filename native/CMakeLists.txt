@@ -50,4 +50,7 @@ if(ET_BUILD_QA)
   target_link_libraries(et_runtime_test PRIVATE et_runtime Catch2::Catch2WithMain)
   target_compile_definitions(et_runtime_test PRIVATE
     ADD_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/add.pte")
+
+  add_executable(et_leak_harness ${CMAKE_CURRENT_SOURCE_DIR}/harness/et_leak_harness.cpp)
+  target_link_libraries(et_leak_harness PRIVATE et_runtime)
 endif()
