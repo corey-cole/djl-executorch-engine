@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "et_runtime.h"
+#include "et_logging.h"
 
 using measly::et::EtRuntime;
 using measly::et::InputDesc;
@@ -29,17 +30,28 @@ static void throwJava(JNIEnv* env, const char* fallback, const std::exception* e
   env->ThrowNew(cls, e ? e->what() : fallback);
 }
 
+// FindClass -> NewGlobalRef -> DeleteLocalRef. Returns a process-lifetime global ref, or nullptr
+// (pending exception) so the caller can fail JNI_OnLoad.
+static jclass cacheGlobalClass(JNIEnv* env, const char* name) {
+  jclass local = env->FindClass(name);
+  if (local == nullptr) {
+    return nullptr;
+  }
+  jclass global = static_cast<jclass>(env->NewGlobalRef(local));
+  env->DeleteLocalRef(local);
+  return global;
+}
+
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   JNIEnv* env = nullptr;
   if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
     return JNI_ERR;
   }
-  jclass local = env->FindClass("org/measly/executorch/jni/EtTensor");
-  if (local == nullptr) {
+
+  g_etTensorClass = cacheGlobalClass(env, "org/measly/executorch/jni/EtTensor");
+  if (g_etTensorClass == nullptr) {
     return JNI_ERR;  // class not found -> System.load fails clearly
   }
-  g_etTensorClass = static_cast<jclass>(env->NewGlobalRef(local));
-  env->DeleteLocalRef(local);
   g_fShape = env->GetFieldID(g_etTensorClass, "shape", "[J");
   g_fScalarType = env->GetFieldID(g_etTensorClass, "scalarType", "I");
   g_fData = env->GetFieldID(g_etTensorClass, "data", "Ljava/nio/ByteBuffer;");
@@ -47,26 +59,36 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   if (g_fShape == nullptr || g_fScalarType == nullptr || g_fData == nullptr || g_ctor == nullptr) {
     return JNI_ERR;
   }
-  jclass mlocal = env->FindClass("org/measly/executorch/jni/EtMethodMeta");
-  if (mlocal == nullptr) {
+
+  g_etMethodMetaClass = cacheGlobalClass(env, "org/measly/executorch/jni/EtMethodMeta");
+  if (g_etMethodMetaClass == nullptr) {
     return JNI_ERR;
   }
-  g_etMethodMetaClass = static_cast<jclass>(env->NewGlobalRef(mlocal));
-  env->DeleteLocalRef(mlocal);
   g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I)V");
   if (g_metaCtor == nullptr) {
     return JNI_ERR;
   }
-  jclass bblocal = env->FindClass("java/nio/ByteBuffer");
-  if (bblocal == nullptr) {
+
+  g_byteBufferClass = cacheGlobalClass(env, "java/nio/ByteBuffer");
+  if (g_byteBufferClass == nullptr) {
     return JNI_ERR;
   }
-  g_byteBufferClass = static_cast<jclass>(env->NewGlobalRef(bblocal));
-  env->DeleteLocalRef(bblocal);
   g_byteBufferWrap = env->GetStaticMethodID(g_byteBufferClass, "wrap", "([B)Ljava/nio/ByteBuffer;");
   if (g_byteBufferWrap == nullptr) {
     return JNI_ERR;
   }
+
+  // Logging bridge is non-essential: if the hooks aren't found, skip it and keep ET's default
+  // PAL — never fail the load over logging.
+  jclass etNativeClass = cacheGlobalClass(env, "org/measly/executorch/jni/EtNative");
+  if (etNativeClass != nullptr) {
+    jmethodID nativeLog =
+        env->GetStaticMethodID(etNativeClass, "nativeLog", "(ILjava/lang/String;)V");
+    if (nativeLog != nullptr) {
+      measly::et::installLoggingBridge(vm, etNativeClass, nativeLog);
+    }
+  }
+
   return JNI_VERSION_1_6;
 }
 

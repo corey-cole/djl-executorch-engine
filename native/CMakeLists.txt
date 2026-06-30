@@ -33,7 +33,9 @@ else()
   get_filename_component(JAVA_HOME "${JAVA_HOME}" DIRECTORY)
 endif()
 
-add_library(executorch_djl SHARED ${CMAKE_CURRENT_SOURCE_DIR}/jni/executorch_djl_jni.cpp)
+add_library(executorch_djl SHARED
+  ${CMAKE_CURRENT_SOURCE_DIR}/jni/executorch_djl_jni.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/jni/et_logging.cpp)
 target_include_directories(executorch_djl PRIVATE
   "${JAVA_HOME}/include" "${JAVA_HOME}/include/linux")
 target_link_libraries(executorch_djl PRIVATE et_runtime)
