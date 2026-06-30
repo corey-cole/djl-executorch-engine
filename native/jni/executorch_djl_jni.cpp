@@ -89,6 +89,12 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     }
   }
 
+  // Logging is optional: a failed EtNative/nativeLog lookup leaves a pending exception
+  // (NoClassDefFoundError / NoSuchMethodError). Clear it so it never leaks past JNI_OnLoad.
+  if (env->ExceptionCheck()) {
+    env->ExceptionClear();
+  }
+
   return JNI_VERSION_1_6;
 }
 
