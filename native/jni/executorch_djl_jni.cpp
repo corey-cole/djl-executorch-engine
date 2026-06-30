@@ -179,6 +179,10 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_measly_executorch_jni_EtNative_destroy(JNIEnv*, jclass, jlong handle) {
-  delete reinterpret_cast<EtRuntime*>(handle);
+Java_org_measly_executorch_jni_EtNative_destroy(JNIEnv* env, jclass, jlong handle) {
+  try {
+    delete reinterpret_cast<EtRuntime*>(handle);
+  } catch (const std::exception& e) {
+    throwJava(env, "EtRuntime destroy failed", &e);
+  }
 }
