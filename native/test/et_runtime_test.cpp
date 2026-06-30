@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "et_log_level.h"
 #include "et_runtime.h"
 
 using namespace measly::et;
@@ -55,4 +56,14 @@ TEST_CASE("forward: a second call yields a fresh correct result (view-lifetime h
   std::vector<InputDesc> in2 = {{&a2, {1}, 6}, {&b2, {1}, 6}};
   ForwardResult r2 = rt.forward(in2);
   REQUIRE(*static_cast<const float*>(r2.outputs()[0].data) == 17.0f);
+}
+
+TEST_CASE("level map: ET PAL chars -> slf4j level codes") {
+  using namespace measly::et;
+  REQUIRE(et_djl_level_to_slf4j('D') == kSlf4jDebug);
+  REQUIRE(et_djl_level_to_slf4j('I') == kSlf4jInfo);
+  REQUIRE(et_djl_level_to_slf4j('E') == kSlf4jError);
+  REQUIRE(et_djl_level_to_slf4j('F') == kSlf4jError);  // slf4j has no FATAL
+  REQUIRE(et_djl_level_to_slf4j('?') == kSlf4jWarn);
+  REQUIRE(et_djl_level_to_slf4j('X') == kSlf4jInfo);   // unknown -> INFO default
 }
