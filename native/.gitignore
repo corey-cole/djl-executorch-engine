@@ -1,2 +1,6 @@
 executorch/
 *.rpm
+
+# CMake build trees (regenerated; never committed)
+asan/
+build/
