@@ -25,20 +25,25 @@ target_link_libraries(et_runtime PUBLIC
 )
 
 # --- JNI shell shared library (loaded BY the JVM: JNI headers only, never libjvm/libjawt) ---
-if(DEFINED ENV{JAVA_HOME})
-  set(JAVA_HOME "$ENV{JAVA_HOME}")
-else()
-  find_program(JAVAC_EXECUTABLE javac REQUIRED)
-  get_filename_component(JAVA_HOME "${JAVAC_EXECUTABLE}" DIRECTORY)
-  get_filename_component(JAVA_HOME "${JAVA_HOME}" DIRECTORY)
-endif()
+# Built only for the shipping library, NOT for QA builds: the Catch2 units + leak harness are
+# JVM-free and link only et_runtime, so a -DET_BUILD_QA=ON configure needs neither the shim nor a
+# JDK (no JAVA_HOME / javac required). The shim and QA use separate build dirs, so nothing is lost.
+if(NOT ET_BUILD_QA)
+  if(DEFINED ENV{JAVA_HOME})
+    set(JAVA_HOME "$ENV{JAVA_HOME}")
+  else()
+    find_program(JAVAC_EXECUTABLE javac REQUIRED)
+    get_filename_component(JAVA_HOME "${JAVAC_EXECUTABLE}" DIRECTORY)
+    get_filename_component(JAVA_HOME "${JAVA_HOME}" DIRECTORY)
+  endif()
 
-add_library(executorch_djl SHARED
-  ${CMAKE_CURRENT_SOURCE_DIR}/jni/executorch_djl_jni.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/jni/et_logging.cpp)
-target_include_directories(executorch_djl PRIVATE
-  "${JAVA_HOME}/include" "${JAVA_HOME}/include/linux")
-target_link_libraries(executorch_djl PRIVATE et_runtime)
+  add_library(executorch_djl SHARED
+    ${CMAKE_CURRENT_SOURCE_DIR}/jni/executorch_djl_jni.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jni/et_logging.cpp)
+  target_include_directories(executorch_djl PRIVATE
+    "${JAVA_HOME}/include" "${JAVA_HOME}/include/linux")
+  target_link_libraries(executorch_djl PRIVATE et_runtime)
+endif()
 
 # --- Native QA targets (Catch2 units + ASan/LSan leak harness). OFF for the shipping build. ---
 if(ET_BUILD_QA)

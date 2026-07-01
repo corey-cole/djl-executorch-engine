@@ -15,6 +15,7 @@ JOBS="${JOBS:-$(nproc)}"
 test -f "${ET_INSTALL}/lib/cmake/ExecuTorch/executorch-config.cmake" \
   || { echo "ET_INSTALL=${ET_INSTALL} has no executorch-config.cmake; build the runtime first (see Prerequisite)"; exit 1; }
 
+rm -rf native/build
 cmake -B native/build -S native -G Ninja -DET_INSTALL="${ET_INSTALL}"
 cmake --build native/build -j"${JOBS}"
 

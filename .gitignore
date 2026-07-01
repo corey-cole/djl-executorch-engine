@@ -25,3 +25,12 @@ build
 
 # Ignore Kotlin plugin data
 .kotlin
+
+# Ignore the ExecuTorch build outputs
+et-cmake-out/
+et-install/
+
+src/main/resources/native/**/*.so
+src/main/resources/native/**/*.dylib
+src/main/resources/native/**/*.dll
+*.rpm

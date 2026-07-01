@@ -42,8 +42,21 @@ A floor of **glibc 2.38** excludes most deployment targets: RHEL/Rocky 8 (2.28),
 is not distributable.**
 
 **Fix (industry standard):** build inside an **old-glibc container** so the floor is low:
-- `manylinux_2_28` → glibc 2.28 (covers RHEL 8+, modern Ubuntu/Debian). Recommended default.
-- `manylinux2014` → glibc 2.17 (maximum reach; matches what PyTorch/ONNX Runtime ship).
+- `manylinux_2_28` → glibc 2.28 (covers RHEL 8+, modern Ubuntu/Debian). **This is the floor — see below.**
+- `manylinux2014` → glibc 2.17 (maximum reach; matches what PyTorch/ONNX Runtime ship) — **not achievable for us, see below.**
+
+**The floor is decided *for* us by a build-time dependency, not chosen.** ExecuTorch 1.3.1 hard-pins
+`torch==2.12.0` (`install_requirements.py`; `.ci/docker/ci_commit_pins/pytorch.txt` → `release/2.12`),
+and the ExecuTorch runtime build *imports* torch at configure time (`find_package_torch_headers`,
+`CMakeLists.txt:602`). But `torch 2.12.0`'s `libtorch_cpu.so` requires **`GLIBC_2.28`** (measured:
+`objdump -T` on the wheel's `.so`). So `import torch` cannot load in a `manylinux2014` (glibc 2.17)
+container — the ET runtime build fails there regardless of Python version. The build container must be
+**`manylinux_2_28`** (and Python **3.12** / `cp312`, since torch 2.12 dropped cp310 wheels). Because
+the runtime + shim are statically combined in that container, the **shipped `.so` inherits the glibc
+2.28 floor.** Note torch is *build-time only* — it is not linked into our `.so` (our artifact is
+self-contained ExecuTorch, no torch); the floor propagates solely via the container's own glibc.
+Reaching 2.17 would require building ET without importing a glibc-2.28 torch — not worth it against
+ET 1.3.1's hard pin.
 
 This applies to **both** the ExecuTorch runtime build **and** the shim build, since they are
 statically combined into one object. macOS and Windows have analogous floors
@@ -236,13 +249,63 @@ or non-tensor `EValue` handling) — fold the `EtRuntime` split into whichever o
 run is slow and (for ASan) requires a build distinct from the shipping artifact. It belongs with the
 Stage-A native pipeline, not the fast per-commit Stage-B shim build.
 
+### Fuzzing the load path (robustness against hostile `.pte` files)
+
+The leak harness proves we don't *leak* on **valid** models; a fuzz harness proves we don't *crash*
+on **invalid** ones. These are the same JNI-free core (`EtRuntime`), the same ASan-instrumented
+build, and the same nightly cadence — one extra entry point, not a second gate.
+
+**Where the fuzzable surface actually is.** Of the engine's three untrusted-input boundaries, only
+one is a good coverage-guided-fuzzer target:
+
+- **`.pte` → `Module` load → `method_meta` → `forward`** — **yes.** Model files arrive from a hub or
+  the network, so a malformed/adversarial `.pte` is a real threat model. It is a byte stream into a
+  (flatbuffer) parser — exactly what AFL++/libFuzzer eat. Two honest caveats: (1) most of that parser
+  is **upstream** ExecuTorch, not our shim, so crashes are reported upstream even though we expose
+  them — *"the engine segfaults on a corrupt model file"* is still ours to know about; (2) our own
+  JNI code is thin and Java pre-validates the structured args, so the yield is in the wrapped runtime.
+- **`model_spec.json`** — parsed in **Java/Gson**, not native. Out of scope for AFL++/libFuzzer; if we
+  ever fuzz it, that is Jazzer/JQF territory, a different tool and gate.
+- **JNI shim args** (`shape[]`, `scalarType`, buffer address) — validated **Java-side** before
+  crossing JNI. Structured, not a byte stream; weak target.
+
+**It rides on the `EtRuntime` harness.** You cannot fuzz `load → forward → destroy` through a live
+JVM for the same reason you cannot cleanly ASan it (JIT/GC/classloader noise). Once the JNIEnv-free
+core exists for the leak gate, the fuzz target is a thin entry point over it:
+
+- **libFuzzer is the cheaper wire-up.** We already build with clang + sanitizers, and
+  `-fsanitize=fuzzer,address` shares the exact ASan infrastructure. `LLVMFuzzerTestOneInput(buf, len)`
+  writes the bytes as a temp `.pte`, loads it via `EtRuntime`, queries `method_meta`, and runs
+  `forward` with derived inputs — ASan catches the memory errors the fuzzer drives out.
+- **AFL++ is the fallback** for the file-based / persistent-mode case where the runtime can't be
+  instrumented. Given we control the build, libFuzzer integrates with less friction; reach for AFL++
+  only if an uninstrumentable runtime forces it.
+- **Seed corpus is free:** `add.pte` and `priced.pte` are valid seeds; the flatbuffer magic makes a
+  serviceable starting dictionary.
+
+```bash
+# libFuzzer + ASan over the EtRuntime core (instrumented build, shares the leak-gate toolchain)
+cmake -B native/fuzz -S native \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_CXX_FLAGS="-fsanitize=fuzzer,address -fno-omit-frame-pointer -g"
+cmake --build native/fuzz --target et_load_fuzzer
+./native/fuzz/et_load_fuzzer -max_total_time=600 \
+  native/fuzz/corpus  # seed corpus dir (add.pte, priced.pte) — crash -> non-zero exit + repro file
+```
+
+**Cadence:** a **long-running nightly/weekly** job, **never a blocking per-PR gate** —
+corpus-building is open-ended and a fresh run finds little. Park it in the Stage-A native pipeline
+beside the leak gate. Found crashes get a minimized repro committed to the corpus as a regression
+seed (and, where the bug is upstream, an ExecuTorch issue).
+
 ## Open questions for the packaging task
 
 - **Build the runtime in CI every release, or pre-build per `ET_VERSION` and store the install
   tree as a release asset / internal artifact?** The latter turns Stage A into a manual/scheduled
   job and makes per-commit CI cheap. Likely preferable given the build cost.
-- **Which glibc floor do we commit to?** `manylinux_2_28` (2.28) is a good balance; `manylinux2014`
-  (2.17) maximizes reach at some toolchain-age cost.
+- ~~**Which glibc floor do we commit to?**~~ **RESOLVED: glibc 2.28 (`manylinux_2_28` + cp312).**
+  Forced by `torch==2.12.0`'s `libtorch_cpu.so` needing `GLIBC_2.28` at ET-build configure time — see
+  "The floor is decided *for* us" above. 2.17/`manylinux2014` is off the table for ET 1.3.1.
 - **aarch64 strategy** — native ARM runners vs. cross-compile vs. emulation (slow).
 - **Reproducibility** — pin ExecuTorch submodule SHAs (the spike used `--depth 1
   --shallow-submodules`, which is *not* reproducible and must be replaced for CI).
