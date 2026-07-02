@@ -13,7 +13,7 @@ mkdir -p "${TMP}/bin" "${TMP}/nativebuild" native/bench-results
 cat > "${TMP}/bin/build.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-echo "stub-build ${ET_VARIANT} SKIP_ET_BUILD=${SKIP_ET_BUILD}" >> "${STUB_LOG}"
+echo "stub-build ${ET_VARIANT} SKIP_ET_BUILD=${SKIP_ET_BUILD} STAGE_SO=${STAGE_SO}" >> "${STUB_LOG}"
 mkdir -p "${ET_INSTALL}/lib/cmake/ExecuTorch"
 : > "${ET_INSTALL}/lib/cmake/ExecuTorch/executorch-config.cmake"
 mkdir -p "${NATIVE_BUILD_DIR}"
@@ -63,6 +63,7 @@ test "$(grep -c '^et_timing:' "${latest}")" -eq 3 || fail "results file missing 
 
 # First run: no reuse (fresh workspace) -> SKIP_ET_BUILD=0 for every variant.
 test "$(grep -c 'SKIP_ET_BUILD=0' "${STUB_LOG}")" -eq 3 || fail "first run should not skip"
+test "$(grep -c 'STAGE_SO=0' "${STUB_LOG}")" -eq 3 || fail "STAGE_SO must be 0 for all variants"
 
 # Second run: installs now exist -> SKIP_ET_BUILD=1 for every variant.
 : > "${STUB_LOG}"
