@@ -1,6 +1,28 @@
 #!/bin/bash
 set -ex # Fail on error, print commands to log
 
+# --- Runtime variant selection. Flags only — paths stay overridable so the default artifact and
+#     all downstream defaults (build_qa.sh, bench.sh, README) are unchanged. See the timing-harness
+#     spec + docs/benchmarking.md. ---
+ET_VARIANT="${ET_VARIANT:-logging}"
+case "${ET_VARIANT}" in
+  bare)     ET_VARIANT_FLAGS=(-DEXECUTORCH_ENABLE_LOGGING=OFF) ;;
+  logging)  ET_VARIANT_FLAGS=(-DEXECUTORCH_ENABLE_LOGGING=ON) ;;
+  devtools) ET_VARIANT_FLAGS=(-DEXECUTORCH_ENABLE_LOGGING=OFF
+                              -DEXECUTORCH_BUILD_DEVTOOLS=ON
+                              -DEXECUTORCH_ENABLE_EVENT_TRACER=ON) ;;
+  *) echo "Unknown ET_VARIANT='${ET_VARIANT}' (want bare|logging|devtools)"; exit 2 ;;
+esac
+ET_BUILD="${ET_BUILD:-/workspace/et-cmake-out}"
+ET_INSTALL="${ET_INSTALL:-/workspace/et-install}"
+STAGE_SO="${STAGE_SO:-1}"
+
+# Fast diagnostic: print the resolved config and exit before any heavy setup (JDK/pip/build).
+if [ -n "${PRINT_ET_FLAGS:-}" ]; then
+  echo "ET_VARIANT=${ET_VARIANT} ET_BUILD=${ET_BUILD} ET_INSTALL=${ET_INSTALL} STAGE_SO=${STAGE_SO} FLAGS=${ET_VARIANT_FLAGS[*]}"
+  exit 0
+fi
+
 # This script expects:
 # 1. To be running inside quay.io/pypa/manylinux_2_28_x86_64
 # 2. The Corretto RPM downloaded to /workspace
@@ -44,9 +66,6 @@ __m512i f(__m512i a, __m512i b, __m512i c) { return _mm512_dpbusd_epi32(a, b, c)
   | gcc -x c -c -mavx512vnni - -o /dev/null \
   || { echo "ERROR: toolchain cannot encode AVX512-VNNI (need gcc>=8, binutils>=2.30)"; exit 1; }
 
-ET_BUILD="/workspace/et-cmake-out"
-ET_INSTALL="/workspace/et-install"
-
 # In GitHub Actions, publish the values a later step (e.g. native/build_qa.sh) needs, since our
 # `export`s here don't survive into a separate step. ET_INSTALL is required by build_qa.sh; JAVA_HOME
 # is exported for any downstream step that builds the JNI shim.
@@ -70,7 +89,7 @@ if [ "${SKIP_ET_BUILD:-0}" != "1" ]; then
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=${ET_INSTALL} \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    -DEXECUTORCH_ENABLE_LOGGING=ON \
+    "${ET_VARIANT_FLAGS[@]}" \
     -DEXECUTORCH_BUILD_XNNPACK=ON \
     -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
     -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
@@ -100,8 +119,13 @@ rm -rf native/build
 cmake -B native/build -S native -G Ninja -DET_INSTALL="${ET_INSTALL}"
 cmake --build native/build -j"${JOBS}"
 
-OUT="src/main/resources/native/linux-x86_64"
-mkdir -p "${OUT}"
-cp native/build/libexecutorch_djl.so "${OUT}/"
-echo "Artifact: ${OUT}/libexecutorch_djl.so"
-ls -lh "${OUT}/libexecutorch_djl.so"
+if [ "${STAGE_SO}" = "1" ]; then
+  OUT="src/main/resources/native/linux-x86_64"
+  mkdir -p "${OUT}"
+  cp native/build/libexecutorch_djl.so "${OUT}/"
+  echo "Artifact: ${OUT}/libexecutorch_djl.so"
+  ls -lh "${OUT}/libexecutorch_djl.so"
+else
+  echo "STAGE_SO=0: built shim but not staging into resources"
+  ls -lh native/build/libexecutorch_djl.so
+fi
