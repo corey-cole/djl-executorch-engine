@@ -37,6 +37,10 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "et_timing: model %s has no inputs\n", pte);
       return 2;
     }
+    if (iters <= 0) {
+      std::fprintf(stderr, "et_timing: iters must be > 0\n");
+      return 4;
+    }
 
     // --- 1-filled inputs, kept alive for the whole run (borrowed by InputDesc) ---
     std::vector<std::vector<uint8_t>> buffers(meta.numInputs);
