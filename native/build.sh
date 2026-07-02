@@ -16,10 +16,11 @@ esac
 ET_BUILD="${ET_BUILD:-/workspace/et-cmake-out}"
 ET_INSTALL="${ET_INSTALL:-/workspace/et-install}"
 STAGE_SO="${STAGE_SO:-1}"
+NATIVE_BUILD_DIR="${NATIVE_BUILD_DIR:-native/build}"
 
 # Fast diagnostic: print the resolved config and exit before any heavy setup (JDK/pip/build).
 if [ -n "${PRINT_ET_FLAGS:-}" ]; then
-  echo "ET_VARIANT=${ET_VARIANT} ET_BUILD=${ET_BUILD} ET_INSTALL=${ET_INSTALL} STAGE_SO=${STAGE_SO} FLAGS=${ET_VARIANT_FLAGS[*]}"
+  echo "ET_VARIANT=${ET_VARIANT} ET_BUILD=${ET_BUILD} ET_INSTALL=${ET_INSTALL} STAGE_SO=${STAGE_SO} NATIVE_BUILD_DIR=${NATIVE_BUILD_DIR} FLAGS=${ET_VARIANT_FLAGS[*]}"
   exit 0
 fi
 
@@ -115,17 +116,17 @@ cd /workspace
 # native/build is a disposable (gitignored) tree that a host-side build_desktop.sh may also use;
 # its cached absolute paths (/home/corey/...) won't match the container's (/workspace/...), so
 # wipe it for a clean configure. et-cmake-out doesn't need this — it's only ever built in-container.
-rm -rf native/build
-cmake -B native/build -S native -G Ninja -DET_INSTALL="${ET_INSTALL}"
-cmake --build native/build -j"${JOBS}"
+rm -rf "${NATIVE_BUILD_DIR}"
+cmake -B "${NATIVE_BUILD_DIR}" -S native -G Ninja -DET_INSTALL="${ET_INSTALL}"
+cmake --build "${NATIVE_BUILD_DIR}" -j"${JOBS}"
 
 if [ "${STAGE_SO}" = "1" ]; then
   OUT="src/main/resources/native/linux-x86_64"
   mkdir -p "${OUT}"
-  cp native/build/libexecutorch_djl.so "${OUT}/"
+  cp "${NATIVE_BUILD_DIR}/libexecutorch_djl.so" "${OUT}/"
   echo "Artifact: ${OUT}/libexecutorch_djl.so"
   ls -lh "${OUT}/libexecutorch_djl.so"
 else
   echo "STAGE_SO=0: built shim but not staging into resources"
-  ls -lh native/build/libexecutorch_djl.so
+  ls -lh "${NATIVE_BUILD_DIR}/libexecutorch_djl.so"
 fi

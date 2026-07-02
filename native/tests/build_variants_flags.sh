@@ -11,6 +11,7 @@ grep -q 'EXECUTORCH_ENABLE_LOGGING=ON' <<<"$out" || fail "default flags missing 
 grep -q 'ET_INSTALL=/workspace/et-install\b' <<<"$out" || fail "default ET_INSTALL changed"
 grep -q 'ET_BUILD=/workspace/et-cmake-out\b' <<<"$out" || fail "default ET_BUILD changed"
 grep -q 'STAGE_SO=1' <<<"$out" || fail "default STAGE_SO not 1"
+grep -q 'NATIVE_BUILD_DIR=native/build\b' <<<"$out" || fail "default NATIVE_BUILD_DIR changed"
 
 out="$(ET_VARIANT=bare PRINT_ET_FLAGS=1 bash native/build.sh)"
 grep -q 'EXECUTORCH_ENABLE_LOGGING=OFF' <<<"$out" || fail "bare missing LOGGING=OFF"
@@ -25,6 +26,9 @@ out="$(ET_VARIANT=bare ET_INSTALL=/tmp/xi ET_BUILD=/tmp/xb STAGE_SO=0 PRINT_ET_F
 grep -q 'ET_INSTALL=/tmp/xi\b' <<<"$out" || fail "ET_INSTALL override ignored"
 grep -q 'ET_BUILD=/tmp/xb\b' <<<"$out" || fail "ET_BUILD override ignored"
 grep -q 'STAGE_SO=0' <<<"$out" || fail "STAGE_SO override ignored"
+
+out="$(NATIVE_BUILD_DIR=/tmp/nb PRINT_ET_FLAGS=1 bash native/build.sh)"
+grep -q 'NATIVE_BUILD_DIR=/tmp/nb\b' <<<"$out" || fail "NATIVE_BUILD_DIR override ignored"
 
 if ET_VARIANT=bogus PRINT_ET_FLAGS=1 bash native/build.sh >/dev/null 2>&1; then
   fail "unknown ET_VARIANT should exit non-zero"
