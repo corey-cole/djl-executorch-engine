@@ -4,6 +4,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(ET_BUILD_QA "Build native QA targets (Catch2 units + leak harness)" OFF)
+option(ET_BUILD_BENCH "Build the Release timing harness (no sanitizers)" OFF)
 
 # TODO: ET_INSTALL needs to cover the entire path and should default to something that
 # is compatible with local and GHA builds
@@ -28,7 +29,7 @@ target_link_libraries(et_runtime PUBLIC
 # Built only for the shipping library, NOT for QA builds: the Catch2 units + leak harness are
 # JVM-free and link only et_runtime, so a -DET_BUILD_QA=ON configure needs neither the shim nor a
 # JDK (no JAVA_HOME / javac required). The shim and QA use separate build dirs, so nothing is lost.
-if(NOT ET_BUILD_QA)
+if(NOT ET_BUILD_QA AND NOT ET_BUILD_BENCH)
   if(DEFINED ENV{JAVA_HOME})
     set(JAVA_HOME "$ENV{JAVA_HOME}")
   else()
@@ -43,6 +44,12 @@ if(NOT ET_BUILD_QA)
   target_include_directories(executorch_djl PRIVATE
     "${JAVA_HOME}/include" "${JAVA_HOME}/include/linux")
   target_link_libraries(executorch_djl PRIVATE et_runtime)
+endif()
+
+# --- Release timing harness (no sanitizers). OFF for the shipping build and for QA. ---
+if(ET_BUILD_BENCH)
+  add_executable(et_timing_harness ${CMAKE_CURRENT_SOURCE_DIR}/harness/et_timing_harness.cpp)
+  target_link_libraries(et_timing_harness PRIVATE et_runtime)
 endif()
 
 # --- Native QA targets (Catch2 units + ASan/LSan leak harness). OFF for the shipping build. ---

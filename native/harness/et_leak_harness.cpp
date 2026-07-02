@@ -8,22 +8,10 @@
 #include <string>
 #include <vector>
 
+#include "dtype_size.h"
 #include "et_runtime.h"
 
 using namespace measly::et;
-
-static size_t dtypeSize(int8_t st) {
-  switch (st) {
-    case 6:           // FLOAT32
-    case 3: return 4;  // INT32
-    case 7:           // FLOAT64
-    case 4: return 8;  // INT64
-    case 0:           // UINT8
-    case 1:           // INT8
-    case 11: return 1;  // BOOL
-    default: return 4;
-  }
-}
 
 int main(int argc, char** argv) {
   const char* pte = (argc > 1) ? argv[1] : "add.pte";
