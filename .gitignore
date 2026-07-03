@@ -26,9 +26,11 @@ build
 # Ignore Kotlin plugin data
 .kotlin
 
-# Ignore the ExecuTorch build outputs
-et-cmake-out/
-et-install/
+# Native QA / bench outputs (container-produced)
+native/bench/
+native/bench-results/
+native/asan/
+native/qa_noasan/
 
 src/main/resources/native/**/*.so
 src/main/resources/native/**/*.dylib
