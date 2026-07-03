@@ -1,26 +1,30 @@
 #!/usr/bin/env bash
-# Build + run the Release timing harness (no sanitizers) against a prebuilt ExecuTorch runtime
-# ($ET_INSTALL). A cheap gross-regression screen for the logging/devtools ship-or-not decision;
-# see docs/benchmarking.md. Times ONE install prefix per run — native/build_variants.sh drives it
-# across the bare/logging/devtools configs.
+# Build + run the Release timing harness (no sanitizers) against the resolved ExecuTorch runtime
+# (default fetches the pinned tarball for $ET_RUNTIME_VARIANT; runtime is fetched by CMake, or set
+# ET_INSTALL to point at an existing install). A cheap gross-regression screen for the
+# logging/devtools ship-or-not decision; see docs/benchmarking.md. Times ONE variant per run —
+# native/build_variants.sh drives it across the bare/logging/devtools configs.
 #
-# CI env: ET_INSTALL (required; same contract as build_qa.sh). ITERS (default 1000) and WARMUP
-# (default 100) tune the timed loop. Run in the SAME manylinux_2_28 container as native/build.sh so
-# the toolchain matches the runtime. No JDK needed: the ET_BUILD_BENCH configure skips the JNI shim.
+# CI env: ET_RUNTIME_VARIANT (default logging), ET_INSTALL (escape hatch). ITERS (default 1000) and
+# WARMUP (default 100) tune the timed loop. Run in the SAME manylinux_2_28 container as
+# native/build.sh so the toolchain matches the runtime. No JDK needed: the ET_BUILD_BENCH configure
+# skips the JNI shim.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-ET_INSTALL="${ET_INSTALL:-${REPO_ROOT}/et-install}"
+ET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT:-logging}"
 ITERS="${ITERS:-1000}"
 WARMUP="${WARMUP:-100}"
 
-test -f "${ET_INSTALL}/lib/cmake/ExecuTorch/executorch-config.cmake" \
-  || { echo "ET_INSTALL=${ET_INSTALL} has no executorch-config.cmake; build the runtime first (native/build.sh)"; exit 1; }
+# Runtime comes from CMake resolution: default fetches the pinned ${ET_RUNTIME_VARIANT} tarball;
+# set ET_INSTALL to point at an existing install (escape hatch). No precondition to check here.
+ET_ARGS=(-DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT}")
+[ -n "${ET_INSTALL:-}" ] && ET_ARGS+=(-DET_INSTALL="${ET_INSTALL}")
 
 # Release, no sanitizer, own build tree (distinct from native/asan QA and native/build shim).
-cmake -B native/bench -S native -G "Unix Makefiles" -DET_INSTALL="${ET_INSTALL}" \
+cmake -B native/bench -S native -G "Unix Makefiles" "${ET_ARGS[@]}" \
   -DET_BUILD_BENCH=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build native/bench --target et_timing_harness
 
