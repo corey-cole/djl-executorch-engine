@@ -9,6 +9,8 @@ on:
 jobs:
   build-executorch-shim:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
         output1: ${{ steps.shim-upload-step.outputs.artifact-id }}
     steps:

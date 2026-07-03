@@ -39,8 +39,8 @@ if(_ET_RESOLUTION STREQUAL "fetch")
   include(FetchContent)
   FetchContent_Declare(et_runtime URL "${_ET_RESOLVED_URL}" URL_HASH "SHA256=${_ET_RESOLVED_SHA}")
   FetchContent_MakeAvailable(et_runtime)
-  # The tarball has a single top-level dir (the stem) under the extracted source dir.
-  set(ET_INSTALL "${et_runtime_SOURCE_DIR}/${_ET_STEM}")
+  # FetchContent strips the tarball's single top-level dir on extraction, so SOURCE_DIR IS the install root.
+  set(ET_INSTALL "${et_runtime_SOURCE_DIR}")
 endif()
 
 list(PREPEND CMAKE_PREFIX_PATH "${ET_INSTALL}")

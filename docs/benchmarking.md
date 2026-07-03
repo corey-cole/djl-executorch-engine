@@ -136,7 +136,9 @@ context):
   built with `-DEXECUTORCH_ENABLE_LOGGING=ON` (off by default in Release). ExecuTorch's own note:
   *"the logging strings can be large."* Measure the shipped `.so` size delta (and any steady-state
   cost) of logging-on vs. logging-off, then decide whether the default artifact ships with logging
-  enabled. Currently enabled in `native/build.sh`; this is the decision that confirms or reverts it.
+  enabled. Currently selected via the `logging` runtime variant (`ET_RUNTIME_VARIANT` in
+  `native/cmake/EtRuntimePin.cmake`), the default the engine downloads; this is the decision that
+  confirms or reverts it.
   **Coupling:** `LoggingBridgeIT` runs in the default `./gradlew test` and asserts a real ET log —
   it only passes with logging on. If this decision reverts the flag, tag/guard that test in the same
   change (e.g. `@Tag("logging")` excluded by default, or a conditional), or it fails with an empty
