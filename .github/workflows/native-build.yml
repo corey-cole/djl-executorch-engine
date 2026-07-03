@@ -1,0 +1,83 @@
+name: ExecuTorch manylinux_2_28 Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-executorch-shim:
+    runs-on: ubuntu-latest
+    outputs:
+        output1: ${{ steps.shim-upload-step.outputs.artifact-id }}
+    steps:
+      - name: Checkout djl-executorch-engine repository
+        uses: actions/checkout@v7
+
+      # Use a generic name for the RPM file
+      - name: Download Corretto JDK 8 RPM
+        run: |
+            curl -L -o amazon-corretto-linux-jdk.rpm https://corretto.aws/downloads/latest/amazon-corretto-8-x64-linux-jdk.rpm
+
+      # Provenance gate: prove the pinned runtime tarball was built by Repo A's CI before we link
+      # against it. URL_HASH in native/CMakeLists.txt covers integrity; this covers provenance.
+      - name: Verify ExecuTorch runtime provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url="$(grep -oE 'https://[^"]*logging-linux-x86_64\.tar\.gz' native/cmake/EtRuntimePin.cmake | head -1)"
+          test -n "${url}" || { echo "no logging URL in EtRuntimePin.cmake"; exit 1; }
+          curl -fL -o runtime.tgz "${url}"
+          gh attestation verify runtime.tgz --repo measly-java-learning/executorch-runtime-dist
+          rm -f runtime.tgz
+
+      # This is very similar to how `local_build_wrapper.sh` executes build
+      # which enables testing outside of GHA
+      # TODO: Rather than docker run, use the `container` spec for this step?
+      # Or, honestly, just use the container for the entire job
+      # Would think we would need volume to match the docker invocation
+      - name: Build in manylinux_2_28 container
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            quay.io/pypa/manylinux_2_28_x86_64:latest \
+            /bin/bash /workspace/native/build.sh
+    
+      # TODO: Missing from this job is the QA run that confirms our shim doesn't have any native issues
+
+      # Make the shim available to the next job
+      # If we care about permissions will need to interpose a `tar` step prior to upload
+      # https://github.com/actions/upload-artifact#using-outputs
+      - name: Store libexecutorch_djl shim
+        id: shim-upload-step
+        uses: actions/upload-artifact@v7
+        with:
+          name: executorch-manylinux-libs
+          path: ${{ github.workspace }}/src/main/resources/native/**/*.so
+          compression-level: 1 # May want to consider no compression
+ 
+
+  # setup-java action repo: https://github.com/actions/setup-java
+  build-java-package:
+    runs-on: ubuntu-latest
+    needs: build-executorch-shim
+    steps:
+        - uses: actions/checkout@v7
+        - uses: actions/setup-java@v5
+          with:
+            distribution: zulu
+            java-version: 17
+        
+        # TODO: Need to get the shim from previous job
+        
+        # https://github.com/gradle/actions
+        # This has enhanced caching 
+        - name: Setup Gradle
+          uses: gradle/actions/setup-gradle@v6
+        - name: blah
+          run: |
+              ./gradlew build
+              ./gradlew test
+              ./gradlew leakTest
