@@ -123,6 +123,38 @@ context):
 - Run both engines in the same JVM process via DJL `Criteria` so the comparison is apples-to-apples
   at the DJL API boundary.
 
+## Decisions
+
+### Ship logging — RESOLVED 2026-07-04: ship the `logging` variant (the downloaded default)
+
+Benchmarked `bare` / `logging` / `devtools` over `add.pte` (4 runs, linux-x86_64 desktop, the Release
+timing harness). Logging's cost is real, repeatable, and **confined to startup**:
+
+- **Load:** `logging − bare` ≈ **+7–8 µs** (per-run 2–12 µs; logging > bare in 4/4 runs).
+- **First inference (cold):** `logging − bare` ≈ **+100 µs**, one-time — but noisy (per-run 5–189 µs;
+  the box was not CPU-pinned). Direction consistent in 4/4 runs.
+- **Steady-state (warm):** **below the harness's 1 µs reporting resolution** for every variant — no
+  measurable difference (under granularity, not proven-equal).
+- **Footprint:** shim `.so` **~8.5 → 11.5 MB (+35%)** with logging on. Irrelevant on a desktop/server
+  JVM (the JVM + ExecuTorch/XNNPACK dominate); would only matter for an edge/mobile target, which this
+  engine does not serve.
+
+**Why ship it:** the only cost is a one-time, sub-millisecond startup penalty that amortizes to zero
+over any served workload, plus MBs that don't matter for this deployment target — in exchange for the
+ET_LOG→slf4j bridge working out of the box. Caveat for the write-up: `add.pte` is a 1-op model, so the
+~100 µs cold cost is a floor — a large model's first inference logs proportionally more (still one-time).
+
+**Consequence:** `LoggingBridgeIT` (in the default `./gradlew test`) asserts a real ET log and only
+passes with logging on — shipping the `logging` default keeps it green. If this is ever reverted, guard
+that test in the same change (e.g. `@Tag("logging")` excluded by default) or it fails with an empty
+appender and no obvious cause.
+
+**Deferred (not now):** give the `devtools` variant logging too, rather than adding a 4th variant —
+the penalties are additive but still one-time and sub-ms, and devtools *is* the observability build, so
+logs + event traces belong together. This is a **Repo A** change (the variant flag map lives in its
+`build-runtime.sh`) that re-rolls the pin (`EtRuntimePin.cmake` bump), not engine code. Revisit
+alongside the profiling-overhead spike.
+
 ## Open items
 
 - Decide artifact storage (committed small fixtures vs. generated on demand by the export scripts).
@@ -132,18 +164,14 @@ context):
 - **Profiling-overhead spike** — measure the devtools-enabled-but-not-tracing size + steady-state
   latency delta vs. the plain build; gates the one-artifact-vs-two decision for profiling (see the
   Profiling section).
-- **Ship logging or not (`EXECUTORCH_ENABLE_LOGGING`)** — the ET_LOG→slf4j bridge needs the runtime
-  built with `-DEXECUTORCH_ENABLE_LOGGING=ON` (off by default in Release). ExecuTorch's own note:
-  *"the logging strings can be large."* Measure the shipped `.so` size delta (and any steady-state
-  cost) of logging-on vs. logging-off, then decide whether the default artifact ships with logging
-  enabled. Currently selected via the `logging` runtime variant (`ET_RUNTIME_VARIANT` in
-  `native/cmake/EtRuntimePin.cmake`), the default the engine downloads; this is the decision that
-  confirms or reverts it.
-  **Coupling:** `LoggingBridgeIT` runs in the default `./gradlew test` and asserts a real ET log —
-  it only passes with logging on. If this decision reverts the flag, tag/guard that test in the same
-  change (e.g. `@Tag("logging")` excluded by default, or a conditional), or it fails with an empty
-  appender and no obvious cause. **Measured so far (linux-x86_64):** the shim `.so` grew **8.5 MB → 11.5 MB (~35%)** when the
-  runtime was rebuilt with logging on — a first data point for this decision.
+- ~~**Ship logging or not (`EXECUTORCH_ENABLE_LOGGING`)**~~ — **RESOLVED 2026-07-04: ship logging**
+  (the `logging` variant stays the downloaded default). See [Decisions](#decisions) for the data.
+- **Harness docs for user `.pte` artifacts** *(deferred)* — the timing-harness binary already accepts
+  a model path (`et_timing_harness <pte> [iters] [warmup]`); `bench.sh` just hardcodes
+  `native/spike/add.pte`. Document the direct invocation (and/or add a `MODEL=` override to
+  `bench.sh`) so users can get representative numbers for their own, more complex models. Revisit once
+  the **MobileNetV2** benchmark lands — that's the first real model through the harness and will show
+  what users actually need.
 
   > **Note (2026-07-03):** `native/build_variants.sh` no longer builds the three ExecuTorch variants
   > from source — it downloads the prebuilt `bare`/`logging`/`devtools` tarballs from Repo A (selected
