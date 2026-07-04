@@ -1,10 +1,11 @@
-name: ExecuTorch manylinux_2_28 Build
+name: ExecuTorch Engine Build
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build-executorch-shim:
@@ -36,19 +37,22 @@ jobs:
 
       # This is very similar to how `local_build_wrapper.sh` executes build
       # which enables testing outside of GHA
-      # TODO: Rather than docker run, use the `container` spec for this step?
-      # Or, honestly, just use the container for the entire job
-      # Would think we would need volume to match the docker invocation
-      - name: Build in manylinux_2_28 container
+      - name: Build the libexecutorch_djl shim
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             quay.io/pypa/manylinux_2_28_x86_64:latest \
             /bin/bash /workspace/native/build.sh
-    
-      # TODO: Missing from this job is the QA run that confirms our shim doesn't have any native issues
-
+      
+      - name: QA the libexecutorch_djl shim
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            quay.io/pypa/manylinux_2_28_x86_64:latest \
+            /bin/bash /workspace/native/build_qa.sh
+ 
       # Make the shim available to the next job
       # If we care about permissions will need to interpose a `tar` step prior to upload
       # https://github.com/actions/upload-artifact#using-outputs
@@ -72,13 +76,16 @@ jobs:
             distribution: zulu
             java-version: 17
         
-        # TODO: Need to get the shim from previous job
-        
+        - name: Download the libexecutorch_djl shim
+          uses: actions/download-artifact@v8
+          with:
+            name: executorch-manylinux-libs
+
         # https://github.com/gradle/actions
         # This has enhanced caching 
         - name: Setup Gradle
           uses: gradle/actions/setup-gradle@v6
-        - name: blah
+        - name: Build and test the Java package
           run: |
               ./gradlew build
               ./gradlew test
