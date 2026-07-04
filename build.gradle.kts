@@ -41,10 +41,8 @@ tasks.register<Test>("leakTest") {
 }
 
 mavenPublishing {
-    // Automatically generates sources, javadocs, and handles GPG signing
+    //publishToMavenCentral(automaticRelease = true, validateDeployment = DeploymentValidation.PUBLISHED)
     publishToMavenCentral()
-    
-    // Automatically signs if GPG environment variables are present
     signAllPublications()
 
     coordinates("org.measly", "djl-executorch-engine", "0.1.0-SNAPSHOT")
