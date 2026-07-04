@@ -61,6 +61,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: executorch-manylinux-libs
+          # From inspection of the cross-job artifact, the file is
+          # available as `linux-x86_64/libexecutorch_djl.so`
           path: ${{ github.workspace }}/src/main/resources/native/**/*.so
           compression-level: 1 # May want to consider no compression
  
@@ -76,10 +78,13 @@ jobs:
             distribution: zulu
             java-version: 17
         
+          # Because the artifact isn't the full `src/main/resources/native`
+          # we need to give `download-artifact` a target path
         - name: Download the libexecutorch_djl shim
           uses: actions/download-artifact@v8
           with:
             name: executorch-manylinux-libs
+            path: src/main/resources/native/
         
         # Debug print
         - run: tree -h src/main/resources/native
