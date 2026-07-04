@@ -22,8 +22,8 @@ dependencies {
 
     testImplementation("ai.djl:api:$djlVersion")
     testImplementation("org.slf4j:slf4j-api:2.0.17")
-    testImplementation("ch.qos.logback:logback-classic:1.5.18")
-    testImplementation(platform("org.junit:junit-bom:5.10.2"))
+    testImplementation("ch.qos.logback:logback-classic:1.5.33")
+    testImplementation(platform("org.junit:junit-bom:5.14.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
