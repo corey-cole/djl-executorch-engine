@@ -1,6 +1,8 @@
 plugins {
     `java-library`
+    jacoco
     id("com.vanniktech.maven.publish") version "0.37.0"
+    id("name.remal.jacoco-to-cobertura") version "2.0.4"
 }
 
 group = "org.measly"
@@ -29,6 +31,7 @@ dependencies {
 tasks.test {
     useJUnitPlatform { excludeTags("leak") }
     jvmArgs("-XX:+HeapDumpOnOutOfMemoryError")
+    finalizedBy(tasks.jacocoTestReport)
 }
 
 tasks.register<Test>("leakTest") {
@@ -38,6 +41,15 @@ tasks.register<Test>("leakTest") {
     classpath = sourceSets["test"].runtimeClasspath
     useJUnitPlatform { includeTags("leak") }
     jvmArgs("-Xmx256m", "-XX:MaxDirectMemorySize=64m", "-XX:+HeapDumpOnOutOfMemoryError")
+}
+
+tasks.jacocoTestReport {
+    dependsOn(tasks.test)
+    reports {
+        xml.required = true
+        csv.required = false
+        html.required = true
+    }
 }
 
 mavenPublishing {
