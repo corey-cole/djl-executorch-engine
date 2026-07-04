@@ -1,6 +1,7 @@
 package org.measly.executorch.engine;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.djl.Model;
@@ -30,5 +31,14 @@ class EtSymbolBlockLifecycleTest {
                 model.load(Paths.get("native/spike"), "add");
             } // close() must destroy the native Module each iteration
         }
+    }
+
+    @Test
+    void removeLastBlockIsUnsupported() throws Exception {
+        TestSupport.assumeNativeAvailable();
+        Model model = Model.newInstance("add", "ExecuTorch");
+        model.load(Paths.get("native/spike"), "add");
+        EtSymbolBlock block = (EtSymbolBlock) model.getBlock();
+        assertThrows(UnsupportedOperationException.class, block::removeLastBlock);
     }
 }

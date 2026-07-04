@@ -77,6 +77,7 @@ public class EtNDManager extends BaseNDManager {
 
     /** Copies a typed input buffer into a native-order byte buffer. */
     private static void copyInto(ByteBuffer dst, Buffer src, DataType dataType) {
+        assert dataType != DataType.STRING : "ExecuTorch does not support String NDArray";
         if (src instanceof ByteBuffer) {
             dst.put((ByteBuffer) src);
             return;

@@ -14,6 +14,8 @@ public final class LibUtils {
 
     private LibUtils() {}
 
+    // Not unit-tested: drives System.load, the EXECUTORCH_LIBRARY_PATH env override, and classpath
+    // extraction, all of which need the real native library and JVM state; only platform() is unit-tested.
     public static synchronized void loadLibrary() {
         if (loaded) {
             return;
@@ -42,7 +44,7 @@ public final class LibUtils {
         }
     }
 
-    private static String platform() {
+    static String platform() {
         String os = System.getProperty("os.name").toLowerCase();
         String arch = System.getProperty("os.arch").toLowerCase();
         if (os.contains("linux") && (arch.equals("amd64") || arch.equals("x86_64"))) {

@@ -38,6 +38,8 @@ public enum DType {
     /** Builds a scalar NDArray of {@code shape} from {@code v}. Package-private. */
     abstract NDArray createScalar(NDManager m, Number v, long[] shape);
 
+    private static final double INT64_LIMIT = 0x1p63;
+
     /** @throws IllegalArgumentException if v has a fractional part or is NaN/Inf. */
     static long requireIntegral(Number v) {
         if (v instanceof Float || v instanceof Double) {
@@ -46,7 +48,7 @@ public enum DType {
                 throw new IllegalArgumentException("Value " + v + " is not an integer");
             }
             // Long.MAX_VALUE rounds up to 2^63 as a double (out of long range); Long.MIN_VALUE (-2^63) is exact.
-            if (d >= 0x1p63 || d < -0x1p63) {
+            if (d >= INT64_LIMIT || d < -INT64_LIMIT) {
                 throw new IllegalArgumentException("Value " + v + " does not fit in int64");
             }
         }

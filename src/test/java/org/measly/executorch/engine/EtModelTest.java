@@ -1,17 +1,50 @@
 package org.measly.executorch.engine;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
 
 import ai.djl.Model;
 import ai.djl.ndarray.NDArray;
 import ai.djl.ndarray.NDList;
 import ai.djl.ndarray.NDManager;
 import ai.djl.ndarray.types.Shape;
+import ai.djl.nn.Block;
 import org.measly.executorch.TestSupport;
+import java.io.FileNotFoundException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import org.junit.jupiter.api.Test;
 
 class EtModelTest {
+
+    /** Subclass that pre-populates the inherited {@code block} field to exercise the dynamic-block guard. */
+    private static final class StubBlockModel extends EtModel {
+        StubBlockModel(NDManager manager) {
+            super("stub", manager);
+            this.block = mock(Block.class);
+        }
+    }
+
+    @Test
+    void loadRejectsPreexistingBlock() throws Exception {
+        try (NDManager manager = NDManager.newBaseManager("ExecuTorch")) {
+            EtModel model = new StubBlockModel(manager);
+            Path dir = Files.createTempDirectory("etmodel-block");
+            assertThrows(
+                    UnsupportedOperationException.class, () -> model.load(dir, null, null));
+        }
+    }
+
+    @Test
+    void loadWithoutPteThrowsFileNotFound() throws Exception {
+        try (NDManager manager = NDManager.newBaseManager("ExecuTorch")) {
+            EtModel model = new EtModel("missing", manager);
+            Path emptyDir = Files.createTempDirectory("etmodel-empty");
+            assertThrows(FileNotFoundException.class, () -> model.load(emptyDir, null, null));
+        }
+    }
     @org.junit.jupiter.api.Test
     void wrongArityThrows() throws Exception {
         org.measly.executorch.TestSupport.assumeNativeAvailable();

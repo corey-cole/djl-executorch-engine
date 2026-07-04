@@ -1,5 +1,6 @@
 package org.measly.executorch.engine;
 
+import java.nio.ByteBuffer;
 import ai.djl.ndarray.NDList;
 import ai.djl.ndarray.NDManager;
 import ai.djl.ndarray.types.DataType;
@@ -51,9 +52,9 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
                         "Input " + i + " dtype " + et.getDataType()
                                 + " != model's expected ScalarType " + meta.inputScalarTypes[i]);
             }
-            java.nio.ByteBuffer buf = et.toByteBuffer();
+            ByteBuffer buf = et.toByteBuffer();
             if (!buf.isDirect()) {
-                java.nio.ByteBuffer direct = manager.allocateDirect(buf.remaining());
+                ByteBuffer direct = manager.allocateDirect(buf.remaining());
                 direct.put(buf);
                 direct.rewind();
                 buf = direct;

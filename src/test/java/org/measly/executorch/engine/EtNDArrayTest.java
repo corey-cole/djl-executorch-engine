@@ -58,4 +58,21 @@ class EtNDArrayTest {
             assertThrows(IllegalStateException.class, () -> arr.toByteBuffer(true));
         }
     }
+
+    @Test
+    void internIsNotSupported() {
+        try (NDManager manager = NDManager.newBaseManager("ExecuTorch")) {
+            NDArray arr = manager.create(new float[] {1f}, new Shape(1));
+            assertThrows(UnsupportedOperationException.class, () -> arr.intern(arr));
+        }
+    }
+
+    @Test
+    void detachRehomesToSystemManager() {
+        try (NDManager manager = NDManager.newBaseManager("ExecuTorch")) {
+            NDArray arr = manager.create(new float[] {1f}, new Shape(1));
+            arr.detach();
+            assertEquals(EtNDManager.getSystemManager(), arr.getManager());
+        }
+    }
 }

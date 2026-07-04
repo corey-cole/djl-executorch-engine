@@ -52,6 +52,33 @@ class DTypeTest {
     }
 
     @Test
+    void float64CreatesDoubleScalar() {
+        try (NDManager m = NDManager.newBaseManager("ExecuTorch")) {
+            NDArray a = DType.FLOAT64.createScalar(m, 1.5, new long[] {1});
+            assertEquals(DataType.FLOAT64, a.getDataType());
+            assertArrayEquals(new double[] {1.5}, a.toDoubleArray());
+        }
+    }
+
+    @Test
+    void int32CreatesIntScalar() {
+        try (NDManager m = NDManager.newBaseManager("ExecuTorch")) {
+            NDArray a = DType.INT32.createScalar(m, 42, new long[] {1});
+            assertEquals(DataType.INT32, a.getDataType());
+            assertArrayEquals(new int[] {42}, a.toIntArray());
+        }
+    }
+
+    @Test
+    void integralNumbersSkipFractionalCheck() {
+        // Integer/Long are not Float/Double, so requireIntegral bypasses the NaN/rint branch entirely.
+        try (NDManager m = NDManager.newBaseManager("ExecuTorch")) {
+            NDArray a = DType.INT64.createScalar(m, Long.valueOf(9L), new long[] {1});
+            assertArrayEquals(new long[] {9L}, a.toLongArray());
+        }
+    }
+
+    @Test
     void int64RejectsOutOfRangeDouble() {
         try (ai.djl.ndarray.NDManager m = ai.djl.ndarray.NDManager.newBaseManager("ExecuTorch")) {
             assertThrows(IllegalArgumentException.class,

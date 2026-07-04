@@ -10,6 +10,7 @@ public final class EtEngine extends Engine {
 
     public static final String ENGINE_NAME = "ExecuTorch";
     static final int RANK = 10;
+    static final String EXECUTORCH_VERSION = "1.3.1"; // pinned ExecuTorch runtime version
 
     private EtEngine() {} // cheap: no native load here (lazy in EtNative)
 
@@ -34,7 +35,7 @@ public final class EtEngine extends Engine {
 
     @Override
     public String getVersion() {
-        return "1.3.1"; // pinned ExecuTorch runtime version
+        return EXECUTORCH_VERSION;
     }
 
     @Override

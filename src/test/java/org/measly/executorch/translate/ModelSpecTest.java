@@ -68,6 +68,24 @@ class ModelSpecTest {
     }
 
     @Test
+    void rejectsInputMissingRequiredField() {
+        // dtype omitted -> Gson leaves it null -> IllegalArgumentException.
+        assertThrows(IllegalArgumentException.class, () -> ModelSpec.parse(new StringReader(
+                "{\"inputs\":[{\"name\":\"v\",\"position\":0,\"shape\":[1]}]}")));
+    }
+
+    @Test
+    void rejectsDuplicatePosition() {
+        String json =
+                """
+                {"inputs":[
+                  {"name":"a","position":0,"dtype":"float32","shape":[1]},
+                  {"name":"b","position":0,"dtype":"int64","shape":[1]}]}
+                """;
+        assertThrows(IllegalArgumentException.class, () -> ModelSpec.parse(new StringReader(json)));
+    }
+
+    @Test
     void rejectsMalformedJson() {
         assertThrows(IllegalArgumentException.class,
                 () -> ModelSpec.parse(new StringReader("{ this is not json ")));

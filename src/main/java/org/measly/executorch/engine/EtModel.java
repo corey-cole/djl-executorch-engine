@@ -41,6 +41,8 @@ public class EtModel extends BaseModel {
         if (modelFile == null) {
             throw new FileNotFoundException(".pte file not found in: " + modelPath);
         }
+        // Not unit-tested below this point: loadModule/methodMeta/destroy require the native library
+        // (integration-tested via EtModelTest#loadAndForwardAddModel).
         long handle = EtNative.loadModule(modelFile.toString());
         EtMethodMeta meta;
         try {
