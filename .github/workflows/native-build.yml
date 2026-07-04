@@ -80,6 +80,9 @@ jobs:
           uses: actions/download-artifact@v8
           with:
             name: executorch-manylinux-libs
+        
+        # Debug print
+        - run: tree -h src/main/resources/native
 
         # https://github.com/gradle/actions
         # This has enhanced caching 

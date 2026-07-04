@@ -32,6 +32,7 @@ fi
 ET_ARGS=(-DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT:-logging}")
 [ -n "${ET_INSTALL:-}" ] && ET_ARGS+=(-DET_INSTALL="${ET_INSTALL}")
 
+JOBS="${JOBS:-$(nproc)}"
 # Drop the tree only if it was configured for a different source root (container vs host); a same-root
 # re-run keeps it so the cached Catch2 build (native/asan/_deps) is reused, not rebuilt. CLEAN=1 forces.
 bash native/clean_stale_tree.sh native/asan native
@@ -39,7 +40,7 @@ cmake -B native/asan -S native -G "Unix Makefiles" "${ET_ARGS[@]}" -DET_BUILD_QA
   -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
   -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
-cmake --build native/asan --target et_runtime_test et_leak_harness
+cmake --build native/asan --target et_runtime_test et_leak_harness -j"${JOBS}"
 
 echo "--- Catch2 unit suite ---"
 ./native/asan/et_runtime_test
