@@ -60,14 +60,24 @@ The JVM integration tests load the native `.so`, so **build it first (step 1)**.
 ./gradlew leakTest    # JVM-side memory-leak stress test
 ```
 
-### 3. Native QA (optional)
+### 3. Native QA and benchmarking (optional)
 
-AddressSanitizer/LeakSanitizer Catch2 units + the leak harness. The runtime is fetched by CMake
-(or set `ET_INSTALL` for the escape hatch); run in the same `manylinux_2_28` container:
+`native/build_qa.sh` (AddressSanitizer/LeakSanitizer Catch2 units + leak harness), `native/bench.sh`
+(Release timing harness), and `native/build_variants.sh` (times all three runtime variants) each
+fetch the runtime via CMake (or set `ET_INSTALL` for the escape hatch). Run them in the **same
+`manylinux_2_28` container** as the shim build so the toolchain matches — pass the script to the
+wrapper:
 
 ```bash
-./native/build_qa.sh
+./native/local_build_wrapper.sh native/build_qa.sh
+./native/local_build_wrapper.sh native/bench.sh
+ITERS=2000 ./native/local_build_wrapper.sh native/build_variants.sh
 ```
+
+Running them directly on the host works but is unsupported: the runtime toolchain won't match, and
+a `native/bench`/`native/asan` tree left over from a container run has a different source root — the
+scripts wipe their own tree to avoid that collision, but the host toolchain mismatch remains. The
+wrapper is the blessed path.
 
 ### Container file ownership (known gap)
 

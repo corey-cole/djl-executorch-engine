@@ -24,6 +24,9 @@ ET_ARGS=(-DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT}")
 [ -n "${ET_INSTALL:-}" ] && ET_ARGS+=(-DET_INSTALL="${ET_INSTALL}")
 
 # Release, no sanitizer, own build tree (distinct from native/asan QA and native/build shim).
+# Drop the tree only if it was configured for a different source root (container vs host); a same-root
+# re-run keeps it so the FetchContent'd runtime tarball (native/bench/_deps) is reused. CLEAN=1 forces.
+bash native/clean_stale_tree.sh native/bench native
 cmake -B native/bench -S native -G "Unix Makefiles" "${ET_ARGS[@]}" \
   -DET_BUILD_BENCH=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build native/bench --target et_timing_harness

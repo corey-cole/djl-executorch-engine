@@ -22,6 +22,7 @@ ITERS="${ITERS:-1000}"
 
 # QA is the only ASan consumer; install the toolset's ASan runtime here (moved out of build.sh).
 if command -v dnf >/dev/null 2>&1; then
+  echo "--- Installing ASan runtime (dnf), may appear to hang ---"
   TOOLSET_VER="$(gcc -dumpversion | cut -d. -f1)"
   dnf install -y -q "gcc-toolset-${TOOLSET_VER}-libasan-devel" || true
 fi
@@ -31,6 +32,9 @@ fi
 ET_ARGS=(-DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT:-logging}")
 [ -n "${ET_INSTALL:-}" ] && ET_ARGS+=(-DET_INSTALL="${ET_INSTALL}")
 
+# Drop the tree only if it was configured for a different source root (container vs host); a same-root
+# re-run keeps it so the cached Catch2 build (native/asan/_deps) is reused, not rebuilt. CLEAN=1 forces.
+bash native/clean_stale_tree.sh native/asan native
 cmake -B native/asan -S native -G "Unix Makefiles" "${ET_ARGS[@]}" -DET_BUILD_QA=ON \
   -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
