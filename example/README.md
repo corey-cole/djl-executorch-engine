@@ -23,19 +23,28 @@ Nothing large is committed to git.
 
 ## Run the example
 
-    ./gradlew :example:run
+    ./gradlew :example:run                      # ET_HYBRID (default)
+    ./gradlew :example:run --args="ET_NATIVE"   # LibTorch-free preprocessing
+    ./gradlew :example:run --args="PYTORCH"     # DJL PyTorch engine
 
-Classifies a bundled image through the ExecuTorch engine and prints the top-5 labels.
+Classifies a bundled image and prints the top-5 labels. The variant selects engine + preprocessing:
+`ET_HYBRID` and `PYTORCH` preprocess on a PyTorch-backed manager; `ET_NATIVE` preprocesses in plain
+Java and runs the ExecuTorch forward with **no LibTorch loaded** (see Caveats).
 
 ## Run the benchmark
 
     ./gradlew :example:jmh --no-configuration-cache
 
-Races `ExecuTorch` (`.pte`) vs `PyTorch` (`.pt`) over two modes:
+Races three arms over two modes:
 - **steady-state** (`AverageTime`) — warm inference loop, the fair race;
 - **cold-start** (`SingleShotTime`) — load + first forward, where AOT compilation helps.
 
-Both arms fail fast pointing back at `exportModels` if the artifacts are missing.
+The `(variant)` column is:
+- `ET_HYBRID` — ExecuTorch forward, PyTorch-backed preprocessing;
+- `PYTORCH` — DJL PyTorch engine (LibTorch);
+- `ET_NATIVE` — ExecuTorch forward, plain-Java preprocessing; its JMH fork loads no LibTorch.
+
+Each arm fails fast pointing back at `exportModels` if its artifact (`.pte`/`.pt`) is missing.
 
 > **`--no-configuration-cache` is required.** This repo runs with Gradle's configuration cache on
 > globally, but the `me.champeau.jmh` plugin's `jmhJar` task (which builds the benchmark's shaded
@@ -43,6 +52,10 @@ Both arms fail fast pointing back at `exportModels` if the artifacts are missing
 > error rather than a benchmark run.
 
 ## Sample benchmark results
+
+> These numbers predate the `ET_NATIVE` arm and use the earlier `(engine)` column (two arms).
+> Re-run the benchmark to regenerate a three-arm `(variant)` table; the `ET_NATIVE` row is the
+> LibTorch-free comparison point.
 
 Test results on i7-1185G7 w/ 32GB of memory, Zulu17.66+19-CA
 
@@ -60,15 +73,16 @@ loaded from disk.
 
 ## Caveats
 
-- **Preprocessing still uses LibTorch, even on the ExecuTorch arm.** The ExecuTorch engine's
-  `NDArray` is a minimal data holder with no `NDArrayEx` support, so DJL's built-in image transforms
-  (resize/to-tensor/normalize) can't run on it directly. `MobilenetTranslator` works around this by
-  doing those transforms on a PyTorch-backed `NDManager` for *both* arms, and only hands the
-  ExecuTorch manager a plain tensor for the forward pass itself. That makes the steady-state
-  forward-pass comparison fair (identical preprocessing on both sides), but it means this example's
-  "no LibTorch dependency" story is qualified — it's the image-preprocessing surface that currently
-  needs LibTorch, not inference, and this is a "Phase 1: no hybrid mode" limitation, not a
-  fundamental one.
+- **`ET_HYBRID` preprocessing uses LibTorch; `ET_NATIVE` does not.** ExecuTorch's `NDArray` is a
+  minimal data holder with no `NDArrayEx` support, so DJL's built-in image transforms can't run on
+  it. `ET_HYBRID` (and `PYTORCH`) work around this by preprocessing on a PyTorch-backed `NDManager`
+  — so `ET_HYBRID`'s "no LibTorch" story is qualified (it's the preprocessing surface, not
+  inference, and this is a "Phase 1: no hybrid mode" limitation, not a fundamental one).
+  `ET_NATIVE` instead preprocesses in plain Java (`Image.resize` + a hand-written normalize) and
+  builds the input tensor straight in the ExecuTorch manager, so on that path LibTorch never loads.
+  Note the two do **not** produce bit-identical tensors — the resize algorithms differ (DJL's tensor
+  `Resize` vs `Image.resize`/Graphics2D) — but both yield correct classifications; the comparison is
+  latency + dependency footprint, not identical pixels.
 - **Reported numbers are illustrative, not authoritative.** A single-iteration smoke run of this
   benchmark is not a rigorous measurement (no meaningful warmup, no repeat forks, tiny sample size,
   no CPU pinning). Treat any numbers you see quoted elsewhere as a sanity check that both arms run,
