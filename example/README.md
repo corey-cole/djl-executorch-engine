@@ -33,7 +33,7 @@ Java and runs the ExecuTorch forward with **no LibTorch loaded** (see Caveats).
 
 ## Run the benchmark
 
-    ./gradlew :example:jmh --no-configuration-cache
+    ./gradlew :example:jmh --no-configuration-cache --rerun-tasks
 
 Races three arms over two modes:
 - **steady-state** (`AverageTime`) — warm inference loop, the fair race;
@@ -53,23 +53,22 @@ Each arm fails fast pointing back at `exportModels` if its artifact (`.pte`/`.pt
 
 ## Sample benchmark results
 
-> These numbers predate the `ET_NATIVE` arm and use the earlier `(engine)` column (two arms).
-> Re-run the benchmark to regenerate a three-arm `(variant)` table; the `ET_NATIVE` row is the
-> LibTorch-free comparison point.
-
 Test results on i7-1185G7 w/ 32GB of memory, Zulu17.66+19-CA
 
 ```
-Benchmark                         (engine)  Mode  Cnt    Score    Error  Units
-MobilenetBenchmark.steadyState  ExecuTorch  avgt    5   19.401 ±  1.164  ms/op
-MobilenetBenchmark.steadyState     PyTorch  avgt    5   28.995 ±  1.574  ms/op
-MobilenetBenchmark.coldStart    ExecuTorch    ss    5   35.252 ± 22.887  ms/op
-MobilenetBenchmark.coldStart       PyTorch    ss    5  286.984 ± 50.077  ms/op
+Benchmark                       (variant)  Mode  Cnt    Score    Error  Units
+MobilenetBenchmark.steadyState  ET_HYBRID  avgt    5   12.777 ±  0.590  ms/op
+MobilenetBenchmark.steadyState    PYTORCH  avgt    5   20.554 ±  0.491  ms/op
+MobilenetBenchmark.steadyState  ET_NATIVE  avgt    5   12.991 ±  0.187  ms/op
+MobilenetBenchmark.coldStart    ET_HYBRID    ss    5   18.211 ±  4.637  ms/op
+MobilenetBenchmark.coldStart      PYTORCH    ss    5  140.853 ± 20.606  ms/op
+MobilenetBenchmark.coldStart    ET_NATIVE    ss    5   19.453 ± 17.756  ms/op
 ```
 
-ExecuTorch (with XNNPACK) shows a modest improvement over PyTorch at steady-state.  The real win from
-the benchmarks above is the reduction in cold-start, something that will matter if models are frequently
-loaded from disk.
+ExecuTorch (with XNNPACK) shows an improvement over PyTorch at steady-state.  The `ET_NATIVE` variant
+is roughly the same speed.  It's primary benefit is that it shows how to use the engine for complex
+tasks without requiring any PyTorch dependencies.  Both ExecuTorch arms show a massive reduction in cold-start,
+something that will matter if there are multiple models that are frequently loaded/unloaded.
 
 ## Caveats
 
