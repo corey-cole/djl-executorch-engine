@@ -9,7 +9,6 @@ import ai.djl.ndarray.NDArray;
 import ai.djl.ndarray.NDList;
 import ai.djl.ndarray.NDManager;
 import ai.djl.translate.Batchifier;
-import ai.djl.translate.Translator;
 import ai.djl.translate.TranslatorContext;
 import java.util.List;
 
@@ -27,7 +26,7 @@ import java.util.List;
  * ExecuTorch manager a plain tensor via {@link NDManager#from(NDArray)} for the forward pass, then
  * adopts the raw output back for softmax/top-k.
  */
-final class MobilenetTranslator implements Translator<Image, Classifications>, AutoCloseable {
+final class MobilenetTranslator implements CloseableImageTranslator {
 
     private static final float[] MEAN = {0.485f, 0.456f, 0.406f};
     private static final float[] STD = {0.229f, 0.224f, 0.225f};
