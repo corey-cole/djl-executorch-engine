@@ -95,8 +95,9 @@ JMH covers latency only. Capture the other two axes from `docs/benchmarking.md` 
 
 - **Runtime / binary size** — compare the shipped native footprint:
   `ls -la $(find ~/.djl.ai -name '*.so' -path '*pytorch*')` (LibTorch) vs the engine's
-  `libexecutorch_djl.so` (~11.5 MB). Note the caveat above: this example's ExecuTorch arm still
-  links LibTorch in-process for preprocessing, so a footprint comparison taken *from this example's
-  process* won't reflect a LibTorch-free deployment — measure the libraries directly instead.
+  `libexecutorch_djl.so` (~11.5 MB). Note: `ET_HYBRID` and `PYTORCH` link LibTorch in-process (for
+  preprocessing / inference respectively), so a footprint taken from those runs won't reflect a
+  LibTorch-free deployment — measure the libraries directly, or sample the `ET_NATIVE` run, whose
+  process loads no LibTorch.
 - **Resident memory (RSS)** — run each arm as its own process and sample RSS during the steady-state
   loop (e.g. `/usr/bin/time -v` or `ps -o rss=`), reported per engine.
