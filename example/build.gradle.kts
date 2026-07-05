@@ -24,6 +24,22 @@ application {
 // Model artifacts are generated on demand into this directory (see the exportModels task, Task 3).
 val modelsDir = layout.buildDirectory.dir("models")
 
+val exportModels by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Generate MobileNetV2 .pte + .pt via uv (heavy; needs uv on PATH)."
+    val out = modelsDir.get().asFile
+    val script = rootProject.file("tools/scripts/export_mobilenet.py")
+    inputs.file(script)
+    outputs.files(
+        out.resolve("mobilenet_v2.pte"),
+        out.resolve("mobilenet_v2.pt"),
+        out.resolve("versions.json"),
+    )
+    doFirst { out.mkdirs() }
+    workingDir = out
+    commandLine("uv", "run", script.absolutePath)
+}
+
 // Pass the models directory to the JVM so ModelArtifacts can resolve it at runtime.
 tasks.named<JavaExec>("run") {
     systemProperty("example.models.dir", modelsDir.get().asFile.absolutePath)
