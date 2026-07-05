@@ -1,8 +1,8 @@
 plugins {
     `java-library`
     jacoco
-    id("com.vanniktech.maven.publish") version "0.37.0"
-    id("name.remal.jacoco-to-cobertura") version "2.0.4"
+    alias(libs.plugins.maven.publish)
+    alias(libs.plugins.jacoco.to.cobertura)
 }
 
 group = "org.measly"
@@ -16,19 +16,17 @@ java {
 
 repositories { mavenCentral() }
 
-val djlVersion = "0.36.0"
-
 dependencies {
-    compileOnly("ai.djl:api:$djlVersion")
-    compileOnly("org.slf4j:slf4j-api:2.0.17")
+    compileOnly(libs.djl.api)
+    compileOnly(libs.slf4j.api)
 
-    testImplementation("ai.djl:api:$djlVersion")
-    testImplementation("org.slf4j:slf4j-api:2.0.17")
-    testImplementation("ch.qos.logback:logback-classic:1.5.33")
-    testImplementation(platform("org.junit:junit-bom:5.14.4"))
-    testImplementation("org.junit.jupiter:junit-jupiter")
-    testImplementation("org.mockito:mockito-core:5.18.0")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation(libs.djl.api)
+    testImplementation(libs.slf4j.api)
+    testImplementation(libs.logback.classic)
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testImplementation(libs.mockito.core)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 tasks.test {
