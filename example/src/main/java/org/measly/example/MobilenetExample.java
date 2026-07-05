@@ -16,17 +16,28 @@ public final class MobilenetExample {
     private MobilenetExample() {}
 
     public static void main(String[] args) throws Exception {
-        Path models = ModelArtifacts.require("mobilenet_v2.pte").getParent();
+        Variant variant;
+        try {
+            variant = args.length > 0 ? Variant.valueOf(args[0]) : Variant.ET_HYBRID;
+        } catch (IllegalArgumentException e) {
+            System.err.println("Unknown variant: " + args[0]);
+            System.err.println("Valid variants: " + Arrays.toString(Variant.values()));
+            System.err.println("Usage: run [--args=\"<VARIANT>\"]   (default ET_HYBRID)");
+            System.exit(2);
+            return;
+        }
 
+        String artifact = variant == Variant.PYTORCH ? "mobilenet_v2.pt" : "mobilenet_v2.pte";
+        Path models = ModelArtifacts.require(artifact).getParent();
         List<String> synset = loadSynset();
 
-        try (MobilenetTranslator translator = new MobilenetTranslator(synset);
+        try (CloseableImageTranslator translator = variant.newTranslator(synset);
                 InputStream imageStream =
                         MobilenetExample.class.getResourceAsStream("/kitten.jpg");
                 ZooModel<Image, Classifications> model =
                         Criteria.builder()
                                 .setTypes(Image.class, Classifications.class)
-                                .optEngine("ExecuTorch")
+                                .optEngine(variant.engine)
                                 .optModelPath(models)
                                 .optModelName("mobilenet_v2")
                                 .optTranslator(translator)
@@ -35,7 +46,7 @@ public final class MobilenetExample {
                 Predictor<Image, Classifications> predictor = model.newPredictor()) {
             Image image = ImageFactory.getInstance().fromInputStream(imageStream);
             Classifications result = predictor.predict(image);
-            System.out.println("Top-5 (ExecuTorch / MobileNetV2):");
+            System.out.println("Top-5 (" + variant + " / MobileNetV2):");
             for (Classifications.Classification c : result.topK(5)) {
                 System.out.printf("  %-30s %.4f%n", c.getClassName(), c.getProbability());
             }
