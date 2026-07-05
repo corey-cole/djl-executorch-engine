@@ -115,7 +115,12 @@ current known-good starting point.
 ### 2. Export script (`tools/scripts/export_mobilenet.py`)
 
 Mirrors the structure of `export_with_spec.py`, but for a single-tensor image model and emitting
-**both** targets from the **same** weights:
+**both** targets from the **same** weights. The script carries a **PEP 723 inline-script-metadata**
+block (`# /// script … # ///`) pinning `torch`/`torchvision`/`executorch`, so it is run with
+`uv run tools/scripts/export_mobilenet.py` and provisions its own ephemeral environment — no
+separate venv/requirements step. (Caveat: torch wheels can be awkward under inline metadata — index
+URLs, CPU-only variants. If that proves flaky, fall back to a documented `uv` project/venv setup in
+`example/README.md`; the pins stay the source of truth either way.)
 
 - Load `torchvision.models.mobilenet_v2(weights=…DEFAULT)`, `.eval()`.
 - Example input `torch.randn(1, 3, 224, 224)`.
@@ -129,13 +134,14 @@ Mirrors the structure of `export_with_spec.py`, but for a single-tensor image mo
 
 ### 3. `exportModels` Gradle task (`:example`)
 
-- A task that shells to `python3 tools/scripts/export_mobilenet.py` with cwd `example/build/models/`.
+- A task that shells to `uv run tools/scripts/export_mobilenet.py` with cwd `example/build/models/`.
+  The script's PEP 723 metadata pins the deps, so the only host requirement is `uv` on `PATH`.
 - Declares `mobilenet_v2.pte`, `mobilenet_v2.torchscript`, `versions.json` as outputs (up-to-date
   checks skip re-export when present).
-- **Opt-in / heavy**: requires a Python env with the pinned `torch`/`torchvision`/`executorch`. Not
-  wired as an automatic dependency of `run`/`jmh`.
+- **Opt-in / heavy**: first run downloads torch/torchvision/executorch into uv's cache. Not wired as
+  an automatic dependency of `run`/`jmh`.
 - `run` and `jmh` **fail fast** if the artifacts are absent, with a message pointing at
-  `./gradlew :example:exportModels` (and the Python requirements). Nothing large enters git.
+  `./gradlew :example:exportModels` (and the `uv` requirement). Nothing large enters git.
 
 ### 4. Example app — the `run` target
 
@@ -181,8 +187,9 @@ torchvision weights
 - **Missing artifacts** (`run`/`jmh`): fail fast at task start with a message naming
   `./gradlew :example:exportModels` and the Python requirement. No silent fallback, no auto-invoke of
   the heavy Python path.
-- **`exportModels` without a Python env**: the script/task surfaces the missing-dependency error from
-  `python3` directly; the task documents the pinned `torch`/`torchvision`/`executorch` requirement.
+- **`exportModels` without `uv`**: the task fails with a clear "install `uv`" message; dependency
+  resolution/pinning is `uv`'s job via the script's PEP 723 block, so there is no separate
+  requirements step to get wrong.
 - **Engine not on classpath** (e.g. LibTorch fetch fails offline): DJL's own `Criteria` load error
   propagates; the README notes the PyTorch engine needs network on first run to fetch LibTorch.
 
