@@ -6,7 +6,9 @@ plugins {
 }
 
 group = "org.measly"
-version = "0.1.0-SNAPSHOT"
+version = providers.gradleProperty("releaseVersion")
+    .orElse(providers.environmentVariable("RELEASE_VERSION"))
+    .getOrElse("0.1.0-SNAPSHOT")
 
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(17) }
@@ -53,12 +55,36 @@ tasks.jacocoTestReport {
     }
 }
 
+val nativePlatforms = listOf("linux-x86_64")
+// Look for .so files in build/native-staging/<platform>/libexecutorch_djl.so
+val nativeStaging = layout.buildDirectory.dir("native-staging")
+val nativeJarTasks = nativePlatforms.map { platform ->
+  tasks.register<Jar>("nativeJar-${platform}") {
+    archiveClassifier.set(platform)
+    from(nativeStaging.map { it.dir(platform) }) {
+        into("native/${platform}")
+    }
+    // Resolve to a plain File at configuration time so the doFirst action captures
+    // only a File + String (config-cache safe) rather than the enclosing script.
+    val resolvedSo = nativeStaging.get().dir(platform).file("libexecutorch_djl.so").asFile
+    doFirst { // Fail a release rather than ship an empty native jar
+        require(resolvedSo.exists()) { "Missing native library for ${platform}: ${resolvedSo}" }
+    }
+  }
+}
+
+publishing {
+    publications.withType<MavenPublication>().configureEach {
+        nativeJarTasks.forEach { artifact(it) }
+    }
+}
+
 mavenPublishing {
     //publishToMavenCentral(automaticRelease = true, validateDeployment = DeploymentValidation.PUBLISHED)
     publishToMavenCentral()
     signAllPublications()
 
-    coordinates("org.measly", "djl-executorch-engine", "0.1.0-SNAPSHOT")
+    coordinates(group.toString(), "djl-executorch-engine", version.toString())
 
     pom {
         name.set("DJL ExecuTorch Engine")

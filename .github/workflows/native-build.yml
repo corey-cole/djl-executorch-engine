@@ -9,64 +9,10 @@ on:
 
 jobs:
   build-executorch-shim:
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/native-build-job.yml
     permissions:
       contents: read
-    outputs:
-        output1: ${{ steps.shim-upload-step.outputs.artifact-id }}
-    steps:
-      - name: Checkout djl-executorch-engine repository
-        uses: actions/checkout@v7
-
-      # Use a generic name for the RPM file
-      - name: Download Corretto JDK 8 RPM
-        run: |
-            curl -L -o amazon-corretto-linux-jdk.rpm https://corretto.aws/downloads/latest/amazon-corretto-8-x64-linux-jdk.rpm
-
-      # Provenance gate: prove the pinned runtime tarball was built by Repo A's CI before we link
-      # against it. URL_HASH in native/CMakeLists.txt covers integrity; this covers provenance.
-      - name: Verify ExecuTorch runtime provenance
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          url="$(grep -oE 'https://[^"]*logging-linux-x86_64\.tar\.gz' native/cmake/EtRuntimePin.cmake | head -1)"
-          test -n "${url}" || { echo "no logging URL in EtRuntimePin.cmake"; exit 1; }
-          curl -fL -o runtime.tgz "${url}"
-          gh attestation verify runtime.tgz --repo measly-java-learning/executorch-runtime-dist
-          rm -f runtime.tgz
-
-      # This is very similar to how `local_build_wrapper.sh` executes build
-      # which enables testing outside of GHA
-      - name: Build the libexecutorch_djl shim
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace \
-            quay.io/pypa/manylinux_2_28_x86_64:latest \
-            /bin/bash /workspace/native/build.sh
-      
-      - name: QA the libexecutorch_djl shim
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace \
-            quay.io/pypa/manylinux_2_28_x86_64:latest \
-            /bin/bash /workspace/native/build_qa.sh
  
-      # Make the shim available to the next job
-      # If we care about permissions will need to interpose a `tar` step prior to upload
-      # https://github.com/actions/upload-artifact#using-outputs
-      - name: Store libexecutorch_djl shim
-        id: shim-upload-step
-        uses: actions/upload-artifact@v7
-        with:
-          name: executorch-manylinux-libs
-          # From inspection of the cross-job artifact, the file is
-          # available as `linux-x86_64/libexecutorch_djl.so`
-          path: ${{ github.workspace }}/src/main/resources/native/**/*.so
-          compression-level: 1 # May want to consider no compression
- 
-
   # setup-java action repo: https://github.com/actions/setup-java
   build-java-package:
     runs-on: ubuntu-latest
@@ -87,8 +33,9 @@ jobs:
         - name: Download the libexecutorch_djl shim
           uses: actions/download-artifact@v8
           with:
-            name: executorch-manylinux-libs
+            pattern: executorch-libs-*
             path: src/main/resources/native/
+            merge-multiple: true
         
         # Debug print
         - run: tree -h src/main/resources/native
