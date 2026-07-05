@@ -15,11 +15,17 @@ dependencies {
     implementation(libs.djl.api)            // Image, ImageClassificationTranslator
     runtimeOnly(libs.slf4j.api)
     runtimeOnly(libs.logback.classic)
+
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 application {
     mainClass = "org.measly.example.MobilenetExample"
 }
+
+tasks.test { useJUnitPlatform() }
 
 // Model artifacts are generated on demand into this directory (see the exportModels task, Task 3).
 val modelsDir = layout.buildDirectory.dir("models")
