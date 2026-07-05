@@ -6,7 +6,6 @@ import ai.djl.modality.cv.Image;
 import ai.djl.modality.cv.ImageFactory;
 import ai.djl.repository.zoo.Criteria;
 import ai.djl.repository.zoo.ZooModel;
-import ai.djl.translate.Translator;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -20,7 +19,7 @@ public final class MobilenetExample {
         Path models = ModelArtifacts.require("mobilenet_v2.pte").getParent();
 
         List<String> synset = loadSynset();
-        Translator<Image, Classifications> translator = new MobilenetTranslator(synset);
+        MobilenetTranslator translator = new MobilenetTranslator(synset);
 
         Criteria<Image, Classifications> criteria =
                 Criteria.builder()
@@ -31,7 +30,8 @@ public final class MobilenetExample {
                         .optTranslator(translator)
                         .build();
 
-        try (InputStream imageStream =
+        try (MobilenetTranslator ignored = translator;
+                InputStream imageStream =
                         MobilenetExample.class.getResourceAsStream("/kitten.jpg");
                 ZooModel<Image, Classifications> model = criteria.loadModel();
                 Predictor<Image, Classifications> predictor = model.newPredictor()) {

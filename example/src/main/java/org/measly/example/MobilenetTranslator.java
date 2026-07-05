@@ -27,7 +27,7 @@ import java.util.List;
  * ExecuTorch manager a plain tensor via {@link NDManager#from(NDArray)} for the forward pass, then
  * adopts the raw output back for softmax/top-k.
  */
-final class MobilenetTranslator implements Translator<Image, Classifications> {
+final class MobilenetTranslator implements Translator<Image, Classifications>, AutoCloseable {
 
     private static final float[] MEAN = {0.485f, 0.456f, 0.406f};
     private static final float[] STD = {0.229f, 0.224f, 0.225f};
@@ -61,6 +61,11 @@ final class MobilenetTranslator implements Translator<Image, Classifications> {
             NDArray probabilities = adopted.softmax(-1);
             return new Classifications(synset, probabilities);
         }
+    }
+
+    @Override
+    public void close() {
+        preManager.close();
     }
 
     @Override
