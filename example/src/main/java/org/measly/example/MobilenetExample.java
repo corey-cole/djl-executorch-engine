@@ -19,21 +19,19 @@ public final class MobilenetExample {
         Path models = ModelArtifacts.require("mobilenet_v2.pte").getParent();
 
         List<String> synset = loadSynset();
-        MobilenetTranslator translator = new MobilenetTranslator(synset);
 
-        Criteria<Image, Classifications> criteria =
-                Criteria.builder()
-                        .setTypes(Image.class, Classifications.class)
-                        .optEngine("ExecuTorch")
-                        .optModelPath(models)
-                        .optModelName("mobilenet_v2")
-                        .optTranslator(translator)
-                        .build();
-
-        try (MobilenetTranslator ignored = translator;
+        try (MobilenetTranslator translator = new MobilenetTranslator(synset);
                 InputStream imageStream =
                         MobilenetExample.class.getResourceAsStream("/kitten.jpg");
-                ZooModel<Image, Classifications> model = criteria.loadModel();
+                ZooModel<Image, Classifications> model =
+                        Criteria.builder()
+                                .setTypes(Image.class, Classifications.class)
+                                .optEngine("ExecuTorch")
+                                .optModelPath(models)
+                                .optModelName("mobilenet_v2")
+                                .optTranslator(translator)
+                                .build()
+                                .loadModel();
                 Predictor<Image, Classifications> predictor = model.newPredictor()) {
             Image image = ImageFactory.getInstance().fromInputStream(imageStream);
             Classifications result = predictor.predict(image);

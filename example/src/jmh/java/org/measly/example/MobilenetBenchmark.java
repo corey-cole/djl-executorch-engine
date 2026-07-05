@@ -82,9 +82,18 @@ public class MobilenetBenchmark {
         @Setup(Level.Trial)
         public void setup(Config cfg) throws Exception {
             translator = new MobilenetTranslator(cfg.synset);
-            model = criteria(cfg, translator).loadModel();
-            predictor = model.newPredictor();
-            predictor.predict(cfg.image); // warm once so first measured op is steady-state
+            try {
+                model = criteria(cfg, translator).loadModel();
+                predictor = model.newPredictor();
+                predictor.predict(cfg.image); // warm once so first measured op is steady-state
+            } catch (Throwable t) {
+                // JMH won't call @TearDown if @Setup throws, so close whatever was already
+                // opened here ourselves (same order as tearDown: predictor, model, translator).
+                if (predictor != null) predictor.close();
+                if (model != null) model.close();
+                translator.close();
+                throw t;
+            }
         }
 
         @TearDown(Level.Trial)

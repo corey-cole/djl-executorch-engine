@@ -32,6 +32,26 @@ final class MobilenetTranslator implements Translator<Image, Classifications>, A
     private static final float[] MEAN = {0.485f, 0.456f, 0.406f};
     private static final float[] STD = {0.229f, 0.224f, 0.225f};
 
+    // Batchifier.STACK calls NDArrays.stack, which needs NDArrayEx support EtNDArray doesn't
+    // have. processInput() already adds the batch dim itself, so batching here is a no-op
+    // (this example always predicts one image at a time).
+    private static final Batchifier BATCHIFIER =
+            new Batchifier() {
+                @Override
+                public NDList batchify(NDList[] inputs) {
+                    if (inputs.length != 1) {
+                        throw new UnsupportedOperationException(
+                                "MobilenetTranslator only supports a batch size of 1");
+                    }
+                    return inputs[0];
+                }
+
+                @Override
+                public NDList[] unbatchify(NDList inputs) {
+                    return new NDList[] {inputs};
+                }
+            };
+
     private final List<String> synset;
     private final NDManager preManager;
 
@@ -76,23 +96,6 @@ final class MobilenetTranslator implements Translator<Image, Classifications>, A
 
     @Override
     public Batchifier getBatchifier() {
-        // Batchifier.STACK calls NDArrays.stack, which needs NDArrayEx support EtNDArray doesn't
-        // have. processInput() already adds the batch dim itself, so batching here is a no-op
-        // (this example always predicts one image at a time).
-        return new Batchifier() {
-            @Override
-            public NDList batchify(NDList[] inputs) {
-                if (inputs.length != 1) {
-                    throw new UnsupportedOperationException(
-                            "MobilenetTranslator only supports a batch size of 1");
-                }
-                return inputs[0];
-            }
-
-            @Override
-            public NDList[] unbatchify(NDList inputs) {
-                return new NDList[] {inputs};
-            }
-        };
+        return BATCHIFIER;
     }
 }
