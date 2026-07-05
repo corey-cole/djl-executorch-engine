@@ -55,5 +55,12 @@ jmh {
     warmupIterations = 3
     iterations = 5
     fork = 1
-    jvmArgs = listOf("-Dexample.models.dir=" + modelsDir.get().asFile.absolutePath)
+    jvmArgs = listOf(
+        "-Dexample.models.dir=" + modelsDir.get().asFile.absolutePath,
+        // For this specific model, holding interop at 1 is ~11% faster than default on
+        // my workstation (i7-1185G7)
+        // ExecuTorch is not affected by this setting and in fact all threading settings are
+        // set at compilation time
+        "-Dai.djl.pytorch.num_interop_threads=1",
+    )
 }

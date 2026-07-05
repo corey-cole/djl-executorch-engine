@@ -42,6 +42,22 @@ Both arms fail fast pointing back at `exportModels` if the artifacts are missing
 > jar) is not configuration-cache compatible. Without the flag you'll hit a configuration-cache
 > error rather than a benchmark run.
 
+## Sample benchmark results
+
+Test results on i7-1185G7 w/ 32GB of memory, Zulu17.66+19-CA
+
+```
+Benchmark                         (engine)  Mode  Cnt    Score    Error  Units
+MobilenetBenchmark.steadyState  ExecuTorch  avgt    5   19.401 ±  1.164  ms/op
+MobilenetBenchmark.steadyState     PyTorch  avgt    5   28.995 ±  1.574  ms/op
+MobilenetBenchmark.coldStart    ExecuTorch    ss    5   35.252 ± 22.887  ms/op
+MobilenetBenchmark.coldStart       PyTorch    ss    5  286.984 ± 50.077  ms/op
+```
+
+ExecuTorch (with XNNPACK) shows a modest improvement over PyTorch at steady-state.  The real win from
+the benchmarks above is the reduction in cold-start, something that will matter if models are frequently
+loaded from disk.
+
 ## Caveats
 
 - **Preprocessing still uses LibTorch, even on the ExecuTorch arm.** The ExecuTorch engine's
