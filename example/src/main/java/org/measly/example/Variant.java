@@ -12,7 +12,7 @@ import java.util.function.Function;
  * called for {@code ET_HYBRID}/{@code PYTORCH} — never at enum init, and never for {@code
  * ET_NATIVE}. That keeps an {@code ET_NATIVE}-only path (its own JMH fork) free of LibTorch.
  */
-enum Variant {
+public enum Variant {
     ET_HYBRID("ExecuTorch", MobilenetTranslator::new),
     PYTORCH("PyTorch", MobilenetTranslator::new),
     ET_NATIVE("ExecuTorch", PlainJavaMobilenetTranslator::new);
