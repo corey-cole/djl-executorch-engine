@@ -50,3 +50,10 @@ val exportModels by tasks.registering(Exec::class) {
 tasks.named<JavaExec>("run") {
     systemProperty("example.models.dir", modelsDir.get().asFile.absolutePath)
 }
+
+jmh {
+    warmupIterations = 3
+    iterations = 5
+    fork = 1
+    jvmArgs = listOf("-Dexample.models.dir=" + modelsDir.get().asFile.absolutePath)
+}

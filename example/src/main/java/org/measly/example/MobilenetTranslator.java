@@ -49,6 +49,12 @@ final class MobilenetTranslator implements Translator<Image, Classifications>, A
             array = new Normalize(MEAN, STD).transform(array);
             array = array.expandDims(0); // add the batch dim ourselves; see getBatchifier()
             NDArray adopted = ctx.getNDManager().from(array);
+            // NDManager#from() only performs a real conversion (and re-parents the result) when
+            // crossing engines (e.g. PyTorch -> ExecuTorch). When ctx's manager is the same engine
+            // as preManager (the PyTorch arm of the benchmark), it short-circuits and returns the
+            // same instance, still parented to `sub`; without an explicit attach here, `sub`'s
+            // close() below would release the array before the forward pass runs it.
+            adopted.attach(ctx.getNDManager());
             return new NDList(adopted);
         }
     }
