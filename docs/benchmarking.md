@@ -166,12 +166,14 @@ alongside the profiling-overhead spike.
   Profiling section).
 - ~~**Ship logging or not (`EXECUTORCH_ENABLE_LOGGING`)**~~ — **RESOLVED 2026-07-04: ship logging**
   (the `logging` variant stays the downloaded default). See [Decisions](#decisions) for the data.
-- **Harness docs for user `.pte` artifacts** *(deferred)* — the timing-harness binary already accepts
-  a model path (`et_timing_harness <pte> [iters] [warmup]`); `bench.sh` just hardcodes
-  `native/spike/add.pte`. Document the direct invocation (and/or add a `MODEL=` override to
-  `bench.sh`) so users can get representative numbers for their own, more complex models. Revisit once
-  the **MobileNetV2** benchmark lands — that's the first real model through the harness and will show
-  what users actually need.
+- **Harness docs for user `.pte` artifacts** *(partly addressed)* — the timing-harness binary
+  already accepts a model path (`et_timing_harness <pte> [iters] [warmup]`); `bench.sh` just
+  hardcodes `native/spike/add.pte`. The **MobileNetV2** benchmark has now landed as the `:example`
+  subproject (export + run + JMH benchmark against the DJL PyTorch engine) — see
+  `example/README.md` for the user-facing walkthrough (`exportModels`, `run`, `jmh
+  --no-configuration-cache`). That covers the JVM/DJL-API-level "representative numbers for a real
+  model" need; a direct-invocation doc and/or `MODEL=` override for the raw native `bench.sh`
+  harness is still undone and can be revisited separately if a non-JVM entry point is wanted.
 
   > **Note (2026-07-03):** `native/build_variants.sh` no longer builds the three ExecuTorch variants
   > from source — it downloads the prebuilt `bare`/`logging`/`devtools` tarballs from Repo A (selected
