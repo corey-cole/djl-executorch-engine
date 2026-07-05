@@ -23,23 +23,19 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 
 /**
- * Races the ExecuTorch engine (.pte) against the DJL PyTorch engine (.pt) on the same MobileNetV2
- * weights, reusing {@link MobilenetTranslator} for both arms.
- *
- * <p>{@link MobilenetTranslator} is engine-agnostic by construction (Task 4): it does all image
- * preprocessing on its own PyTorch-backed {@code preManager} and only adopts a plain tensor into
- * whichever engine's {@code NDManager} the predictor is using, so it works unchanged for the
- * PyTorch arm too. It owns that native {@code preManager} and must be closed - see {@link
- * MobilenetTranslator#close()} - so every state below closes the translator last, after the
- * predictor and model that use it.
+ * Races three arms on the same MobileNetV2 weights, all in DJL {@code Criteria}/{@code Predictor}:
+ * {@code ET_HYBRID} (ExecuTorch forward, PyTorch-backed preprocessing), {@code PYTORCH} (LibTorch),
+ * and {@code ET_NATIVE} (ExecuTorch forward, plain-Java preprocessing — no LibTorch at all). Each
+ * arm's engine + translator come from {@link Variant}. JMH runs each {@code @Param} value in its own
+ * fork, so the {@code ET_NATIVE} fork — which never constructs a PyTorch manager — loads no LibTorch.
+ * Every state closes its translator last, after predictor and model.
  */
 public class MobilenetBenchmark {
 
     /** Engine choice and shared, read-only fixtures (image + synset), reused by both states. */
     @State(Scope.Benchmark)
     public static class Config {
-        @Param({"ExecuTorch", "PyTorch"})
-        public String engine;
+        @Param public Variant variant;
 
         Path modelsDir;
         Image image;
@@ -47,7 +43,8 @@ public class MobilenetBenchmark {
 
         @Setup(Level.Trial)
         public void setup() throws Exception {
-            modelsDir = ModelArtifacts.require("mobilenet_v2.pte").getParent();
+            String artifact = variant == Variant.PYTORCH ? "mobilenet_v2.pt" : "mobilenet_v2.pte";
+            modelsDir = ModelArtifacts.require(artifact).getParent();
             try (InputStream in = MobilenetBenchmark.class.getResourceAsStream("/kitten.jpg")) {
                 image = ImageFactory.getInstance().fromInputStream(in);
             }
@@ -57,11 +54,11 @@ public class MobilenetBenchmark {
         }
     }
 
-    /** Builds the Criteria exactly as {@code MobilenetExample} does, parameterized by engine. */
-    static Criteria<Image, Classifications> criteria(Config cfg, MobilenetTranslator translator) {
+    /** Builds the Criteria for the arm under test, parameterized by variant. */
+    static Criteria<Image, Classifications> criteria(Config cfg, CloseableImageTranslator translator) {
         return Criteria.builder()
                 .setTypes(Image.class, Classifications.class)
-                .optEngine(cfg.engine)
+                .optEngine(cfg.variant.engine)
                 .optModelPath(cfg.modelsDir)
                 .optModelName("mobilenet_v2")
                 .optTranslator(translator)
@@ -75,13 +72,13 @@ public class MobilenetBenchmark {
      */
     @State(Scope.Benchmark)
     public static class Warm {
-        MobilenetTranslator translator;
+        CloseableImageTranslator translator;
         ZooModel<Image, Classifications> model;
         Predictor<Image, Classifications> predictor;
 
         @Setup(Level.Trial)
         public void setup(Config cfg) throws Exception {
-            translator = new MobilenetTranslator(cfg.synset);
+            translator = cfg.variant.newTranslator(cfg.synset);
             try {
                 model = criteria(cfg, translator).loadModel();
                 predictor = model.newPredictor();
@@ -115,7 +112,7 @@ public class MobilenetBenchmark {
     @BenchmarkMode(Mode.SingleShotTime)
     @OutputTimeUnit(TimeUnit.MILLISECONDS)
     public Classifications coldStart(Config cfg) throws Exception {
-        try (MobilenetTranslator translator = new MobilenetTranslator(cfg.synset);
+        try (CloseableImageTranslator translator = cfg.variant.newTranslator(cfg.synset);
                 ZooModel<Image, Classifications> model = criteria(cfg, translator).loadModel();
                 Predictor<Image, Classifications> predictor = model.newPredictor()) {
             return predictor.predict(cfg.image); // load + first forward, per invocation
