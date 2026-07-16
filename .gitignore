@@ -38,4 +38,3 @@ src/main/resources/native/**/*.dll
 *.rpm
 bin/
 et-cmake-out/
-et-install/
