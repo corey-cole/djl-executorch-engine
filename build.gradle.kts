@@ -64,14 +64,25 @@ val nativeStaging = layout.buildDirectory.dir("native-staging")
 val nativeJarTasks = nativePlatforms.map { platform ->
   tasks.register<Jar>("nativeJar-${platform}") {
     archiveClassifier.set(platform)
+    // The native library, excluding the bundled licenses subtree (mapped to META-INF below).
     from(nativeStaging.map { it.dir(platform) }) {
+        exclude("licenses/**")
         into("native/${platform}")
     }
-    // Resolve to a plain File at configuration time so the doFirst action captures
-    // only a File + String (config-cache safe) rather than the enclosing script.
+    // Third-party notices from the runtime tarball, staged next to the .so by native/build.sh.
+    from(nativeStaging.map { it.dir("${platform}/licenses") }) {
+        into("META-INF/licenses/executorch-runtime")
+    }
+    // Resolve to plain Files at configuration time so doFirst captures only File + String
+    // (config-cache safe) rather than the enclosing script.
     val resolvedLib = nativeStaging.get().dir(platform).file(nativeLibName(platform)).asFile
-    doFirst { // Fail a release rather than ship an empty native jar
+    val licensesDir = nativeStaging.get().dir(platform).dir("licenses").asFile
+    doFirst { // Fail a release rather than ship an empty native jar or a binary with no notices
         require(resolvedLib.exists()) { "Missing native library for ${platform}: ${resolvedLib}" }
+        require(licensesDir.isDirectory && (licensesDir.list()?.isNotEmpty() ?: false)) {
+            "Missing third-party notices for ${platform}: ${licensesDir}" +
+                " (native/build.sh must stage LICENSE + THIRD-PARTY-NOTICES/)"
+        }
     }
   }
 }

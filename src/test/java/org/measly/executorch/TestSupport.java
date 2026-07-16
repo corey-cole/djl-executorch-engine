@@ -42,4 +42,23 @@ public final class TestSupport {
                             + " (build it via native/spike/export_dtypes.py).");
         }
     }
+
+    /**
+     * Skips the test (assumption) unless the native lib is loadable AND we are on linux-x86_64.
+     * The etnp::lstm custom op ships linux-only (no ETNPExtras.cmake in the Windows tarball), so
+     * on any other platform the shim legitimately lacks the op — a skip, not a failure.
+     */
+    public static void assumeLstmModelAvailable() {
+        try {
+            Class.forName("org.measly.executorch.jni.EtNative");
+        } catch (Throwable t) { // UnsatisfiedLinkError, ExceptionInInitializerError, etc.
+            Assumptions.abort("Native library not available: " + t.getMessage());
+        }
+        String os = System.getProperty("os.name").toLowerCase();
+        String arch = System.getProperty("os.arch").toLowerCase();
+        boolean linuxX64 = os.contains("linux") && (arch.equals("amd64") || arch.equals("x86_64"));
+        if (!linuxX64) {
+            Assumptions.abort("etnp::lstm op is linux-x86_64 only; skipping on " + os + "/" + arch);
+        }
+    }
 }
