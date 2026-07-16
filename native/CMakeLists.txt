@@ -14,7 +14,15 @@ option(ET_PRINT_RESOLUTION "Print resolved runtime config and exit (host-test se
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/EtRuntimePin.cmake)
 set(ET_RUNTIME_VARIANT "logging" CACHE STRING "Runtime variant: logging (ship) | bare | devtools (bench)")
 set(ET_INSTALL "" CACHE PATH "Explicit ExecuTorch install prefix (escape hatch); empty => fetch the pinned tarball")
-set(_ET_PLATFORM "linux-x86_64")
+# Which pin row to resolve. A CACHE var (not a plain set) is deliberate: it lets the
+# ET_PRINT_RESOLUTION host-test seam force a foreign platform (-DET_PLATFORM=windows-x86_64) and assert
+# the pin resolves, with no machine of that platform present. See native/tests/cmake_resolution.sh.
+if(WIN32)
+  set(_ET_PLATFORM_DEFAULT "windows-x86_64")
+else()
+  set(_ET_PLATFORM_DEFAULT "linux-x86_64")
+endif()
+set(ET_PLATFORM "${_ET_PLATFORM_DEFAULT}" CACHE STRING "Runtime platform row to resolve from EtRuntimePin.cmake")
 
 if(ET_INSTALL)
   set(_ET_RESOLUTION "escape-hatch")
@@ -22,16 +30,16 @@ if(ET_INSTALL)
   set(_ET_RESOLVED_URL "")
 else()
   set(_ET_RESOLUTION "fetch")
-  set(_ET_STEM "executorch-runtime-${ET_RUNTIME_ET_VERSION}-${ET_RUNTIME_VARIANT}-${_ET_PLATFORM}")
-  set(_ET_RESOLVED_URL "${ET_RUNTIME_URL_${ET_RUNTIME_VARIANT}_${_ET_PLATFORM}}")
-  set(_ET_RESOLVED_SHA "${ET_RUNTIME_SHA256_${ET_RUNTIME_VARIANT}_${_ET_PLATFORM}}")
+  set(_ET_STEM "executorch-runtime-${ET_RUNTIME_ET_VERSION}-${ET_RUNTIME_VARIANT}-${ET_PLATFORM}")
+  set(_ET_RESOLVED_URL "${ET_RUNTIME_URL_${ET_RUNTIME_VARIANT}_${ET_PLATFORM}}")
+  set(_ET_RESOLVED_SHA "${ET_RUNTIME_SHA256_${ET_RUNTIME_VARIANT}_${ET_PLATFORM}}")
   if(NOT _ET_RESOLVED_URL)
-    message(FATAL_ERROR "No pin row for variant='${ET_RUNTIME_VARIANT}' platform='${_ET_PLATFORM}' in EtRuntimePin.cmake")
+    message(FATAL_ERROR "No pin row for variant='${ET_RUNTIME_VARIANT}' platform='${ET_PLATFORM}' in EtRuntimePin.cmake")
   endif()
 endif()
 
 if(ET_PRINT_RESOLUTION)
-  message(STATUS "ET_RESOLUTION resolution=${_ET_RESOLUTION} variant=${ET_RUNTIME_VARIANT} stem=${_ET_STEM} url=${_ET_RESOLVED_URL} et_install=${ET_INSTALL}")
+  message(STATUS "ET_RESOLUTION resolution=${_ET_RESOLUTION} variant=${ET_RUNTIME_VARIANT} platform=${ET_PLATFORM} stem=${_ET_STEM} url=${_ET_RESOLVED_URL} et_install=${ET_INSTALL}")
   return()
 endif()
 

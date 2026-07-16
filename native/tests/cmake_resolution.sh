@@ -30,6 +30,17 @@ grep -q 'executorch-runtime-1.3.1-bare-linux-x86_64.tar.gz'    <<<"${out}" || fa
 out="$(probe -DET_RUNTIME_VARIANT=devtools)"
 grep -q 'stem=executorch-runtime-1.3.1-devtools-linux-x86_64'  <<<"${out}" || fail "devtools stem wrong"
 
+# Windows resolution, asserted from a Linux host: ET_PLATFORM is a cache var, so the ET_PRINT_RESOLUTION
+# seam can resolve a foreign platform's pin row without that platform being present.
+out="$(probe -DET_PLATFORM=windows-x86_64)"
+grep -q 'platform=windows-x86_64'                                <<<"${out}" || fail "windows platform not echoed"
+grep -q 'stem=executorch-runtime-1.3.1-logging-windows-x86_64'   <<<"${out}" || fail "windows stem wrong"
+grep -q 'executorch-runtime-1.3.1-logging-windows-x86_64.tar.gz' <<<"${out}" || fail "windows url wrong"
+
+# The default on this (Linux) host must be unaffected by ET_PLATFORM existing.
+out="$(probe)"
+grep -q 'platform=linux-x86_64'                                  <<<"${out}" || fail "default platform not linux-x86_64"
+
 out="$(probe -DET_INSTALL=/tmp/my-et)"                    # escape hatch
 grep -q 'resolution=escape-hatch'                             <<<"${out}" || fail "escape hatch not detected"
 grep -q 'et_install=/tmp/my-et'                              <<<"${out}" || fail "escape hatch path wrong"
