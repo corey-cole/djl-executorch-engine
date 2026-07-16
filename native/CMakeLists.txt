@@ -104,6 +104,19 @@ if(NOT ET_BUILD_QA AND NOT ET_BUILD_BENCH)
     "${JAVA_HOME}/include" "${JAVA_HOME}/include/${_JNI_MD_DIR}")
   target_link_libraries(executorch_djl PRIVATE et_runtime)
 
+  # First-party custom ops (etnp LSTM) ship only in some runtime tarballs (Linux logging). The
+  # tarball's self-describing ETNPExtras.cmake declares the imported targets + the whole-archive
+  # helper. Auto-detect by file presence: the Windows tarball omits it, so the op is skipped there
+  # with no platform branch of our own. Whole-archive is required — the op is a static-init
+  # registrar; a plain link GCs the registration out (same failure mode the XNNPACK guard defends).
+  if(EXISTS "${ET_INSTALL}/lib/cmake/ETNPExtras/ETNPExtras.cmake")
+    include("${ET_INSTALL}/lib/cmake/ETNPExtras/ETNPExtras.cmake")
+    etnp_extras_whole_archive(executorch_djl)
+    message(STATUS "etnp extras: LSTM op whole-archived into executorch_djl")
+  else()
+    message(STATUS "etnp extras: none in runtime (platform=${ET_PLATFORM}); LSTM op not linked")
+  endif()
+
   # Post-link guard: fail the build if the XNNPACK backend registration got GC'd out of the
   # final .so (the self-whole-archive lives in the downloaded runtime and can regress). Turns a
   # silent load-time "backend not found" into a build failure. See the script header.
