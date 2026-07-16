@@ -20,30 +20,54 @@ cd "${REPO_ROOT}"
 
 ITERS="${ITERS:-1000}"
 
-# QA is the only ASan consumer; install the toolset's ASan runtime here (moved out of build.sh).
-if command -v dnf >/dev/null 2>&1; then
-  echo "--- Installing ASan runtime (dnf), may appear to hang ---"
-  TOOLSET_VER="$(gcc -dumpversion | cut -d. -f1)"
-  dnf install -y -q "gcc-toolset-${TOOLSET_VER}-libasan-devel" || true
-fi
+# Host fork; see native/build.sh. Windows QA is Catch2-only: MSVC has ASan but no LeakSanitizer, so
+# et_leak_harness is structurally Linux-only (design §6). The Catch2 suite is also Windows' XNNPACK
+# gate, standing in for the nm post-link guard that cannot run under MSVC (design §3.4).
+case "$(uname -s)" in
+  MINGW*|MSYS*) ET_HOST_OS=windows ;;
+  *)            ET_HOST_OS=linux ;;
+esac
 
-# Runtime comes from CMake resolution: default fetches the pinned logging tarball; set ET_INSTALL
-# to point at an existing install (escape hatch). No precondition to check here.
 ET_ARGS=(-DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT:-logging}")
 [ -n "${ET_INSTALL:-}" ] && ET_ARGS+=(-DET_INSTALL="${ET_INSTALL}")
 
-JOBS="${JOBS:-$(nproc)}"
-# Drop the tree only if it was configured for a different source root (container vs host); a same-root
-# re-run keeps it so the cached Catch2 build (native/asan/_deps) is reused, not rebuilt. CLEAN=1 forces.
-bash native/clean_stale_tree.sh native/asan native
-cmake -B native/asan -S native -G "Unix Makefiles" "${ET_ARGS[@]}" -DET_BUILD_QA=ON \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
-  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
-cmake --build native/asan --target et_runtime_test et_leak_harness -j"${JOBS}"
+if [ "${ET_HOST_OS}" = "windows" ]; then
+  command -v cl >/dev/null 2>&1 || { echo "cl.exe not on PATH: activate the VS dev shell first"; exit 1; }
+  JOBS="${JOBS:-${NUMBER_OF_PROCESSORS:-4}}"
+  bash native/clean_stale_tree.sh native/asan native
+  # No sanitizers: MSVC has no LeakSanitizer, and the leak harness is not built here at all.
+  # RelWithDebInfo, NOT Debug: Debug would compile against the Debug CRT (/MDd) while the pinned runtime
+  # is Release (/MD), and MSVC refuses to mix them — the same LNK2038/LNK1319 wall the shim build hits
+  # (see build.sh). RelWithDebInfo gives us the matching /MD CRT while keeping symbols, so a Catch2
+  # failure is still debuggable.
+  cmake -B native/asan -S native -G Ninja "${ET_ARGS[@]}" -DET_BUILD_QA=ON \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo
+  cmake --build native/asan --target et_runtime_test -j"${JOBS}"
 
-echo "--- Catch2 unit suite ---"
-./native/asan/et_runtime_test
+  echo "--- Catch2 unit suite (no sanitizers; MSVC has no LSan) ---"
+  ./native/asan/et_runtime_test.exe
+  echo "--- Leak harness SKIPPED: no LeakSanitizer under MSVC (Linux-only coverage) ---"
+else
+  # QA is the only ASan consumer; install the toolset's ASan runtime here (moved out of build.sh).
+  if command -v dnf >/dev/null 2>&1; then
+    echo "--- Installing ASan runtime (dnf), may appear to hang ---"
+    TOOLSET_VER="$(gcc -dumpversion | cut -d. -f1)"
+    dnf install -y -q "gcc-toolset-${TOOLSET_VER}-libasan-devel" || true
+  fi
 
-echo "--- ASan/LSan leak harness (${ITERS} iterations) ---"
-./native/asan/et_leak_harness native/spike/add.pte "${ITERS}"
+  JOBS="${JOBS:-$(nproc)}"
+  # Drop the tree only if it was configured for a different source root (container vs host); a same-root
+  # re-run keeps it so the cached Catch2 build (native/asan/_deps) is reused, not rebuilt. CLEAN=1 forces.
+  bash native/clean_stale_tree.sh native/asan native
+  cmake -B native/asan -S native -G "Unix Makefiles" "${ET_ARGS[@]}" -DET_BUILD_QA=ON \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
+    -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
+  cmake --build native/asan --target et_runtime_test et_leak_harness -j"${JOBS}"
+
+  echo "--- Catch2 unit suite ---"
+  ./native/asan/et_runtime_test
+
+  echo "--- ASan/LSan leak harness (${ITERS} iterations) ---"
+  ./native/asan/et_leak_harness native/spike/add.pte "${ITERS}"
+fi
