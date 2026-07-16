@@ -150,19 +150,25 @@ tarballs may curate different sets). Three touch points:
    release guard mirroring the existing `require(resolvedLib.exists())`: fail the
    jar if the notices dir is empty, so a bare binary cannot ship.
 4. **`README.md`** — add a "Third-party licenses" section: a human-readable
-   **summary** of the third-party components statically linked into the shipped
-   `.so` (name + license), with a pointer to the full texts bundled at
+   **summary listing only the components actually linked into the shipped `.so`**
+   (name + license), with a pointer to the full texts bundled at
    `META-INF/licenses/executorch-runtime/` in each native classifier jar (and to
    the runtime tarball's `THIRD-PARTY-NOTICES/`). **Not** the ~250 KB of verbatim
-   notice files inline. Notable entries: ExecuTorch (BSD-3-Clause), XNNPACK /
-   cpuinfo / clog / pthreadpool (BSD), FP16 / FXdiv (MIT), flatbuffers / flatcc /
-   abseil / re2 / pcre2 / tokenizers / sentencepiece (Apache-2.0), and — new with
-   the LSTM op — Highway (Apache-2.0). The exact list is transcribed from the
-   staged `THIRD-PARTY-NOTICES/` set at implementation time.
-   - **Maintenance note:** this summary and the bundled set are both tied to the
-     runtime pin; refresh them whenever `EtRuntimePin.cmake` bumps (the same
-     supply-chain review gate). The README is the authoritative summary; the jar
-     carries the authoritative full texts.
+   notice files inline.
+   - **Scope split (deliberate):** the README lists the *linked subset* for
+     reader clarity; the jar bundles the runtime tarball's *complete*
+     `THIRD-PARTY-NOTICES/` set verbatim (including notices for backends we do not
+     ship — arm/cadence/vulkan/etc.). The jar is the authoritative, complete
+     attribution; the README is a curated pointer to it.
+   - Expected linked-subset entries: ExecuTorch (BSD-3-Clause), XNNPACK / cpuinfo
+     / clog / pthreadpool (BSD), FP16 / FXdiv (MIT), flatbuffers / flatcc / abseil
+     / re2 / pcre2 / tokenizers / sentencepiece (Apache-2.0), and — new with the
+     LSTM op — Highway (Apache-2.0). The definitive linked set is confirmed at
+     implementation time (e.g. cross-referencing the runtime's `find_package`
+     link targets / the `.so`'s inputs against the notice set), not guessed.
+   - **Maintenance note:** the README summary and the bundled set are both tied to
+     the runtime pin; refresh them whenever `EtRuntimePin.cmake` bumps (the same
+     supply-chain review gate).
 
 Our own root `LICENSE` (Apache-2.0) is unaffected.
 
