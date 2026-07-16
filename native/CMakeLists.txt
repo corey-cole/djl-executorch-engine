@@ -80,6 +80,20 @@ if(NOT ET_BUILD_QA AND NOT ET_BUILD_BENCH)
   target_include_directories(executorch_djl PRIVATE
     "${JAVA_HOME}/include" "${JAVA_HOME}/include/linux")
   target_link_libraries(executorch_djl PRIVATE et_runtime)
+
+  # Post-link guard: fail the build if the XNNPACK backend registration got GC'd out of the
+  # final .so (the self-whole-archive lives in the downloaded runtime and can regress). Turns a
+  # silent load-time "backend not found" into a build failure. See the script header.
+  if(NOT CMAKE_NM)
+    find_program(CMAKE_NM NAMES nm)
+  endif()
+  add_custom_command(TARGET executorch_djl POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+      -DSO=$<TARGET_FILE:executorch_djl>
+      -DNM=${CMAKE_NM}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/assert_xnnpack_registered.cmake
+    VERBATIM
+    COMMENT "Asserting XNNPACK backend survived the link")
 endif()
 
 # --- Release timing harness (no sanitizers). OFF for the shipping build and for QA. ---
