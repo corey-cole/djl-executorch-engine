@@ -1,5 +1,6 @@
 package org.measly.executorch;
 
+import java.io.File;
 import org.junit.jupiter.api.Assumptions;
 
 /** Helpers for tests that require the native library. */
@@ -7,14 +8,22 @@ public final class TestSupport {
 
     private TestSupport() {}
 
-    /** Skips the test (assumption) if the native lib or the test model fixture is unavailable. */
-    public static void assumeNativeAvailable() {
+    private static void loadNativeLibrary() {
         try {
             Class.forName("org.measly.executorch.jni.EtNative");
         } catch (Throwable t) { // UnsatisfiedLinkError, ExceptionInInitializerError, etc.
             Assumptions.abort("Native library not available: " + t.getMessage());
         }
-        if (!new java.io.File("native/spike/add.pte").isFile()) {
+    }
+
+    private static boolean isModelArtifactAvailable(String path) {
+        return new File(path).isFile();
+    }
+
+    /** Skips the test (assumption) if the native lib or the test model fixture is unavailable. */
+    public static void assumeNativeAvailable() {
+        loadNativeLibrary();
+        if (!isModelArtifactAvailable("native/spike/add.pte")) {
             Assumptions.abort(
                     "Test model native/spike/add.pte not found"
                             + " (build it via native/spike/export_add.py).");
@@ -23,7 +32,7 @@ public final class TestSupport {
 
     /** Absolute path to the spike test model. */
     public static String addPtePath() {
-        return new java.io.File("native/spike/add.pte").getAbsolutePath();
+        return new File("native/spike/add.pte").getAbsolutePath();
     }
 
     /**
@@ -31,12 +40,8 @@ public final class TestSupport {
      * unavailable.
      */
     public static void assumeDtypesModelAvailable() {
-        try {
-            Class.forName("org.measly.executorch.jni.EtNative");
-        } catch (Throwable t) {
-            Assumptions.abort("Native library not available: " + t.getMessage());
-        }
-        if (!new java.io.File("native/spike/dtypes.pte").isFile()) {
+        loadNativeLibrary();
+        if (!isModelArtifactAvailable("native/spike/dtypes.pte")) {
             Assumptions.abort(
                     "Test model native/spike/dtypes.pte not found"
                             + " (build it via native/spike/export_dtypes.py).");
@@ -49,11 +54,7 @@ public final class TestSupport {
      * on any other platform the shim legitimately lacks the op — a skip, not a failure.
      */
     public static void assumeLstmModelAvailable() {
-        try {
-            Class.forName("org.measly.executorch.jni.EtNative");
-        } catch (Throwable t) { // UnsatisfiedLinkError, ExceptionInInitializerError, etc.
-            Assumptions.abort("Native library not available: " + t.getMessage());
-        }
+        loadNativeLibrary();
         String os = System.getProperty("os.name").toLowerCase();
         String arch = System.getProperty("os.arch").toLowerCase();
         boolean linuxX64 = os.contains("linux") && (arch.equals("amd64") || arch.equals("x86_64"));
