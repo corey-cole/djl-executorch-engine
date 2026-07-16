@@ -23,7 +23,11 @@ grep -q 'runs-on: windows-2022'         "${WFJOB}" || fail "windows job must run
 grep -q 'vswhere'                       "${WFJOB}" || fail "windows job must discover VS via vswhere"
 grep -q 'products \*'                   "${WFJOB}" || fail "vswhere must be edition-agnostic (-products *)"
 grep -q 'executorch-libs-windows-x86_64' "${WFJOB}" || fail "windows artifact name missing"
-grep -q 'build_qa.sh'                   "${WFJOB}" || fail "windows QA step missing"
+# Scope the QA assertion to the windows job block (it is the last job in the file, so from its header to
+# EOF). A bare `grep build_qa.sh "${WFJOB}"` is vacuous — the linux job runs build_qa.sh too, so it would
+# stay green even if the windows QA step were deleted.
+awk '/^  build-executorch-shim-windows:/{f=1} f' "${WFJOB}" | grep -q 'build_qa.sh' \
+  || fail "windows QA step missing (build_qa.sh not invoked in the windows job)"
 # The aarch64 rows exist in the pin but are out of scope: the matrix entry must stay commented out.
 grep -qE '^\s*- platform: linux-aarch64' "${WFJOB}" && fail "linux-aarch64 is out of scope for this PR"
 
