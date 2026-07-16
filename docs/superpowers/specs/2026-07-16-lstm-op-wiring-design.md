@@ -15,7 +15,7 @@ so a `.pte` using `etnp::lstm` fails to load with "operator not found."
 
 Separately, wiring the op in surfaces a pre-existing compliance gap: the shipped
 `.so` already statically links third-party code with attribution requirements
-(XNNPACK, cpuinfo, pthreadpool, FP16/FXdiv, flatbuffers/flatcc, abseil, plus
+(XNNPACK, cpuinfo, clog, pthreadpool, FP16/FXdiv, FlatBuffers, plus
 ExecuTorch's own BSD license), yet the native classifier jar bundles only the
 binary — no notices. The LSTM op widens this by adding **Highway (Apache-2.0)**,
 whose license requires retaining the NOTICE in binary redistributions.
@@ -168,12 +168,13 @@ tarballs may curate different sets). Three touch points:
      `THIRD-PARTY-NOTICES/` set verbatim (including notices for backends we do not
      ship — arm/cadence/vulkan/etc.). The jar is the authoritative, complete
      attribution; the README is a curated pointer to it.
-   - Expected linked-subset entries: ExecuTorch (BSD-3-Clause), XNNPACK / cpuinfo
-     / clog / pthreadpool (BSD), FP16 / FXdiv (MIT), flatbuffers / flatcc / abseil
-     / re2 / pcre2 / tokenizers / sentencepiece (Apache-2.0), and — new with the
-     LSTM op — Highway (Apache-2.0). The definitive linked set is confirmed at
-     implementation time (e.g. cross-referencing the runtime's `find_package`
-     link targets / the `.so`'s inputs against the notice set), not guessed.
+   - Linked-subset entries (verified at implementation time against the shipped
+     `.so` with `nm`/`strings`): ExecuTorch (BSD-3-Clause), XNNPACK / cpuinfo /
+     clog / pthreadpool (BSD), FP16 / FXdiv (MIT), FlatBuffers (Apache-2.0), and —
+     new with the LSTM op — Highway (Apache-2.0). Deliberately EXCLUDED because the
+     shim does not link them (they are tokenizer/LLM-extension deps; confirmed zero
+     symbols/strings in the `.so`): abseil, re2, pcre2, tokenizers, sentencepiece,
+     flatcc. They remain in the jar's complete set.
    - **Maintenance note:** the README summary and the bundled set are both tied to
      the runtime pin; refresh them whenever `EtRuntimePin.cmake` bumps (the same
      supply-chain review gate).
