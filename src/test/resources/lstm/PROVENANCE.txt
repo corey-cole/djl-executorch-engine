@@ -1,0 +1,14 @@
+LSTM golden fixture for LstmModelIT.
+
+Source : https://github.com/measly-java-learning/executorch-runtime-dist/releases/download/v1.3.1-6/etnp-lstm-fixtures-1.3.1.tar.gz
+sha256 : 7bd2d3e822959de268daea3de0bffbe442aeebfd9a63bf86249ce2ad0e893c04
+         (adjacent .sha256 in the same release; attested by executorch-runtime-dist CI)
+Minted : executorch-runtime-dist extras/lstm/aot/emit_fixtures.py (lstm_case.build_case())
+
+Contents:
+  lstm.pte  ExecuTorch program using etnp::lstm (weights baked as constants)
+  in.bin    52 float32 LE = x[5,2,4] ++ h0[2,3] ++ c0[2,3]   (row-major)
+  out.bin   30 float32 LE = golden eager nn.LSTM output [5,2,3]
+  shape     LSTM_{T,B,I,H} = 5,2,4,3
+
+Refresh when native/cmake/EtRuntimePin.cmake bumps to a new runtime release.
