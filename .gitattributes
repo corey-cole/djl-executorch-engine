@@ -10,3 +10,7 @@
 # Binary files should be left untouched
 *.jar           binary
 
+# Byte-exact test fixtures (golden vectors + PTE) — never normalize line endings
+src/test/resources/lstm/*.bin   binary
+src/test/resources/lstm/*.pte   binary
+
