@@ -206,7 +206,7 @@ import org.junit.jupiter.api.Test;
  * Mirrors executorch-runtime-dist extras/lstm/test/lstm_runner.cpp: read the flat LE-float32
  * blob, slice into (x, h0, c0), forward, compare output to the eager-nn.LSTM golden within
  * allclose(rtol=1e-4, atol=1e-4). Loading lstm.pte is itself the proof the op is linked:
- * if it were not whole-archived into the shim, load throws "operator etnp::lstm not found".
+ * if it were not whole-archived into the shim, execution throws "kernel 'etnp::lstm.out' not found".
  */
 class LstmModelIT {
 
@@ -245,21 +245,26 @@ class LstmModelIT {
             NDArray ah0 = m.create(h0, new Shape(b, h));
             NDArray ac0 = m.create(c0, new Shape(b, h));
 
-            // Feeding exactly 3 inputs asserts arity: EtSymbolBlock throws if count != numInputs.
-            NDList out = predictor.predict(new NDList(ax, ah0, ac0));
+            // etnp::lstm follows the nn.LSTM contract and returns (y, h_n, c_n); the golden vector
+            // (out.bin) is the y sequence, so compare out.get(0) — mirroring the upstream
+            // lstm_runner.cpp, which takes res.get()[0]. Feeding exactly 3 inputs also asserts arity:
+            // EtSymbolBlock throws if the input count != the model's numInputs.
+            // try-with-resources on the NDLists deterministically closes every NDArray they hold
+            // (the inputs and the predictor's outputs) at the end of the test.
+            try (NDList inputs = new NDList(ax, ah0, ac0);
+                    NDList out = predictor.predict(inputs)) {
+                NDArray y = out.get(0);
+                assertEquals(new Shape(t, b, h), y.getShape(), "first output y has shape [T,B,H]");
 
-            assertEquals(1, out.size(), "etnp::lstm returns a single output tensor");
-            NDArray y = out.get(0);
-            assertEquals(new Shape(t, b, h), y.getShape(), "output shape [T,B,H]");
-
-            float[] got = y.toFloatArray();
-            assertEquals(expected.length, got.length);
-            for (int k = 0; k < expected.length; k++) {
-                double tol = 1e-4 + 1e-4 * Math.abs(expected[k]);
-                assertTrue(
-                        Math.abs(got[k] - expected[k]) <= tol,
-                        "element " + k + ": got=" + got[k] + " expected=" + expected[k]
-                                + " tol=" + tol);
+                float[] got = y.toFloatArray();
+                assertEquals(expected.length, got.length);
+                for (int k = 0; k < expected.length; k++) {
+                    double tol = 1e-4 + 1e-4 * Math.abs(expected[k]);
+                    assertTrue(
+                            Math.abs(got[k] - expected[k]) <= tol,
+                            "element " + k + ": got=" + got[k] + " expected=" + expected[k]
+                                    + " tol=" + tol);
+                }
             }
         }
     }

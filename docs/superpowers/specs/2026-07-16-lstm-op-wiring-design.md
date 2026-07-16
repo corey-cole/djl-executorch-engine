@@ -50,8 +50,12 @@ and `extras/lstm/test/test_lstm_roundtrip.py` in the runtime dist repo:
   case and the C++ runner assert `numInputs == 3`.
 - **Dims:** `T=5, B=2, I=4, H=3`.
 - **Shapes:** `x=[T,B,I]=[5,2,4]`, `h0=[B,H]=[2,3]`, `c0=[B,H]=[2,3]` (h0/c0 are
-  zeros in the fixture but must still be passed). Output: single tensor
-  `[T,B,H]=[5,2,3]`.
+  zeros in the fixture but must still be passed).
+- **Outputs:** the op follows the `nn.LSTM` contract and returns **3** tensors —
+  `y[T,B,H]=[5,2,3]`, `h_n[B,H]=[2,3]`, `c_n[B,H]=[2,3]`. The golden fixture
+  (`out.bin`, 30 floats) is the `y` sequence, i.e. output index 0. The upstream
+  `lstm_runner.cpp` likewise takes `res.get()[0]`. (An earlier draft of this spec
+  wrongly said "single output"; corrected against the fixture and runner.)
 - **Fixture layout:** `in.bin` = `_flat(x, h0, c0)`, row-major little-endian
   float32 (52 floats). `out.bin` = eager `nn.LSTM` golden output (30 floats).
   `shape` = text `LSTM_T=5\nLSTM_B=2\nLSTM_I=4\nLSTM_H=3\n`.
@@ -119,12 +123,16 @@ forward → compare):
 - **Run:** load via `Criteria` (engine `ExecuTorch`, model path
   `src/test/resources/lstm`, model name `lstm`) with the existing
   `PassthroughTranslator` (`NDList → NDList`); execute through a `Predictor`.
-- **Assert:** `meta.numInputs == 3`; one output tensor of shape `[5,2,3]`; every
-  element within `allclose(rtol=1e-4, atol=1e-4)` of `out.bin`, i.e.
+  Wrap the input and output `NDList`s in try-with-resources so every `NDArray`
+  they hold is closed deterministically at test end.
+- **Assert:** feeding exactly 3 inputs implicitly asserts arity (`EtSymbolBlock`
+  throws if the input count ≠ the model's `numInputs`); take `out.get(0)` (the `y`
+  sequence — the op also returns `h_n`, `c_n`), assert its shape `[5,2,3]`, and
+  check every element within `allclose(rtol=1e-4, atol=1e-4)` of `out.bin`, i.e.
   `|got − ref| ≤ 1e-4 + 1e-4·|ref|`.
-- **Registration proof:** loading `lstm.pte` *is* the proof the op is wired — if
-  it were not whole-archived, load throws "operator etnp::lstm not found." No
-  separate assertion needed.
+- **Registration proof:** loading and running `lstm.pte` *is* the proof the op is
+  wired — if it were not whole-archived, execution throws
+  `kernel 'etnp::lstm.out' not found`. No separate assertion needed.
 
 ### 4. Third-party notice bundling (comprehensive)
 
