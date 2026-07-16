@@ -3,8 +3,6 @@ package org.measly.executorch.engine;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -134,10 +132,12 @@ public final class LibUtils {
             }
             try {
                 Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE);
-            } catch (FileAlreadyExistsException | AtomicMoveNotSupportedException e) {
+            } catch (IOException e) {
                 // A concurrent JVM published first. The path is content-addressed, so the winner's bytes
                 // are ours byte-for-byte: adopt it rather than overwrite a file another process may have
-                // already mapped (which Windows would refuse anyway).
+                // already mapped. Windows refuses the replace with AccessDeniedException/FileSystemException
+                // (not FileAlreadyExistsException), so catch IOException broadly and re-throw anything that
+                // did not result in a published file.
                 if (!Files.isRegularFile(target)) {
                     throw e;
                 }
