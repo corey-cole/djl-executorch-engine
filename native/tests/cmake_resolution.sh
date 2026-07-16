@@ -14,6 +14,14 @@ probe() {  # extra -D args; echoes the ET_RESOLUTION status line
   rm -rf "${b}"
 }
 
+probe_fails() {  # extra -D args; asserts configure FAILS and echoes the captured error text
+  local b err; b="$(mktemp -d)"; err="${b}/err"
+  if cmake -S native -B "${b}" -DET_PRINT_RESOLUTION=ON "$@" >"${err}" 2>&1; then
+    cat "${err}"; rm -rf "${b}"; fail "cmake configure unexpectedly succeeded ($*)"
+  fi
+  cat "${err}"; rm -rf "${b}"
+}
+
 out="$(probe)"                                            # default => fetch logging
 grep -q 'resolution=fetch'                                     <<<"${out}" || fail "default not fetch"
 grep -q 'variant=logging'                                     <<<"${out}" || fail "default variant not logging"
@@ -40,6 +48,14 @@ grep -q 'executorch-runtime-1.3.1-logging-windows-x86_64.tar.gz' <<<"${out}" || 
 # The default on this (Linux) host must be unaffected by ET_PLATFORM existing.
 out="$(probe)"
 grep -q 'platform=linux-x86_64'                                  <<<"${out}" || fail "default platform not linux-x86_64"
+
+# windows-x86_64 has no bare/devtools pin row upstream. Fail with the real reason, not "no pin row".
+out="$(probe_fails -DET_PLATFORM=windows-x86_64 -DET_RUNTIME_VARIANT=bare)"
+grep -q "ships the 'logging' variant only" <<<"${out}" || fail "windows+bare should fail with a named error"
+
+# The escape hatch bypasses the pin entirely, so the variant constraint must NOT apply there.
+out="$(probe -DET_PLATFORM=windows-x86_64 -DET_RUNTIME_VARIANT=bare -DET_INSTALL=/tmp/my-et)"
+grep -q 'resolution=escape-hatch' <<<"${out}" || fail "escape hatch must bypass the windows variant guard"
 
 out="$(probe -DET_INSTALL=/tmp/my-et)"                    # escape hatch
 grep -q 'resolution=escape-hatch'                             <<<"${out}" || fail "escape hatch not detected"

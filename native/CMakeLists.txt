@@ -30,6 +30,15 @@ if(ET_INSTALL)
   set(_ET_RESOLVED_URL "")
 else()
   set(_ET_RESOLUTION "fetch")
+  # windows-x86_64 ships `logging` only; bare/devtools are Linux-only benchmarking builds that upstream
+  # never produced for Windows. Without this, the generic "No pin row" error below reads like a broken
+  # pin rather than a platform that never had those artifacts. Inside the fetch branch on purpose: the
+  # ET_INSTALL escape hatch consults no pin row, so the variant is irrelevant there.
+  if(ET_PLATFORM STREQUAL "windows-x86_64" AND NOT ET_RUNTIME_VARIANT STREQUAL "logging")
+    message(FATAL_ERROR
+      "windows-x86_64 ships the 'logging' variant only; got '${ET_RUNTIME_VARIANT}'. "
+      "bare/devtools are Linux-only (benchmarking; see native/build_variants.sh).")
+  endif()
   set(_ET_STEM "executorch-runtime-${ET_RUNTIME_ET_VERSION}-${ET_RUNTIME_VARIANT}-${ET_PLATFORM}")
   set(_ET_RESOLVED_URL "${ET_RUNTIME_URL_${ET_RUNTIME_VARIANT}_${ET_PLATFORM}}")
   set(_ET_RESOLVED_SHA "${ET_RUNTIME_SHA256_${ET_RUNTIME_VARIANT}_${ET_PLATFORM}}")
