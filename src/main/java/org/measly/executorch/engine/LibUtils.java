@@ -9,7 +9,6 @@ import java.nio.file.StandardCopyOption;
 /** Resolves and loads libexecutorch_djl.so. */
 public final class LibUtils {
 
-    private static final String LIB = "libexecutorch_djl.so";
     private static boolean loaded;
 
     private LibUtils() {}
@@ -27,7 +26,7 @@ public final class LibUtils {
             return;
         }
         String platform = platform();
-        String resource = "/native/" + platform + "/" + LIB;
+        String resource = "/native/" + platform + "/" + libName(platform);
         try (InputStream is = LibUtils.class.getResourceAsStream(resource)) {
             if (is == null) {
                 throw new IllegalStateException(
@@ -47,10 +46,19 @@ public final class LibUtils {
     static String platform() {
         String os = System.getProperty("os.name").toLowerCase();
         String arch = System.getProperty("os.arch").toLowerCase();
-        if (os.contains("linux") && (arch.equals("amd64") || arch.equals("x86_64"))) {
+        boolean x64 = arch.equals("amd64") || arch.equals("x86_64");
+        if (os.contains("linux") && x64) {
             return "linux-x86_64";
         }
+        if (os.contains("windows") && x64) {
+            return "windows-x86_64";
+        }
         throw new UnsupportedOperationException(
-                "ExecuTorch engine Phase 1 supports only linux-x86_64, got: " + os + "/" + arch);
+                "ExecuTorch engine supports only linux-x86_64 and windows-x86_64, got: " + os + "/" + arch);
+    }
+
+    /** MSVC emits no `lib` prefix and a .dll suffix. Keep in sync with nativeLibName in build.gradle.kts. */
+    static String libName(String platform) {
+        return platform.startsWith("windows-") ? "executorch_djl.dll" : "libexecutorch_djl.so";
     }
 }

@@ -33,16 +33,36 @@ class LibUtilsTest {
     }
 
     @Test
-    void platformRejectsUnsupportedOs() {
+    void platformResolvesWindowsX8664() {
         String os = System.getProperty("os.name");
         String arch = System.getProperty("os.arch");
         try {
             System.setProperty("os.name", "Windows 11");
+            System.setProperty("os.arch", "amd64");
+            assertEquals("windows-x86_64", LibUtils.platform());
+        } finally {
+            System.setProperty("os.name", os);
+            System.setProperty("os.arch", arch);
+        }
+    }
+
+    @Test
+    void platformRejectsUnsupportedOs() {
+        String os = System.getProperty("os.name");
+        String arch = System.getProperty("os.arch");
+        try {
+            System.setProperty("os.name", "Mac OS X");
             System.setProperty("os.arch", "amd64");
             assertThrows(UnsupportedOperationException.class, LibUtils::platform);
         } finally {
             System.setProperty("os.name", os);
             System.setProperty("os.arch", arch);
         }
+    }
+
+    @Test
+    void libNameIsPlatformSpecific() {
+        assertEquals("libexecutorch_djl.so", LibUtils.libName("linux-x86_64"));
+        assertEquals("executorch_djl.dll", LibUtils.libName("windows-x86_64"));
     }
 }
