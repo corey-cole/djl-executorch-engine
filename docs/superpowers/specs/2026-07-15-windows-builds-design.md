@@ -3,6 +3,8 @@
 **Date:** 2026-07-15
 **Status:** Approved for planning
 **Goal:** Make `windows-x86_64` a first-class published platform alongside `linux-x86_64`: CI builds and QAs `executorch_djl.dll`, it ships in the published jar, and `LibUtils` loads it on Windows.
+**Prerequisite:** PR 1, the `v1.3.1-6` pin bump (`docs/superpowers/plans/2026-07-15-et-runtime-pin-bump.md`). See §2.
+**Implemented by:** PR 2 (`docs/superpowers/plans/2026-07-15-windows-builds.md`).
 
 ---
 
@@ -29,20 +31,18 @@ the engine would need a degraded, XNNPACK-less Windows story — a materially di
 multi-Python `find_package(Python3)` mismatch) bite when *building ExecuTorch from source*. This repo
 only *consumes* a prebuilt tarball and never checks out ExecuTorch. **None of them apply here.**
 
-## 2. Runtime pin
+## 2. Runtime pin — PREREQUISITE, landed separately
 
-Replace `native/cmake/EtRuntimePin.cmake` wholesale with the `EtRuntimePin.cmake` asset from release
-`v1.3.1-6`, per the procedure in the file's own header ("replace this whole file... The SHA256 change
-is the supply-chain review gate").
+**The pin bump is not part of this project's PR.** It ships first, on its own, as PR 1
+(`docs/superpowers/plans/2026-07-15-et-runtime-pin-bump.md`). This spec assumes
+`native/cmake/EtRuntimePin.cmake` already sits at `v1.3.1-6` and the
+`ET_RUNTIME_URL_logging_windows-x86_64` row exists.
 
-Consequences, all intended:
-
-- Adds `ET_RUNTIME_URL_logging_windows-x86_64` + SHA — the row this project needs.
-- **Moves every Linux SHA from `v1.3.1-2` to `v1.3.1-6`.** This PR is *not* a Windows-only diff. Linux
-  CI revalidates on the same PR, but review must treat the Linux SHA changes as a supply-chain gate.
-- Drags in unused `linux-aarch64` rows (see §9, out of scope).
-- Loses the repo's hand-written commentary in the current pin header. Acceptable: the file is marked
-  "Do not edit by hand", and the commentary's content is preserved here in §9.
+Rationale for the split: bumping the pin moves **every Linux SHA** from `v1.3.1-2` to `v1.3.1-6`. Landed
+together with the Windows work, a red CI run would be ambiguous between "MSVC glue is wrong" and "the
+`-6` Linux artifacts regressed". Landed alone, it is a pure supply-chain change that Linux CI
+revalidates in isolation — and it front-loads the scarier of the two risks, since everything here is
+built on top of those artifacts. The Windows PR is then a genuinely Windows-only diff.
 
 Windows ships **`logging` only** — there is no `bare` or `devtools` Windows row. `native/build_variants.sh`
 benchmarking remains Linux-only.
@@ -255,9 +255,17 @@ and the library filename becomes a per-platform mapping rather than the `LIB` co
 
 ## 9. Out of scope
 
-- **`linux-aarch64`** — rows arrive with the `v1.3.1-6` pin and would unblock the commented-out matrix
-  entry at `native-build-job.yml:20-24`, but it is a separate platform with its own runner and QA story.
-  Folding it in would double this project's surface. Deserves its own follow-up.
+- **`linux-aarch64`** — the rows arrive inert with the PR 1 pin bump and unblock the commented-out matrix
+  entry at `native-build-job.yml:20-24`. Deliberately sequenced **after** Windows, not before.
+
+  It was considered as a prerequisite on the theory that it would prove the "platform is a variable, not
+  a constant" generalization on familiar ground before adding MSVC. Rejected: aarch64 keeps the container
+  model, bash, `.so`-with-`lib`-prefix naming, the ELF/`nm` guard, and ASan/LSan — so it exercises only
+  the easy half of that axis, and Windows would still have to do the filename mapping, the QA fork, the
+  workflow split, and the JNI header directory afterward. The ordering runs the other way: Windows forces
+  the hardest generalization, after which aarch64 is nearly free (a pin row that already exists, a matrix
+  row, one append to `nativePlatforms`). As a prerequisite it would put a whole new runner and cross-arch
+  QA story on the critical path while leaving Windows barely easier.
 - **`bare` / `devtools` on Windows** — not built upstream. `native/build_variants.sh` stays Linux-only.
 - **Windows leak coverage** — no LSan on MSVC (§6).
 - **Porting the `nm` guard to MSVC link maps** (`/MAP` + parse) — rejected in favor of the runtime check;
@@ -283,7 +291,6 @@ Real gate:
 
 | Risk | Mitigation |
 |---|---|
-| Pin bump changes Linux artifacts, not just adds Windows | Linux CI revalidates on the same PR; SHA diff is an explicit review gate |
 | A future upstream Windows artifact regresses to genuinely core-only | §1 premise is stated explicitly; link failure would be loud and immediate at `find_package` |
 | winbox (VS 18 Community) diverges from runner (VS 17 Enterprise) | Edition-agnostic `vswhere`; runner is the sole acceptance gate |
 | WSL `bash.exe` hijacks the build | Explicit Git-Bash path |
