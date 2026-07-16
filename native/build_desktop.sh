@@ -24,3 +24,13 @@ mkdir -p "${OUT}"
 cp native/build/libexecutorch_djl.so "${OUT}/"
 echo "Artifact: ${OUT}/libexecutorch_djl.so"
 ls -lh "${OUT}/libexecutorch_djl.so"
+
+# Third-party notices from the prebuilt runtime ($ET_INSTALL) — parity with native/build.sh.
+test -f "${ET_INSTALL}/LICENSE" && test -d "${ET_INSTALL}/THIRD-PARTY-NOTICES" \
+  || { echo "runtime notices missing under ${ET_INSTALL} (LICENSE + THIRD-PARTY-NOTICES/)"; exit 1; }
+LIC_OUT="${OUT}/licenses"
+rm -rf "${LIC_OUT}"
+mkdir -p "${LIC_OUT}"
+cp "${ET_INSTALL}/LICENSE" "${LIC_OUT}/"
+cp -r "${ET_INSTALL}/THIRD-PARTY-NOTICES" "${LIC_OUT}/"
+echo "Notices: ${LIC_OUT} ($(find "${LIC_OUT}" -type f | wc -l) files)"

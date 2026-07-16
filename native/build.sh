@@ -116,6 +116,18 @@ if [ "${STAGE_SO}" = "1" ]; then
   cp "${NATIVE_BUILD_DIR}/${OUT_LIB}" "${OUT}/"
   echo "Artifact: ${OUT}/${OUT_LIB}"
   ls -lh "${OUT}/${OUT_LIB}"
+
+  # Third-party notices from the resolved runtime tree: escape-hatch (ET_INSTALL set) or the
+  # FetchContent extraction under the build dir. Required — never ship a binary without them.
+  ET_RUNTIME_ROOT="${ET_INSTALL:-${NATIVE_BUILD_DIR}/_deps/et_runtime-src}"
+  test -f "${ET_RUNTIME_ROOT}/LICENSE" && test -d "${ET_RUNTIME_ROOT}/THIRD-PARTY-NOTICES" \
+    || { echo "runtime notices missing under ${ET_RUNTIME_ROOT} (LICENSE + THIRD-PARTY-NOTICES/)"; exit 1; }
+  LIC_OUT="${OUT}/licenses"
+  rm -rf "${LIC_OUT}"
+  mkdir -p "${LIC_OUT}"
+  cp "${ET_RUNTIME_ROOT}/LICENSE" "${LIC_OUT}/"
+  cp -r "${ET_RUNTIME_ROOT}/THIRD-PARTY-NOTICES" "${LIC_OUT}/"
+  echo "Notices: ${LIC_OUT} ($(find "${LIC_OUT}" -type f | wc -l) files)"
 else
   echo "STAGE_SO=0: built shim but not staging into resources"
   ls -lh "${NATIVE_BUILD_DIR}/${OUT_LIB}"
