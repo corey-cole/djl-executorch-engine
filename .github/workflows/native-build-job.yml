@@ -72,7 +72,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: executorch-libs-${{ matrix.platform }}
-          path: ${{ github.workspace }}/src/main/resources/native/**/*.so
+          path: |
+            ${{ github.workspace }}/src/main/resources/native/**/*.so
+            ${{ github.workspace }}/src/main/resources/native/**/licenses/**
           compression-level: 1 # May want to consider no compression
 
   # Windows amd64: a sibling job rather than a matrix row, because the linux rows are container-based
@@ -138,5 +140,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: executorch-libs-windows-x86_64
-          path: ${{ github.workspace }}/src/main/resources/native/**/*.dll
+          path: |
+            ${{ github.workspace }}/src/main/resources/native/**/*.dll
+            ${{ github.workspace }}/src/main/resources/native/**/licenses/**
           compression-level: 1
