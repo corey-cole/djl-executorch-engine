@@ -149,6 +149,20 @@ tarballs may curate different sets). Three touch points:
    existing binary copy `exclude("licenses/**")` so they do not double-land. Add a
    release guard mirroring the existing `require(resolvedLib.exists())`: fail the
    jar if the notices dir is empty, so a bare binary cannot ship.
+4. **`README.md`** — add a "Third-party licenses" section: a human-readable
+   **summary** of the third-party components statically linked into the shipped
+   `.so` (name + license), with a pointer to the full texts bundled at
+   `META-INF/licenses/executorch-runtime/` in each native classifier jar (and to
+   the runtime tarball's `THIRD-PARTY-NOTICES/`). **Not** the ~250 KB of verbatim
+   notice files inline. Notable entries: ExecuTorch (BSD-3-Clause), XNNPACK /
+   cpuinfo / clog / pthreadpool (BSD), FP16 / FXdiv (MIT), flatbuffers / flatcc /
+   abseil / re2 / pcre2 / tokenizers / sentencepiece (Apache-2.0), and — new with
+   the LSTM op — Highway (Apache-2.0). The exact list is transcribed from the
+   staged `THIRD-PARTY-NOTICES/` set at implementation time.
+   - **Maintenance note:** this summary and the bundled set are both tied to the
+     runtime pin; refresh them whenever `EtRuntimePin.cmake` bumps (the same
+     supply-chain review gate). The README is the authoritative summary; the jar
+     carries the authoritative full texts.
 
 Our own root `LICENSE` (Apache-2.0) is unaffected.
 
@@ -175,7 +189,8 @@ Our own root `LICENSE` (Apache-2.0) is unaffected.
 | `src/test/resources/lstm/*` | Committed fixtures + `PROVENANCE.txt` (§2) |
 | `src/test/java/org/measly/executorch/LstmModelIT.java` | New golden-vector IT (§3) |
 | `src/test/java/org/measly/executorch/TestSupport.java` | New `assumeLstmModelAvailable()` (§3) |
-| `README.md`, `CLAUDE.md` | Note the op is now linked when the runtime provides it |
+| `README.md` | Third-party licenses summary + pointer to bundled full texts (§4.4); note the op is now linked when the runtime provides it |
+| `CLAUDE.md` | Note the op is now linked when the runtime provides it |
 
 ## Open questions
 
