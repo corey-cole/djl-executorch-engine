@@ -127,12 +127,10 @@ shipped library are:
 
 | Component | License |
 |---|---|
-| ExecuTorch (core, portable/optimized kernels, extensions) | BSD-3-Clause |
+| ExecuTorch (core, portable kernels, extensions) | BSD-3-Clause |
 | XNNPACK, cpuinfo, clog, pthreadpool | BSD-3-Clause |
 | FP16, FXdiv | MIT |
-| FlatBuffers, flatcc | Apache-2.0 |
-| Abseil, RE2, PCRE2 | Apache-2.0 |
-| tokenizers, SentencePiece | Apache-2.0 |
+| FlatBuffers | Apache-2.0 |
 | Highway (SIMD support for the `etnp::lstm` op, linux-x86_64 only) | Apache-2.0 |
 
 Full license texts for these **and** every other component the runtime distribution tracks
