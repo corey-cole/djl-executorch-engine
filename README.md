@@ -62,6 +62,10 @@ host (no Docker). The resulting `.so` links against a host-glibc runtime and **b
 **Escape hatch / custom runtime:** set `ET_INSTALL=/path/to/et-install` to link an existing runtime
 tree (e.g. one you built from source per `docs/executorch-build-notes.md`); CMake skips the download.
 
+When the pinned runtime provides the first-party custom ops (the `logging` linux-x86_64
+tarball ships an `etnp::lstm` op), the shim auto-detects the tarball's `ETNPExtras.cmake` and
+whole-archives the op in. The Windows tarball has no such extras, so the op is simply absent there.
+
 **Verifying runtime provenance (optional, local):** CI verifies every pinned tarball with a build
 attestation. To check by hand:
 ```bash
@@ -114,3 +118,24 @@ Until these grow the same trap, fix ownership by hand after running them, e.g.:
 ```bash
 sudo chown -R "$(id -u):$(id -g)" native/bench native/bench-results native/asan
 ```
+
+## Third-party licenses
+
+The native library (`libexecutorch_djl.so` / `executorch_djl.dll`) statically links
+third-party components from the pinned ExecuTorch runtime. The components linked into the
+shipped library are:
+
+| Component | License |
+|---|---|
+| ExecuTorch (core, portable/optimized kernels, extensions) | BSD-3-Clause |
+| XNNPACK, cpuinfo, clog, pthreadpool | BSD-3-Clause |
+| FP16, FXdiv | MIT |
+| FlatBuffers, flatcc | Apache-2.0 |
+| Abseil, RE2, PCRE2 | Apache-2.0 |
+| tokenizers, SentencePiece | Apache-2.0 |
+| Highway (SIMD support for the `etnp::lstm` op, linux-x86_64 only) | Apache-2.0 |
+
+Full license texts for these **and** every other component the runtime distribution tracks
+are bundled in each native classifier jar under `META-INF/licenses/executorch-runtime/`
+(`LICENSE` + `THIRD-PARTY-NOTICES/`), sourced verbatim from the runtime tarball. This list is
+tied to the runtime pin (`native/cmake/EtRuntimePin.cmake`); refresh it when the pin bumps.
