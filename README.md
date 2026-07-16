@@ -9,8 +9,25 @@ As a separate engine, it also allows for slow migration from TorchScript/PyTorch
 
 ## Building and testing
 
-> **Status:** desktop **linux-x86_64** only, and a work in progress. These steps build what exists
-> today — the ExecuTorch runtime, our JNI shim, and the JVM + native test suites.
+> **Status:** desktop **linux-x86_64** and **windows-x86_64**, and a work in progress. These steps
+> build what exists today — the ExecuTorch runtime, our JNI shim, and the JVM + native test suites.
+> The Docker prerequisite below applies to the Linux build only; Windows builds with MSVC 2022 and
+> no container.
+
+### Supported platforms
+
+| Platform | Artifact | Runtime variant | QA |
+|---|---|---|---|
+| `linux-x86_64` | `libexecutorch_djl.so` | `logging` | Catch2 + ASan/LSan leak harness |
+| `windows-x86_64` | `executorch_djl.dll` | `logging` | Catch2 (MSVC has no LeakSanitizer) |
+
+The native library ships in a per-platform classifier jar (`<artifact>-<platform>.jar`) and is extracted
+on first load to a content-addressed cache — `%LOCALAPPDATA%\executorch-djl\<sha256>\` on Windows,
+`$XDG_CACHE_HOME` (or `~/.cache`) `/executorch-djl/<sha256>/` elsewhere. Set `EXECUTORCH_LIBRARY_PATH` to
+load a specific library instead and bypass extraction entirely.
+
+Windows is built with MSVC 2022 against the `logging` runtime variant; `bare` and `devtools` are
+Linux-only benchmarking builds (see `native/build_variants.sh`).
 
 ### Prerequisites
 

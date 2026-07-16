@@ -74,4 +74,69 @@ jobs:
           name: executorch-libs-${{ matrix.platform }}
           path: ${{ github.workspace }}/src/main/resources/native/**/*.so
           compression-level: 1 # May want to consider no compression
-       
+
+  # Windows amd64: a sibling job rather than a matrix row, because the linux rows are container-based
+  # (manylinux bakes the glibc floor into the image) and Windows has no container. Both jobs upload
+  # under the executorch-libs-* pattern, so publish.yml and native-build.yml consume them unchanged.
+  # A future macOS platform would follow this same shape. Mirrors executorch-runtime-dist's release.yml.
+  build-executorch-shim-windows:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout djl-executorch-engine repository
+        uses: actions/checkout@v7
+
+      # Provenance gate: prove the pinned runtime tarball was built by Repo A's CI before we link
+      # against it. URL_HASH in native/CMakeLists.txt covers integrity; this covers provenance.
+      - name: Verify ExecuTorch runtime provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url="$(grep -oE 'https://[^"]*logging-windows-x86_64\.tar\.gz' native/cmake/EtRuntimePin.cmake | head -1)"
+          test -n "${url}" || { echo "no logging URL in EtRuntimePin.cmake"; exit 1; }
+          curl -fL -o runtime.tgz "${url}"
+          gh attestation verify runtime.tgz --repo measly-java-learning/executorch-runtime-dist
+          rm -f runtime.tgz
+
+      - name: Build the executorch_djl shim (MSVC)
+        shell: pwsh
+        run: |
+          # Discover VS edition-agnostically (-products *) rather than hardcoding Enterprise, so a
+          # runner-image edition change does not silently break the build.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -property installationPath
+          if (-not $vsPath) { throw "vswhere found no Visual Studio installation" }
+          # Launch-VsDevShell mutates THIS process's env in place; the bash child inherits it.
+          & "$vsPath\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -SkipAutomaticLocation
+          # The windows-2022 image ships JDK 8 as JAVA_HOME_8_X64 (8.0.492+9). Bind it EXPLICITLY rather
+          # than trusting the image's default JAVA_HOME: the default is an image property GitHub can change,
+          # and we want the oldest supported jni.h for the widest runtime compatibility — matching the linux
+          # arm's Corretto 8 RPM. We compile against jni.h only and never link libjvm.
+          if (-not $env:JAVA_HOME_8_X64) { throw "JAVA_HOME_8_X64 not set on this runner image" }
+          $env:JAVA_HOME = $env:JAVA_HOME_8_X64
+          # Invoke Git-Bash by explicit path so PATH order cannot select WSL's System32\bash.exe, which
+          # would run the build in a Linux environment with no MSVC toolchain. Non-login (`-c`, not
+          # `-lc`): a login shell re-sources the profile and resets PATH, dropping the VS env.
+          $bash = "${env:ProgramFiles}\Git\bin\bash.exe"
+          & $bash -c './native/build.sh'
+          if ($LASTEXITCODE -ne 0) { throw "shim build failed (exit $LASTEXITCODE)" }
+
+      - name: QA the executorch_djl shim (MSVC)
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -property installationPath
+          if (-not $vsPath) { throw "vswhere found no Visual Studio installation" }
+          & "$vsPath\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -SkipAutomaticLocation
+          $bash = "${env:ProgramFiles}\Git\bin\bash.exe"
+          & $bash -c './native/build_qa.sh'
+          if ($LASTEXITCODE -ne 0) { throw "shim QA failed (exit $LASTEXITCODE)" }
+
+      - name: Store executorch_djl shim
+        uses: actions/upload-artifact@v7
+        with:
+          name: executorch-libs-windows-x86_64
+          path: ${{ github.workspace }}/src/main/resources/native/**/*.dll
+          compression-level: 1

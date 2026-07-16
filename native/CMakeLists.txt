@@ -14,7 +14,15 @@ option(ET_PRINT_RESOLUTION "Print resolved runtime config and exit (host-test se
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/EtRuntimePin.cmake)
 set(ET_RUNTIME_VARIANT "logging" CACHE STRING "Runtime variant: logging (ship) | bare | devtools (bench)")
 set(ET_INSTALL "" CACHE PATH "Explicit ExecuTorch install prefix (escape hatch); empty => fetch the pinned tarball")
-set(_ET_PLATFORM "linux-x86_64")
+# Which pin row to resolve. A CACHE var (not a plain set) is deliberate: it lets the
+# ET_PRINT_RESOLUTION host-test seam force a foreign platform (-DET_PLATFORM=windows-x86_64) and assert
+# the pin resolves, with no machine of that platform present. See native/tests/cmake_resolution.sh.
+if(WIN32)
+  set(_ET_PLATFORM_DEFAULT "windows-x86_64")
+else()
+  set(_ET_PLATFORM_DEFAULT "linux-x86_64")
+endif()
+set(ET_PLATFORM "${_ET_PLATFORM_DEFAULT}" CACHE STRING "Runtime platform row to resolve from EtRuntimePin.cmake")
 
 if(ET_INSTALL)
   set(_ET_RESOLUTION "escape-hatch")
@@ -22,16 +30,25 @@ if(ET_INSTALL)
   set(_ET_RESOLVED_URL "")
 else()
   set(_ET_RESOLUTION "fetch")
-  set(_ET_STEM "executorch-runtime-${ET_RUNTIME_ET_VERSION}-${ET_RUNTIME_VARIANT}-${_ET_PLATFORM}")
-  set(_ET_RESOLVED_URL "${ET_RUNTIME_URL_${ET_RUNTIME_VARIANT}_${_ET_PLATFORM}}")
-  set(_ET_RESOLVED_SHA "${ET_RUNTIME_SHA256_${ET_RUNTIME_VARIANT}_${_ET_PLATFORM}}")
+  # windows-x86_64 ships `logging` only; bare/devtools are Linux-only benchmarking builds that upstream
+  # never produced for Windows. Without this, the generic "No pin row" error below reads like a broken
+  # pin rather than a platform that never had those artifacts. Inside the fetch branch on purpose: the
+  # ET_INSTALL escape hatch consults no pin row, so the variant is irrelevant there.
+  if(ET_PLATFORM STREQUAL "windows-x86_64" AND NOT ET_RUNTIME_VARIANT STREQUAL "logging")
+    message(FATAL_ERROR
+      "windows-x86_64 ships the 'logging' variant only; got '${ET_RUNTIME_VARIANT}'. "
+      "bare/devtools are Linux-only (benchmarking; see native/build_variants.sh).")
+  endif()
+  set(_ET_STEM "executorch-runtime-${ET_RUNTIME_ET_VERSION}-${ET_RUNTIME_VARIANT}-${ET_PLATFORM}")
+  set(_ET_RESOLVED_URL "${ET_RUNTIME_URL_${ET_RUNTIME_VARIANT}_${ET_PLATFORM}}")
+  set(_ET_RESOLVED_SHA "${ET_RUNTIME_SHA256_${ET_RUNTIME_VARIANT}_${ET_PLATFORM}}")
   if(NOT _ET_RESOLVED_URL)
-    message(FATAL_ERROR "No pin row for variant='${ET_RUNTIME_VARIANT}' platform='${_ET_PLATFORM}' in EtRuntimePin.cmake")
+    message(FATAL_ERROR "No pin row for variant='${ET_RUNTIME_VARIANT}' platform='${ET_PLATFORM}' in EtRuntimePin.cmake")
   endif()
 endif()
 
 if(ET_PRINT_RESOLUTION)
-  message(STATUS "ET_RESOLUTION resolution=${_ET_RESOLUTION} variant=${ET_RUNTIME_VARIANT} stem=${_ET_STEM} url=${_ET_RESOLVED_URL} et_install=${ET_INSTALL}")
+  message(STATUS "ET_RESOLUTION resolution=${_ET_RESOLUTION} variant=${ET_RUNTIME_VARIANT} platform=${ET_PLATFORM} stem=${_ET_STEM} url=${_ET_RESOLVED_URL} et_install=${ET_INSTALL}")
   return()
 endif()
 
@@ -77,23 +94,35 @@ if(NOT ET_BUILD_QA AND NOT ET_BUILD_BENCH)
   add_library(executorch_djl SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/jni/executorch_djl_jni.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jni/et_logging.cpp)
+  # jni_md.h sits in a platform-named subdir: include/linux vs include/win32.
+  if(WIN32)
+    set(_JNI_MD_DIR "win32")
+  else()
+    set(_JNI_MD_DIR "linux")
+  endif()
   target_include_directories(executorch_djl PRIVATE
-    "${JAVA_HOME}/include" "${JAVA_HOME}/include/linux")
+    "${JAVA_HOME}/include" "${JAVA_HOME}/include/${_JNI_MD_DIR}")
   target_link_libraries(executorch_djl PRIVATE et_runtime)
 
   # Post-link guard: fail the build if the XNNPACK backend registration got GC'd out of the
   # final .so (the self-whole-archive lives in the downloaded runtime and can regress). Turns a
   # silent load-time "backend not found" into a build failure. See the script header.
-  if(NOT CMAKE_NM)
-    find_program(CMAKE_NM NAMES nm)
+  # Linux-only: the guard greps Itanium-ABI static-init mangling out of `nm` (ELF) output. MSVC has
+  # neither (.CRT$XCU pointers, no nm). Windows covers the same property at runtime instead — the
+  # Catch2 suite executes the XNNPACK-delegated add.pte, which fails if the backend never registered.
+  # See docs/superpowers/specs/2026-07-15-windows-builds-design.md §3.4 and §6.
+  if(NOT WIN32)
+    if(NOT CMAKE_NM)
+      find_program(CMAKE_NM NAMES nm)
+    endif()
+    add_custom_command(TARGET executorch_djl POST_BUILD
+      COMMAND ${CMAKE_COMMAND}
+        -DSO=$<TARGET_FILE:executorch_djl>
+        -DNM=${CMAKE_NM}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/assert_xnnpack_registered.cmake
+      VERBATIM
+      COMMENT "Asserting XNNPACK backend survived the link")
   endif()
-  add_custom_command(TARGET executorch_djl POST_BUILD
-    COMMAND ${CMAKE_COMMAND}
-      -DSO=$<TARGET_FILE:executorch_djl>
-      -DNM=${CMAKE_NM}
-      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/assert_xnnpack_registered.cmake
-    VERBATIM
-    COMMENT "Asserting XNNPACK backend survived the link")
 endif()
 
 # --- Release timing harness (no sanitizers). OFF for the shipping build and for QA. ---

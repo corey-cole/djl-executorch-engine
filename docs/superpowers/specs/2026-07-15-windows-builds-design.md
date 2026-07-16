@@ -147,6 +147,19 @@ per-platform filename mapping above feeding the `require()` check).
 One script serves both platforms, branching on `uname -s` (`MINGW64_NT*` / `MSYS_NT*` under Git-Bash).
 The caller supplies an already-activated MSVC environment; the scripts do not activate VS themselves.
 
+**MSVC CRT flavour must match the runtime (discovered during implementation).** `build.sh`'s cmake
+configure passes no `CMAKE_BUILD_TYPE`. On GCC/ELF that is harmless — there is no CRT-flavour ABI tag. On
+MSVC it is fatal: our objects land on the **Debug** CRT (`MDd_DynamicDebug`, `_ITERATOR_DEBUG_LEVEL=2`)
+while the pinned runtime's `.lib`s are **Release** (`MD_DynamicRelease`, per its `BUILDINFO`
+`cmake_flags`), and the linker refuses to mix them — 460 × `LNK2038` then `LNK1319`. So the Windows legs
+must set the build type explicitly: `Release` for the shim, `RelWithDebInfo` for QA (also `/MD`, but
+keeps symbols so a Catch2 failure stays debuggable). **The Linux legs are deliberately left unset** so the
+Linux artifact is unchanged by this project.
+
+Known consequence, out of scope: the Linux shim therefore still builds with no `CMAKE_BUILD_TYPE` and so
+no optimization flags. Pre-existing, and low-impact (the shim is thin glue; the runtime archives it links
+are already Release-compiled), but worth a follow-up.
+
 `native/build.sh` on Windows:
 - Skip Corretto RPM extraction — take `JAVA_HOME` from the runner. Assert `include/win32/jni_md.h` exists
   (mirroring the existing Linux `include/linux/jni_md.h` assertion at line 42).

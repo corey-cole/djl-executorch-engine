@@ -938,6 +938,40 @@ else
 fi
 ```
 
+- [ ] **Step 4b: Match the MSVC CRT to the prebuilt runtime (`CMAKE_BUILD_TYPE`)**
+
+**Discovered during execution — the original plan omitted this and the Windows link failed with 460
+`LNK2038` errors.** `build.sh`'s cmake configure never passes `CMAKE_BUILD_TYPE`. On GCC/ELF that is
+harmless (no CRT-flavour ABI tag). On MSVC it is fatal: our objects compile against the **Debug** CRT
+(`MDd_DynamicDebug`, `_ITERATOR_DEBUG_LEVEL=2`) while the pinned runtime's `.lib`s are **Release**
+(`MD_DynamicRelease`) — `BUILDINFO` records `-DCMAKE_BUILD_TYPE=Release`. The link dies with:
+
+```
+error LNK2038: mismatch detected for 'RuntimeLibrary': value 'MD_DynamicRelease' doesn't match value 'MDd_DynamicDebug'
+fatal error LNK1319: 460 mismatches detected
+```
+
+Fork the configure so Windows builds Release (matching the runtime's `/MD`), leaving the Linux
+invocation byte-identical so the Linux artifact does not change. Replace:
+
+```bash
+cmake -B "${NATIVE_BUILD_DIR}" -S native -G Ninja \
+  -DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT}" "${ET_INSTALL_ARG[@]}"
+```
+
+with:
+
+```bash
+# MSVC encodes the CRT flavour into every object and the linker refuses to mix them. The pinned runtime
+# tarball is built Release (/MD — see its BUILDINFO cmake_flags), so the shim must be Release too or the
+# link dies with LNK2038 'RuntimeLibrary' / '_ITERATOR_DEBUG_LEVEL' mismatches. GCC/ELF has no such ABI
+# tag, so the Linux leg stays as-is (unset) and its artifact is unchanged.
+BUILD_TYPE_ARG=()
+[ "${ET_HOST_OS}" = "windows" ] && BUILD_TYPE_ARG=(-DCMAKE_BUILD_TYPE=Release)
+cmake -B "${NATIVE_BUILD_DIR}" -S native -G Ninja \
+  -DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT}" "${BUILD_TYPE_ARG[@]}" "${ET_INSTALL_ARG[@]}"
+```
+
 - [ ] **Step 5: Fork the staging step**
 
 Replace the `STAGE_SO` block (lines 72-81):
@@ -1080,8 +1114,12 @@ if [ "${ET_HOST_OS}" = "windows" ]; then
   JOBS="${JOBS:-${NUMBER_OF_PROCESSORS:-4}}"
   bash native/clean_stale_tree.sh native/asan native
   # No sanitizers: MSVC has no LeakSanitizer, and the leak harness is not built here at all.
+  # RelWithDebInfo, NOT Debug: Debug would compile against the Debug CRT (/MDd) while the pinned runtime
+  # is Release (/MD), and MSVC refuses to mix them — the same LNK2038/LNK1319 wall the shim build hits
+  # (see build.sh). RelWithDebInfo gives us the matching /MD CRT while keeping symbols, so a Catch2
+  # failure is still debuggable.
   cmake -B native/asan -S native -G Ninja "${ET_ARGS[@]}" -DET_BUILD_QA=ON \
-    -DCMAKE_BUILD_TYPE=Debug
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo
   cmake --build native/asan --target et_runtime_test -j"${JOBS}"
 
   echo "--- Catch2 unit suite (no sanitizers; MSVC has no LSan) ---"
@@ -1277,14 +1315,6 @@ indentation level, i.e. two spaces under `jobs:`):
       - name: Checkout djl-executorch-engine repository
         uses: actions/checkout@v7
 
-      # JDK 8 headers to match the linux arm's Corretto 8 RPM: we compile against jni.h only and never
-      # link libjvm, so the oldest supported JNI headers give the widest runtime compatibility.
-      - name: Set up JDK 8 (headers only)
-        uses: actions/setup-java@v5
-        with:
-          java-version: '8'
-          distribution: 'corretto'
-
       # Provenance gate: prove the pinned runtime tarball was built by Repo A's CI before we link
       # against it. URL_HASH in native/CMakeLists.txt covers integrity; this covers provenance.
       - name: Verify ExecuTorch runtime provenance
@@ -1308,6 +1338,12 @@ indentation level, i.e. two spaces under `jobs:`):
           if (-not $vsPath) { throw "vswhere found no Visual Studio installation" }
           # Launch-VsDevShell mutates THIS process's env in place; the bash child inherits it.
           & "$vsPath\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -SkipAutomaticLocation
+          # The windows-2022 image ships JDK 8 as JAVA_HOME_8_X64 (8.0.492+9). Bind it EXPLICITLY rather
+          # than trusting the image's default JAVA_HOME: the default is an image property GitHub can change,
+          # and we want the oldest supported jni.h for the widest runtime compatibility — matching the linux
+          # arm's Corretto 8 RPM. We compile against jni.h only and never link libjvm.
+          if (-not $env:JAVA_HOME_8_X64) { throw "JAVA_HOME_8_X64 not set on this runner image" }
+          $env:JAVA_HOME = $env:JAVA_HOME_8_X64
           # Invoke Git-Bash by explicit path so PATH order cannot select WSL's System32\bash.exe, which
           # would run the build in a Linux environment with no MSVC toolchain. Non-login (`-c`, not
           # `-lc`): a login shell re-sources the profile and resets PATH, dropping the VS env.

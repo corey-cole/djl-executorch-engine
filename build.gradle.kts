@@ -53,8 +53,13 @@ tasks.jacocoTestReport {
     }
 }
 
-val nativePlatforms = listOf("linux-x86_64")
-// Look for .so files in build/native-staging/<platform>/libexecutorch_djl.so
+val nativePlatforms = listOf("linux-x86_64", "windows-x86_64")
+
+// MSVC emits no `lib` prefix and a .dll suffix. Keep in sync with LibUtils.libName.
+fun nativeLibName(platform: String): String =
+    if (platform.startsWith("windows-")) "executorch_djl.dll" else "libexecutorch_djl.so"
+
+// Look for the platform's native library in build/native-staging/<platform>/<nativeLibName>
 val nativeStaging = layout.buildDirectory.dir("native-staging")
 val nativeJarTasks = nativePlatforms.map { platform ->
   tasks.register<Jar>("nativeJar-${platform}") {
@@ -64,9 +69,9 @@ val nativeJarTasks = nativePlatforms.map { platform ->
     }
     // Resolve to a plain File at configuration time so the doFirst action captures
     // only a File + String (config-cache safe) rather than the enclosing script.
-    val resolvedSo = nativeStaging.get().dir(platform).file("libexecutorch_djl.so").asFile
+    val resolvedLib = nativeStaging.get().dir(platform).file(nativeLibName(platform)).asFile
     doFirst { // Fail a release rather than ship an empty native jar
-        require(resolvedSo.exists()) { "Missing native library for ${platform}: ${resolvedSo}" }
+        require(resolvedLib.exists()) { "Missing native library for ${platform}: ${resolvedLib}" }
     }
   }
 }
