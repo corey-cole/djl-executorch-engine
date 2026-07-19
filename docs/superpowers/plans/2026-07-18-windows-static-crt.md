@@ -243,11 +243,30 @@ Expected: this one **does** list `VCRUNTIME140.dll`.
 
 - [ ] **Step 3: Record finding S4 — the C++ standard flag (Stream B / B5)**
 
+**Do not use the work order's pattern verbatim — it is a false negative.** CMake's Ninja generator
+writes MSVC flags in **dash** form, so the real command line reads `-std:c++20` and a pattern anchored
+on `/` can never match. Measured 2026-07-18: `grep -o '/std:c++[0-9a-z]*'` returned nothing against a
+build log containing three `std:c++20` occurrences, which would have been misread as "MSVC is on its
+C++14 default". Match either form:
+
 ```bash
-cmake --build /tmp/spike-mt --clean-first -- -v 2>&1 | grep -o '/std:c++[0-9a-z]*' | sort -u
+cmake --build /tmp/spike-mt --clean-first -- -v 2>&1 | grep -oE '[-/]std:c\+\+[0-9a-z]*' | sort -u
 ```
 
-Expected: exactly `/std:c++20`. An empty result means MSVC is on its C++14 default and the ET `#error` guard is being satisfied by nothing — which would contradict the spec's §6 conclusion.
+Expected: `-std:c++20`. Only now does an empty result carry the meaning the work order intended.
+
+This is the same failure as `dumpbin /nologo` vs `-nologo`, moved from the tool invocation into the
+verification pattern: a check that reports absence when it was structurally incapable of finding
+anything. Confirm the compiler default separately rather than inferring it, since that is what decides
+whether CMake emits the flag at all:
+
+```bash
+printf '#include <cstdio>\nint main(){printf("%%ld\\n",(long)_MSVC_LANG);}' > /tmp/lang.cpp
+cl -nologo -Fe:/tmp/lang.exe /tmp/lang.cpp >/dev/null && /tmp/lang.exe
+```
+
+Measured on winbox (MSVC 19.51 / VS 18): `201402`, i.e. the default really is C++14 and the flag is
+doing the work. Do not assume a newer toolchain has raised that default.
 
 - [ ] **Step 4: Record finding S1 — does the QA path link with Catch2 in the mix?**
 
