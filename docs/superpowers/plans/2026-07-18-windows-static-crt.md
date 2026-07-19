@@ -38,7 +38,8 @@ Task 2 is a **human-gated hardware task** on a Windows machine. Tasks 3–7 are 
 | `native/build_qa.sh` | Modify (38-42) | Comment correction only |
 | `.github/workflows/native-build-job.yml` | Modify (99) | Windows provenance gate + CRT gate step |
 | `native/tests/ci_workflow.sh` | Modify | Assertions on the workflow |
-| `native/tests/check_windows_crt.sh` | Create | CRT directive + import table gate (runs on Windows) |
+| `native/tests/check_windows_crt.sh` | Create | CRT directive + import table gate (runs on Windows, against both build trees) |
+| `native/build_qa.sh` | Modify (Windows branch) | Comment correction + standing Catch2 CRT gate |
 | `CLAUDE.md` | Modify | Stream B durable note |
 | `docs/handover-windows-static-cxx17-findings.md` | Create | Report back to the producer repo |
 
@@ -226,6 +227,8 @@ dumpbin -nologo -directives native/asan/_deps/catch2-build/src/Catch2.lib | grep
 ```
 
 Expected: `LIBCMT`/`LIBCPMT`, **not** `MSVCRT`/`MSVCPRT`. If Catch2 shows `MSVCRT`, the global cache variable did not propagate into the FetchContent subproject and Task 4 must be revised.
+
+This manual check is the spike's one-shot answer. Task 6 makes it permanent by invoking `check_windows_crt.sh native/asan` from `build_qa.sh`, so propagation is re-verified on every QA run rather than trusted indefinitely from this single measurement.
 
 - [ ] **Step 5: Record finding S3 — does it still work?**
 
@@ -637,7 +640,7 @@ Replaces the work order's A5 clean-image test, which cannot be run (no redist-fr
 **Interfaces:**
 - Consumes: `executorch_djl.dll` staged at `src/main/resources/native/windows-x86_64/`, and the shim build tree at `native/build` (the default `NATIVE_BUILD_DIR` in `native/build.sh:28`).
 - Note: `native/build` also contains the FetchContent'd runtime at `_deps/et_runtime-src/lib/`, so the scan sweeps ~20 runtime `.lib`s in addition to the shim's own. That is intentional — it verifies the whole link set, not just our objects — so expect ~21 `ok` lines, not one.
-- Produces: `native/tests/check_windows_crt.sh <build-dir> <dll-path>`, exit 0 on pass, 1 on failure, 2 on usage error.
+- Produces: `native/tests/check_windows_crt.sh <build-dir> [dll-path]`, exit 0 on pass, 1 on failure, 2 on usage error. Invoked twice: from CI against `native/build` **with** the DLL, and from `build_qa.sh` against `native/asan` **without** one.
 
 - [ ] **Step 1: Write the gate script**
 
@@ -666,15 +669,24 @@ Create `native/tests/check_windows_crt.sh`:
 #    18 libraries green while the tool was erroring on every one of them.
 #
 # Run inside Git-Bash from an activated VS dev shell (needs dumpbin).
-# Usage: check_windows_crt.sh <shim-build-dir> <dll-path>
+#
+# Usage: check_windows_crt.sh <build-dir> [dll-path]
+#   <build-dir>  scanned for *.lib; every one must carry the static marker
+#   [dll-path]   optional; when given, its import table is checked too
+#
+# The DLL argument is optional because this runs against TWO trees. The shim tree (native/build)
+# produces a DLL. The QA tree (native/asan) does not — it produces a test executable — but it is the
+# tree containing the FetchContent'd Catch2, which is the single most likely place for the static-CRT
+# setting to stop propagating, and a /MD Catch2 inside a /MT test exe links with no diagnostic at all.
 set -euo pipefail
-usage_err() { echo "usage: check_windows_crt.sh <shim-build-dir> <dll-path>" >&2; exit 2; }
+usage_err() { echo "usage: check_windows_crt.sh <build-dir> [dll-path]" >&2; exit 2; }
 BUILD_DIR="${1:-}"; [ -n "${BUILD_DIR}" ] || usage_err
-DLL="${2:-}";       [ -n "${DLL}" ]       || usage_err
+DLL="${2:-}"
 
 command -v dumpbin >/dev/null 2>&1 \
   || { echo "FAIL: dumpbin not on PATH — run inside an activated VS dev shell" >&2; exit 1; }
-[ -f "${DLL}" ] || { echo "FAIL: no DLL at ${DLL}" >&2; exit 1; }
+[ -d "${BUILD_DIR}" ] || { echo "FAIL: no build dir at ${BUILD_DIR}" >&2; exit 1; }
+[ -z "${DLL}" ] || [ -f "${DLL}" ] || { echo "FAIL: no DLL at ${DLL}" >&2; exit 1; }
 
 rc=0
 
@@ -708,6 +720,12 @@ done < <(find "${BUILD_DIR}" -name '*.lib' -type f)
 if [ "${libs}" -eq 0 ]; then
   echo "FAIL: no .lib files found under ${BUILD_DIR} — the scan proved nothing" >&2
   rc=1
+fi
+
+if [ -z "${DLL}" ]; then
+  [ "${rc}" -eq 0 ] && echo "PASS: static CRT across ${libs} libs in ${BUILD_DIR} (no DLL to check)" \
+                    || echo "FAIL: windows CRT check"
+  exit "${rc}"
 fi
 
 echo "== 2/2 Import table: the DLL must not depend on a redistributable CRT =="
@@ -747,7 +765,24 @@ bash native/tests/check_windows_crt.sh; echo "rc=$?"
 
 Expected: `usage: check_windows_crt.sh <shim-build-dir> <dll-path>` and `rc=2`.
 
-- [ ] **Step 4: Write the failing CI-wiring test**
+- [ ] **Step 4: Gate the QA tree from `build_qa.sh` itself**
+
+Catch2 is the most likely place for the static-CRT setting to stop propagating, because it is the only target the project does not declare. Verifying it once by hand in Task 2 leaves no standing guard, and the failure mode is silent.
+
+Put the check in `build_qa.sh` rather than only in the CI workflow, so it runs wherever QA runs — CI *and* a local winbox run — instead of only where someone remembered to wire it up.
+
+In `native/build_qa.sh`, in the Windows branch, insert between the `cmake --build ... --target et_runtime_test` line (currently line 45) and the `echo "--- Catch2 unit suite ..."` line:
+
+```bash
+  # Catch2 comes in via FetchContent, so it is the one target whose CRT we do not set directly — the
+  # global CMAKE_MSVC_RUNTIME_LIBRARY has to propagate into a subproject to reach it. A /MD Catch2
+  # inside this /MT test exe links with no LNK2038 and not even an LNK4098, then corrupts the heap at
+  # runtime. Assert it here, before running the suite, so the failure names its own cause instead of
+  # surfacing as an inexplicable Catch2 crash.
+  bash native/tests/check_windows_crt.sh native/asan
+```
+
+- [ ] **Step 5: Write the failing wiring tests**
 
 Append to `native/tests/ci_workflow.sh`, immediately before the Python/YAML block:
 
@@ -757,14 +792,23 @@ Append to `native/tests/ci_workflow.sh`, immediately before the Python/YAML bloc
 awk '/^  build-executorch-shim-windows:/{f=1} f' "${WFJOB}" \
   | grep -q 'check_windows_crt.sh' \
   || fail "windows CRT gate missing (check_windows_crt.sh not invoked in the windows job)"
+
+# The QA tree needs its own scan: the workflow step above covers native/build (the shim), which does
+# not contain Catch2. Scoped to build_qa.sh's windows branch — the linux branch neither has nor needs
+# this, so an unscoped grep would stay green if the windows call were deleted.
+awk '/ET_HOST_OS.*=.*"windows"/{f=1} f' native/build_qa.sh \
+  | grep -q 'check_windows_crt.sh native/asan' \
+  || fail "build_qa.sh windows branch must scan the QA tree (Catch2 CRT)"
 ```
 
-- [ ] **Step 5: Run it to confirm it fails**
+- [ ] **Step 6: Run them to confirm they fail**
 
 Run: `bash native/tests/ci_workflow.sh`
 Expected: `FAIL: windows CRT gate missing (check_windows_crt.sh not invoked in the windows job)`
 
-- [ ] **Step 6: Wire the gate into CI**
+(After Step 7 wires the workflow, re-running surfaces the second failure if Step 4 was skipped.)
+
+- [ ] **Step 7: Wire the shim-tree gate into CI**
 
 In `.github/workflows/native-build-job.yml`, insert this step immediately **after** the `QA the executorch_djl shim (MSVC)` step and **before** the `Store executorch_djl shim` step, matching the surrounding steps' VS-discovery preamble:
 
@@ -781,19 +825,24 @@ In `.github/workflows/native-build-job.yml`, insert this step immediately **afte
           if ($LASTEXITCODE -ne 0) { throw "windows CRT check failed (exit $LASTEXITCODE)" }
 ```
 
-- [ ] **Step 7: Run the test to confirm it passes**
+- [ ] **Step 8: Run the tests to confirm they pass**
 
 Run: `bash native/tests/ci_workflow.sh`
 Expected: `PASS: ci workflow`
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add native/tests/check_windows_crt.sh native/tests/ci_workflow.sh .github/workflows/native-build-job.yml
+git add native/tests/check_windows_crt.sh native/tests/ci_workflow.sh \
+        native/build_qa.sh .github/workflows/native-build-job.yml
 git commit -m "test(native): gate the Windows build on a static-CRT check
 
-Scans /DEFAULTLIB directives and the DLL import table. Stands in for the
-clean-image redist test, which we have no machine to run."
+Scans /DEFAULTLIB directives and the DLL import table. Runs against both
+trees: the shim (native/build, from CI) and the QA tree (native/asan,
+from build_qa.sh) — the latter is where the FetchContent'd Catch2 lives,
+the one target whose CRT we cannot set directly.
+
+Stands in for the clean-image redist test, which we have no machine to run."
 ```
 
 ---
@@ -902,7 +951,7 @@ Run before opening the PR:
 - [ ] `bash native/tests/cmake_resolution.sh` → `PASS: cmake resolution`
 - [ ] `bash native/tests/ci_workflow.sh` → `PASS: ci workflow`
 - [ ] `./native/local_build_wrapper.sh && ./gradlew test` → green (Linux, glibc floor preserved)
-- [ ] Windows CI: shim build, Catch2 QA, CRT gate all green
+- [ ] Windows CI: shim build, Catch2 QA, CRT gate on **both** trees (`native/build` + `native/asan`) all green
 - [ ] `git diff main --stat` touches no Java source and no `build.gradle.kts`
 - [ ] Findings doc reflects what was actually measured in Task 2, not what was expected
 
