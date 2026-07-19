@@ -31,6 +31,15 @@ awk '/^  build-executorch-shim-windows:/{f=1} f' "${WFJOB}" | grep -q 'build_qa.
 # The aarch64 rows exist in the pin but are out of scope: the matrix entry must stay commented out.
 grep -qE '^\s*- platform: linux-aarch64' "${WFJOB}" && fail "linux-aarch64 is out of scope for this PR"
 
+# The Windows provenance gate must attest the row the build actually links (-static, /MT). The /MD row
+# is still in the pin file, so a pattern without the suffix keeps matching and keeps PASSING while
+# verifying the wrong tarball — a silent supply-chain hole, which is why this is asserted here.
+# Scoped to the windows job block: the linux job has its own attestation step, so an unscoped grep
+# would stay green even if the windows one regressed.
+awk '/^  build-executorch-shim-windows:/{f=1} f' "${WFJOB}" \
+  | grep -q 'logging-windows-x86_64-static' \
+  || fail "windows provenance gate must attest the -static tarball"
+
 # Python is optional; if present, assert the file is valid YAML.
 if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
   python3 -c "import yaml,sys; yaml.safe_load(open('${WF}')); yaml.safe_load(open('${WFJOB}')); print('yaml ok')" \

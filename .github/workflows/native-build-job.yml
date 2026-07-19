@@ -96,7 +96,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          url="$(grep -oE 'https://[^"]*logging-windows-x86_64\.tar\.gz' native/cmake/EtRuntimePin.cmake | head -1)"
+          # -static: the /MT row, which is what native/CMakeLists.txt resolves via ET_RUNTIME_ROW. The
+          # /MD row is still in the pin file, so a pattern without the suffix would match it and attest
+          # a tarball this build never links.
+          url="$(grep -oE 'https://[^"]*logging-windows-x86_64-static\.tar\.gz' native/cmake/EtRuntimePin.cmake | head -1)"
           test -n "${url}" || { echo "no logging URL in EtRuntimePin.cmake"; exit 1; }
           curl -fL -o runtime.tgz "${url}"
           gh attestation verify runtime.tgz --repo measly-java-learning/executorch-runtime-dist
