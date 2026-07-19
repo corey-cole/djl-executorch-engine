@@ -109,6 +109,34 @@ ExecuTorch's `#error` guard on its own — `set(CMAKE_CXX_STANDARD 20)` in `nati
 is what satisfies it. (`__cplusplus` stays `199711` in both cases without `/Zc:__cplusplus`,
 which is why ET's guard keys on `_MSVC_LANG` instead.)
 
+### Stream B conclusion: nothing to change
+
+The engine's C++17 requirement on Windows is satisfied by `native/CMakeLists.txt` —
+`set(CMAKE_CXX_STANDARD 20)` with `set(CMAKE_CXX_STANDARD_REQUIRED ON)` — declared at the top of
+the project's single `CMakeLists.txt`, before any target is created.
+
+That source is trustworthy on all four axes the work order asks about:
+
+- **B1 explicit and first-party.** Not implicit, not inherited from a dependency, so it cannot
+  disappear under an unrelated bump.
+- **B2 `REQUIRED ON`.** CMake cannot silently decay to an older standard.
+- **B3/B4 scope.** The setting precedes every `add_library`/`add_executable`, and the project has
+  exactly one `CMakeLists.txt` — no sibling tree or earlier-added subdirectory can miss it. It also
+  propagates into FetchContent subprojects, which S1 confirms independently for the CRT variable
+  travelling the same path.
+- **B5 verified on MSVC.** See S4: `-std:c++20` reaches the ET-including TUs. ET's guard keys on
+  `_MSVC_LANG`, which `/std:c++20` satisfies; `/Zc:__cplusplus` is not required.
+
+C++20 rather than C++17 is a deliberate superset, not an accident.
+
+Recorded in `CLAUDE.md` so a future cleanup does not delete the setting as redundant — which is the
+actual deliverable here, since there is no code change to make.
+
+**Toolchain caveat.** All of the above was measured on VS 18 Community. Whether CMake emits the
+`/std:` flag at all depends on the compiler's default standard, so this specific result does not
+transfer to CI's VS 17 Enterprise by inspection. It needs re-checking there, using the corrected
+`[-/]std:c\+\+` pattern.
+
 ## Not verified by execution
 
 Loading the DLL on a Windows image that has never had a VC++ redistributable installed. No such
