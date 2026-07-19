@@ -36,10 +36,12 @@ if [ "${ET_HOST_OS}" = "windows" ]; then
   JOBS="${JOBS:-${NUMBER_OF_PROCESSORS:-4}}"
   bash native/clean_stale_tree.sh native/asan native
   # No sanitizers: MSVC has no LeakSanitizer, and the leak harness is not built here at all.
-  # RelWithDebInfo, NOT Debug: Debug would compile against the Debug CRT (/MDd) while the pinned runtime
-  # is Release (/MD), and MSVC refuses to mix them — the same LNK2038/LNK1319 wall the shim build hits
-  # (see build.sh). RelWithDebInfo gives us the matching /MD CRT while keeping symbols, so a Catch2
-  # failure is still debuggable.
+  # RelWithDebInfo, NOT Debug: Debug would compile against the Debug CRT while the pinned runtime is
+  # Release, and MSVC refuses to mix them — the same LNK2038/LNK1319 wall the shim build hits (see
+  # build.sh). RelWithDebInfo gives us the matching release CRT while keeping symbols, so a Catch2
+  # failure is still debuggable. The static-vs-dynamic CRT choice is separate and is made by
+  # CMAKE_MSVC_RUNTIME_LIBRARY in native/CMakeLists.txt, which also propagates into the FetchContent'd
+  # Catch2 build — a /MD Catch2 inside a /MT test exe links silently and corrupts at runtime.
   cmake -B native/asan -S native -G Ninja "${ET_ARGS[@]}" -DET_BUILD_QA=ON \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo
   cmake --build native/asan --target et_runtime_test -j"${JOBS}"

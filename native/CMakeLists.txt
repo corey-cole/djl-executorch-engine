@@ -3,6 +3,32 @@ project(executorch_djl LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Static CRT (/MT) on Windows: folds the C runtime into the DLL so end users need no VC++
+# redistributable. Windows consumers here are developers on potentially locked-down workstations who
+# may not be able to run an installer. Pairs with the -static pin row selected below — the runtime
+# tarball is itself built /MT (see its BUILDINFO cmake_flags), and every object linked into one
+# binary must agree.
+#
+# A GLOBAL cache variable, not per-target set_property(... MSVC_RUNTIME_LIBRARY ...): Catch2 enters
+# the QA build through FetchContent_MakeAvailable, so its targets are not declared here and cannot
+# have a property set on them. This variable initialises the property on every target including those
+# created in added subdirectories, which is the only mechanism that covers that case. Measured: with
+# this set, Catch2.lib carries 106 LIBCMT / 0 MSVCRT directives.
+#
+# NOT config-dependent (the CMake default is "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"): the pinned
+# runtime is Release-only, so a Debug configure must still get the release static CRT rather than
+# /MTd, which would not link against it.
+#
+# CMP0091 must be NEW for this to take effect; cmake_minimum_required(3.24) above guarantees it.
+#
+# Do NOT expect the linker to police this. Measured upstream: a /MD consumer linked a /MT ExecuTorch
+# artifact with no error and not even an LNK4098 warning. The failure is at runtime — two CRTs, two
+# heaps, corruption when an allocation crosses the boundary. native/tests/check_windows_crt.sh is the
+# real gate.
+if(WIN32)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded" CACHE STRING "Static CRT: ship without a VC++ redist")
+endif()
+
 option(ET_BUILD_QA "Build native QA targets (Catch2 units + leak harness)" OFF)
 option(ET_BUILD_BENCH "Build the Release timing harness (no sanitizers)" OFF)
 
