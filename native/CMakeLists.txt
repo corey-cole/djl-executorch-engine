@@ -14,15 +14,33 @@ option(ET_PRINT_RESOLUTION "Print resolved runtime config and exit (host-test se
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/EtRuntimePin.cmake)
 set(ET_RUNTIME_VARIANT "logging" CACHE STRING "Runtime variant: logging (ship) | bare | devtools (bench)")
 set(ET_INSTALL "" CACHE PATH "Explicit ExecuTorch install prefix (escape hatch); empty => fetch the pinned tarball")
-# Which pin row to resolve. A CACHE var (not a plain set) is deliberate: it lets the
-# ET_PRINT_RESOLUTION host-test seam force a foreign platform (-DET_PLATFORM=windows-x86_64) and assert
-# the pin resolves, with no machine of that platform present. See native/tests/cmake_resolution.sh.
+# ET_PLATFORM is the platform IDENTITY; ET_RUNTIME_ROW is the pin-row LOOKUP KEY. They coincide on
+# Linux but not on Windows, which publishes two rows for one platform: `windows-x86_64` (/MD, dynamic
+# CRT, built for CPython extensions) and `windows-x86_64-static` (/MT). The shim takes the static row
+# so the shipped DLL needs no VC++ redistributable.
+#
+# Keeping identity separate from row is what lets the variant guard below stay a plain STREQUAL. If
+# ET_PLATFORM itself carried the `-static` suffix, that guard would silently stop matching and its
+# actionable error would degrade into the generic "No pin row" message it exists to pre-empt.
+#
+# Both are CACHE vars (not plain set) deliberately: it lets the ET_PRINT_RESOLUTION host-test seam
+# force a foreign platform (-DET_PLATFORM=windows-x86_64) and assert the pin resolves, with no machine
+# of that platform present. See native/tests/cmake_resolution.sh.
 if(WIN32)
   set(_ET_PLATFORM_DEFAULT "windows-x86_64")
 else()
   set(_ET_PLATFORM_DEFAULT "linux-x86_64")
 endif()
-set(ET_PLATFORM "${_ET_PLATFORM_DEFAULT}" CACHE STRING "Runtime platform row to resolve from EtRuntimePin.cmake")
+set(ET_PLATFORM "${_ET_PLATFORM_DEFAULT}" CACHE STRING "Platform identity: windows-x86_64 | linux-x86_64")
+
+# Derive the row default from ET_PLATFORM, NOT from WIN32: the host-test seam sets ET_PLATFORM on a
+# Linux box, and deriving from WIN32 there would resolve a Linux row under a Windows identity.
+if(ET_PLATFORM STREQUAL "windows-x86_64")
+  set(_ET_ROW_DEFAULT "windows-x86_64-static")
+else()
+  set(_ET_ROW_DEFAULT "${ET_PLATFORM}")
+endif()
+set(ET_RUNTIME_ROW "${_ET_ROW_DEFAULT}" CACHE STRING "Pin row key in EtRuntimePin.cmake (may differ from ET_PLATFORM)")
 
 if(ET_INSTALL)
   set(_ET_RESOLUTION "escape-hatch")
@@ -39,16 +57,16 @@ else()
       "windows-x86_64 ships the 'logging' variant only; got '${ET_RUNTIME_VARIANT}'. "
       "bare/devtools are Linux-only (benchmarking; see native/build_variants.sh).")
   endif()
-  set(_ET_STEM "executorch-runtime-${ET_RUNTIME_ET_VERSION}-${ET_RUNTIME_VARIANT}-${ET_PLATFORM}")
-  set(_ET_RESOLVED_URL "${ET_RUNTIME_URL_${ET_RUNTIME_VARIANT}_${ET_PLATFORM}}")
-  set(_ET_RESOLVED_SHA "${ET_RUNTIME_SHA256_${ET_RUNTIME_VARIANT}_${ET_PLATFORM}}")
+  set(_ET_STEM "executorch-runtime-${ET_RUNTIME_ET_VERSION}-${ET_RUNTIME_VARIANT}-${ET_RUNTIME_ROW}")
+  set(_ET_RESOLVED_URL "${ET_RUNTIME_URL_${ET_RUNTIME_VARIANT}_${ET_RUNTIME_ROW}}")
+  set(_ET_RESOLVED_SHA "${ET_RUNTIME_SHA256_${ET_RUNTIME_VARIANT}_${ET_RUNTIME_ROW}}")
   if(NOT _ET_RESOLVED_URL)
-    message(FATAL_ERROR "No pin row for variant='${ET_RUNTIME_VARIANT}' platform='${ET_PLATFORM}' in EtRuntimePin.cmake")
+    message(FATAL_ERROR "No pin row for variant='${ET_RUNTIME_VARIANT}' row='${ET_RUNTIME_ROW}' (platform='${ET_PLATFORM}') in EtRuntimePin.cmake")
   endif()
 endif()
 
 if(ET_PRINT_RESOLUTION)
-  message(STATUS "ET_RESOLUTION resolution=${_ET_RESOLUTION} variant=${ET_RUNTIME_VARIANT} platform=${ET_PLATFORM} stem=${_ET_STEM} url=${_ET_RESOLVED_URL} et_install=${ET_INSTALL}")
+  message(STATUS "ET_RESOLUTION resolution=${_ET_RESOLUTION} variant=${ET_RUNTIME_VARIANT} platform=${ET_PLATFORM} row=${ET_RUNTIME_ROW} stem=${_ET_STEM} url=${_ET_RESOLVED_URL} et_install=${ET_INSTALL}")
   return()
 endif()
 
