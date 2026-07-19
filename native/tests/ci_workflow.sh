@@ -22,6 +22,13 @@ grep -q 'build-executorch-shim-windows' "${WFJOB}" || fail "windows shim job mis
 grep -q 'runs-on: windows-2022'         "${WFJOB}" || fail "windows job must run on windows-2022"
 grep -q 'vswhere'                       "${WFJOB}" || fail "windows job must discover VS via vswhere"
 grep -q 'products \*'                   "${WFJOB}" || fail "vswhere must be edition-agnostic (-products *)"
+# Discovery is hoisted into one step and shared via $GITHUB_ENV; the consuming steps only activate.
+# If that step is dropped, VS_PATH is empty everywhere and each consumer throws — assert it exists so
+# the regression is caught here rather than on a runner.
+grep -q 'VS_PATH=\$vsPath'              "${WFJOB}" || fail "VS discovery must publish VS_PATH to GITHUB_ENV"
+# Out-File -Encoding utf8 writes a BOM under Windows PowerShell 5.1, and a BOM in GITHUB_ENV makes the
+# runner parse the first name as "<BOM>VS_PATH" — every consumer then sees an empty value.
+grep -q 'Out-File.*GITHUB_ENV'          "${WFJOB}" && fail "write GITHUB_ENV with Add-Content, not Out-File (BOM risk)"
 grep -q 'executorch-libs-windows-x86_64' "${WFJOB}" || fail "windows artifact name missing"
 # Scope the QA assertion to the windows job block (it is the last job in the file, so from its header to
 # EOF). A bare `grep build_qa.sh "${WFJOB}"` is vacuous — the linux job runs build_qa.sh too, so it would
