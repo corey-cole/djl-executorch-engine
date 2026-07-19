@@ -35,6 +35,19 @@ tasks.test {
     finalizedBy(tasks.jacocoTestReport)
 }
 
+// LibUtils resolves the native library from EXECUTORCH_LIBRARY_PATH before falling back to the
+// classpath copy, so this variable changes WHICH .so/.dll is under test. Undeclared, it is invisible
+// to the up-to-date check and the build cache (org.gradle.caching=true): point it at a different
+// library and Gradle sees identical inputs, replays a cached result, and reports a pass for a run
+// that loaded something else entirely. Declaring it makes the override part of the cache key.
+// configureEach + withType so leakTest is covered too — it loads the same library.
+tasks.withType<Test>().configureEach {
+    inputs.property(
+        "executorchLibraryPath",
+        providers.environmentVariable("EXECUTORCH_LIBRARY_PATH").orElse("")
+    )
+}
+
 tasks.register<Test>("leakTest") {
     description = "Memory-leak stress tests under constrained heap/direct memory."
     group = "verification"

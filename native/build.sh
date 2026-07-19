@@ -95,9 +95,11 @@ rm -rf "${NATIVE_BUILD_DIR}"
 ET_INSTALL_ARG=()
 [ -n "${ET_INSTALL:-}" ] && ET_INSTALL_ARG=(-DET_INSTALL="${ET_INSTALL}")
 # MSVC encodes the CRT flavour into every object and the linker refuses to mix them. The pinned runtime
-# tarball is built Release (/MD — see its BUILDINFO cmake_flags), so the shim must be Release too or the
-# link dies with LNK2038 'RuntimeLibrary' / '_ITERATOR_DEBUG_LEVEL' mismatches. GCC/ELF has no such ABI
-# tag, so the Linux leg stays as-is (unset) and its artifact is unchanged.
+# tarball is built Release with the STATIC CRT (/MT — see its BUILDINFO cmake_flags:
+# CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded), so the shim must be Release too or the link dies with
+# LNK2038 '_ITERATOR_DEBUG_LEVEL' mismatches. Release is about the debug/release CRT split only; the
+# static-vs-dynamic choice is made by CMAKE_MSVC_RUNTIME_LIBRARY in native/CMakeLists.txt, not here.
+# GCC/ELF has no such ABI tag, so the Linux leg stays as-is (unset) and its artifact is unchanged.
 BUILD_TYPE_ARG=()
 [ "${ET_HOST_OS}" = "windows" ] && BUILD_TYPE_ARG=(-DCMAKE_BUILD_TYPE=Release)
 cmake -B "${NATIVE_BUILD_DIR}" -S native -G Ninja \

@@ -26,11 +26,26 @@ Supported platforms: `linux-x86_64` and `windows-x86_64` (both ship the `logging
 The engine links against the ExecuTorch runtime, but that runtime is **downloaded**, not compiled. CMake `FetchContent`s a hash-pinned, build-attested tarball published by the separate [`executorch-runtime-dist`](https://github.com/measly-java-learning/executorch-runtime-dist) repo. The pin lives in `native/cmake/EtRuntimePin.cmake` (**generated — do not hand-edit**; bump by replacing the whole file with the asset from the next `v<etver>-<pkgrev>` release, then re-applying the comment header). The SHA256 change is the supply-chain review gate.
 
 - **Escape hatch**: set `ET_INSTALL=/path/to/et-install` to link an existing runtime tree; CMake then skips the download.
-- ExecuTorch runtime version is currently `1.3.1` (pin `1.3.1-6`); mirrored in `EtEngine.EXECUTORCH_VERSION`.
+- ExecuTorch runtime version is currently `1.3.1` (pin `1.3.1-8`); mirrored in `EtEngine.EXECUTORCH_VERSION`.
 - A post-link CMake guard (`assert_xnnpack_registered.cmake`, Linux only) fails the build if the XNNPACK backend registration got GC'd out of the `.so`. Windows covers the same property at runtime via the Catch2 suite executing an XNNPACK-delegated `add.pte`.
 - The runtime's first-party custom op `etnp::lstm` (linux-x86_64 `logging` tarball only) is
   whole-archived into the shim when the tarball ships `lib/cmake/ETNPExtras/ETNPExtras.cmake`
   (auto-detected in `native/CMakeLists.txt`). Exercised end-to-end by `LstmModelIT`.
+- **Windows links the `-static` (`/MT`) pin row** so the shipped DLL needs no VC++ redistributable.
+  Windows publishes *two* rows for one platform, hence two variables: `ET_PLATFORM` is the platform
+  identity (`windows-x86_64`) and `ET_RUNTIME_ROW` is the pin-row key (`windows-x86_64-static`). The
+  `/MD` row exists for CPython consumers and is **not** what we link — it stays in the pin file only
+  so `cmake_resolution.sh` can prove the row is a real choice. MSVC does **not** reliably diagnose a
+  CRT mismatch (no `LNK2038`, not even an `LNK4098`), so `native/tests/check_windows_crt.sh` is the
+  real gate; it runs over both the shim tree and the QA tree.
+- **`find_package(executorch)` supplies no language standard.** ExecuTorch's headers require C++17 and
+  enforce it with a hard `#error` in `runtime/platform/compiler.h`, but the installed CMake package
+  exports **no** `INTERFACE_COMPILE_FEATURES` on any target — verified on both Linux and Windows
+  builds of v1.3.1. `native/CMakeLists.txt` therefore states the standard itself
+  (`CMAKE_CXX_STANDARD 20` + `CMAKE_CXX_STANDARD_REQUIRED ON`); do **not** delete those as redundant.
+  Removing them breaks MSVC only — GCC defaults to `gnu++17` and masks it — surfacing as
+  `fatal error C1189: #error: "You need C++17 to compile ExecuTorch"`. Measured on MSVC 19.51: the
+  compiler defaults to `_MSVC_LANG=201402`, i.e. C++14, so the flag is doing real work.
 
 ### glibc floor (important for releases)
 

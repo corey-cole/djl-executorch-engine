@@ -96,22 +96,43 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          url="$(grep -oE 'https://[^"]*logging-windows-x86_64\.tar\.gz' native/cmake/EtRuntimePin.cmake | head -1)"
+          # -static: the /MT row, which is what native/CMakeLists.txt resolves via ET_RUNTIME_ROW. The
+          # /MD row is still in the pin file, so a pattern without the suffix would match it and attest
+          # a tarball this build never links.
+          url="$(grep -oE 'https://[^"]*logging-windows-x86_64-static\.tar\.gz' native/cmake/EtRuntimePin.cmake | head -1)"
           test -n "${url}" || { echo "no logging URL in EtRuntimePin.cmake"; exit 1; }
           curl -fL -o runtime.tgz "${url}"
           gh attestation verify runtime.tgz --repo measly-java-learning/executorch-runtime-dist
           rm -f runtime.tgz
 
-      - name: Build the executorch_djl shim (MSVC)
+      # Resolve the VS install ONCE and publish it to $GITHUB_ENV for the steps below. Discovery is
+      # edition-agnostic (-products *) rather than hardcoding Enterprise, so a runner-image edition
+      # change does not silently break the build. Doing it here also means an image without VS fails
+      # on a step that says so, instead of three steps repeating the same lookup.
+      #
+      # Only DISCOVERY is hoisted, not ACTIVATION: Launch-VsDevShell mutates the current process env,
+      # and each step runs in a fresh process, so every step that needs `cl` must still activate.
+      - name: Discover Visual Studio
         shell: pwsh
         run: |
-          # Discover VS edition-agnostically (-products *) rather than hardcoding Enterprise, so a
-          # runner-image edition change does not silently break the build.
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsPath = & $vswhere -latest -products * -property installationPath
           if (-not $vsPath) { throw "vswhere found no Visual Studio installation" }
+          # Add-Content, NOT `Out-File -Encoding utf8`: under Windows PowerShell 5.1 that writes a
+          # UTF-8 BOM, and a BOM in GITHUB_ENV makes the runner parse the name as "<BOM>VS_PATH", so
+          # $env:VS_PATH comes back empty in every later step. pwsh 7 defaults to BOM-less UTF-8 so
+          # the declared `shell: pwsh` would be fine today, but Add-Content is BOM-free under both and
+          # does not silently depend on which shell this step happens to run under. Verified BOM-free
+          # on 5.1; `Out-File -Encoding utf8` was verified to emit a BOM there.
+          Add-Content -Path $env:GITHUB_ENV -Value "VS_PATH=$vsPath"
+          echo "Visual Studio: $vsPath"
+
+      - name: Build the executorch_djl shim (MSVC)
+        shell: pwsh
+        run: |
+          if (-not $env:VS_PATH) { throw "VS_PATH unset — the 'Discover Visual Studio' step must run first" }
           # Launch-VsDevShell mutates THIS process's env in place; the bash child inherits it.
-          & "$vsPath\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -SkipAutomaticLocation
+          & "$env:VS_PATH\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -SkipAutomaticLocation
           # The windows-2022 image ships JDK 8 as JAVA_HOME_8_X64 (8.0.492+9). Bind it EXPLICITLY rather
           # than trusting the image's default JAVA_HOME: the default is an image property GitHub can change,
           # and we want the oldest supported jni.h for the widest runtime compatibility — matching the linux
@@ -128,13 +149,23 @@ jobs:
       - name: QA the executorch_djl shim (MSVC)
         shell: pwsh
         run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsPath = & $vswhere -latest -products * -property installationPath
-          if (-not $vsPath) { throw "vswhere found no Visual Studio installation" }
-          & "$vsPath\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -SkipAutomaticLocation
+          if (-not $env:VS_PATH) { throw "VS_PATH unset — the 'Discover Visual Studio' step must run first" }
+          & "$env:VS_PATH\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -SkipAutomaticLocation
           $bash = "${env:ProgramFiles}\Git\bin\bash.exe"
           & $bash -c './native/build_qa.sh'
           if ($LASTEXITCODE -ne 0) { throw "shim QA failed (exit $LASTEXITCODE)" }
+
+      # Stands in for the clean-image redist test, which we have no machine to run: asserts the CRT
+      # directives across the shim tree and that the DLL imports no VCRUNTIME/MSVCP. Runs before the
+      # upload so a dynamically-linked DLL is never published as an artifact.
+      - name: Assert the shim links the static CRT (MSVC)
+        shell: pwsh
+        run: |
+          if (-not $env:VS_PATH) { throw "VS_PATH unset — the 'Discover Visual Studio' step must run first" }
+          & "$env:VS_PATH\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -SkipAutomaticLocation
+          $bash = "${env:ProgramFiles}\Git\bin\bash.exe"
+          & $bash -c './native/tests/check_windows_crt.sh native/build src/main/resources/native/windows-x86_64/executorch_djl.dll'
+          if ($LASTEXITCODE -ne 0) { throw "windows CRT check failed (exit $LASTEXITCODE)" }
 
       - name: Store executorch_djl shim
         uses: actions/upload-artifact@v7
