@@ -23,7 +23,9 @@
 
 ## Task ordering note
 
-Task 2 is a **human-gated hardware task** on a Windows machine. Tasks 3–7 are designed against evidence already gathered and can be written before Task 2 completes, but **must not be merged** until Task 2's findings are recorded. If Task 2 finding **S1** (the Catch2 link) fails, stop and revise Task 4 before proceeding.
+Task 2 runs on `winbox` over SSH and is agent-drivable from Linux — see its Host access block. Tasks 3–7 are designed against evidence already gathered and can be written before Task 2 completes, but **must not be merged** until Task 2's findings are recorded. If Task 2 finding **S1** (the Catch2 link) fails, stop and revise Task 4 before proceeding.
+
+Winbox is an iteration host, not the acceptance gate: it runs VS 18 Community against CI's VS 17 Enterprise. Green on winbox does not license skipping the CI run.
 
 ---
 
@@ -147,14 +149,53 @@ Linux build/test was re-run as part of the review."
 
 ---
 
-### Task 2: Windows spike — measure the three unknowns (HUMAN-GATED)
+### Task 2: Windows spike — measure the unknowns on `winbox`
 
-**This task runs on a Windows machine with an activated MSVC dev shell. It commits no source changes.** Its entire purpose is to convert three assumptions into measurements before the CMake change lands.
+**Runs on `winbox` over SSH, drivable from Linux. It commits no source changes.** Its purpose is to convert assumptions into measurements before the CMake change lands.
 
 Everything is a command-line override — `ET_PLATFORM` and `ET_RUNTIME_VARIANT` are already `CACHE` variables and `CMAKE_MSVC_RUNTIME_LIBRARY` is a standard CMake cache variable — so **no source edits are needed for this task**.
 
+**Host access** (per `/home/corey/workspace/windows-jni-handoff.md`, whose winbox mechanics are accurate — but note its Part 1 "core-only, no XNNPACK" claim is **stale and false** for current releases; ignore it):
+
+- `ssh winbox` — key-based, `BatchMode` works. **Default remote shell is `cmd`**, not PowerShell or bash.
+- Drive PowerShell from Linux via base64 UTF-16LE to avoid quoting hell:
+  ```bash
+  enc="$(iconv -f UTF-8 -t UTF-16LE < script.ps1 | base64 -w0)"
+  ssh winbox "powershell -NoProfile -EncodedCommand $enc"
+  ```
+  The reply carries a trailing `#< CLIXML … </Objs>` blob — PowerShell serialising `Write-Host` records. Noise; ignore.
+- Activate VS with `Launch-VsDevShell.ps1 -Arch amd64 -SkipAutomaticLocation`, then hand off to Git-Bash by **explicit path** (`${env:ProgramFiles}\Git\bin\bash.exe`) — a bare `bash` can select WSL's `System32\bash.exe`. Use `bash -c`, **never** `-lc`: a login shell re-sources the profile and drops the VS env.
+- **A `bash -c '...'` one-liner does not survive PowerShell→native-exe quoting.** Write a `.sh` file, `scp` it over, and invoke that file. Every step below follows this pattern.
+- `scp` needs **absolute forward-slash** targets (`winbox:C:/Users/cored/...`); a bare relative path fails on this sftp server. Pre-create destination dirs with `New-Item -ItemType Directory -Force`, since `cmd`'s `mkdir` over SSH is flaky. No `rsync` on winbox.
+
+**Parity caveat:** winbox is **VS 18 Community**; the CI runner is **VS 2022/17 Enterprise**. Winbox is for iterating — **CI remains the acceptance gate.** A CRT result here is strong evidence, not proof, that the runner agrees. Do not skip the CI run on the strength of a green spike.
+
+**Warm-host hazard, and it bites this change specifically:** the handoff's lesson is that winbox silently skips what a cold runner hits. `CMAKE_MSVC_RUNTIME_LIBRARY` is a **cache variable**, so a warm `native/asan` or `native/build` tree from an earlier session retains the *old* value and re-uses it regardless of what this spike passes on the command line — the build would succeed and measure nothing. Every configure below is preceded by an explicit `rm -rf` of its build directory for exactly this reason. Do not "optimise" those away.
+
 **Files:**
 - Create: `docs/handover-windows-static-cxx17-findings.md` (findings only; expanded in Task 7)
+
+**Prerequisite — get the branch onto winbox:**
+
+- [ ] **Step 0: Sync the working branch to winbox**
+
+```bash
+ssh winbox "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path C:\\Users\\cored\\workspace\\djl-executorch-engine | Out-Null\""
+git bundle create /tmp/engine.bundle feat/windows-static-crt
+scp -q /tmp/engine.bundle 'winbox:C:/Users/cored/workspace/engine.bundle'
+```
+
+Then clone or fetch from the bundle on winbox via a `.sh` file run through Git-Bash (Git-Bash brings its own `git`, `curl`, `tar`, `cygpath`; note `git` is **not** on the default `cmd` PATH).
+
+A bundle rather than a `git clone` of the remote: the branch is local-only at this point and may be unpushed, and this avoids needing credentials on winbox. Re-run this step after every local commit — a stale checkout is the same class of error as a warm build tree.
+
+Confirm before proceeding:
+
+```bash
+ssh winbox "powershell -NoProfile -Command \"cd C:\\Users\\cored\\workspace\\djl-executorch-engine; & 'C:\\Program Files\\Git\\bin\\git.exe' log --oneline -1\""
+```
+
+Expected: the tip commit matches your local `feat/windows-static-crt` HEAD.
 
 **Interfaces:**
 - Consumes: `ET_RUNTIME_URL_logging_windows-x86_64-static` from Task 1.
@@ -162,7 +203,9 @@ Everything is a command-line override — `ET_PLATFORM` and `ET_RUNTIME_VARIANT`
 
 - [ ] **Step 1: Configure and build the shim against the static row**
 
-From Git-Bash inside an activated VS dev shell, at the repo root:
+Write this to a `.sh` file, `scp` it to winbox, and invoke it through the VS-activation → Git-Bash handoff. `JAVA_HOME` must be set to any JDK — the shim compiles against `include/win32/jni_md.h` and never links `libjvm`, so the version is irrelevant here.
+
+The `rm -rf` is load-bearing, not hygiene: `CMAKE_MSVC_RUNTIME_LIBRARY` is a cache variable, and a warm tree would silently retain its previous value and measure nothing.
 
 ```bash
 rm -rf /tmp/spike-mt
@@ -256,6 +299,8 @@ cp /tmp/spike-mt/executorch_djl.dll src/main/resources/native/windows-x86_64/
 
 Expected: green. Proves `System.load` succeeds and inference runs against a `/MT` DLL.
 
+This is the one step that may not be runnable on winbox — it needs a JDK 17 and a Gradle run, and winbox is provisioned as a *native build* host (the handoff documents VS, Git-Bash and a single ET venv, not a JVM toolchain). If Gradle cannot run there, record S3 as **Catch2-only** and note that the `System.load` half is deferred to the Windows CI job, which does run `./gradlew test`. Do **not** report S3 as fully green on the strength of Catch2 alone — the Catch2 binary is JVM-free, so it exercises the runtime but never the JNI load path that the redist claim ultimately concerns.
+
 - [ ] **Step 6: Write the findings down**
 
 Create `docs/handover-windows-static-cxx17-findings.md`:
@@ -263,7 +308,10 @@ Create `docs/handover-windows-static-cxx17-findings.md`:
 ```markdown
 # Windows /MT adoption — measured findings
 
-Spike run against runtime pin v1.3.1-8, MSVC 2022, on <machine/date>.
+Spike run against runtime pin v1.3.1-8 on `winbox` (VS 18 Community), <date>.
+
+Winbox is an iteration host, not the acceptance gate — CI runs VS 2022/17 Enterprise. Every
+result below was re-confirmed by the Windows CI job before merge: <yes/no + run link>.
 
 ## Stream A
 
