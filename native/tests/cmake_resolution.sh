@@ -27,9 +27,9 @@ grep -q 'resolution=fetch'                                     <<<"${out}" || fa
 grep -q 'variant=logging'                                     <<<"${out}" || fail "default variant not logging"
 grep -q 'stem=executorch-runtime-1.3.1-logging-linux-x86_64'  <<<"${out}" || fail "default stem wrong"
 grep -q 'executorch-runtime-1.3.1-logging-linux-x86_64.tar.gz' <<<"${out}" || fail "default url wrong"
-# The pin must point at the v1.3.1-6 release: the ET version (1.3.1) is unchanged from v1.3.1-2, so
-# the tarball stem alone cannot distinguish the two. Assert the release-tag path segment instead.
-grep -q '/download/v1.3.1-6/'                                 <<<"${out}" || fail "pin is not at release v1.3.1-6"
+# The pin must point at the v1.3.1-8 release: the ET version (1.3.1) is unchanged across pkgrevs, so
+# the tarball stem alone cannot distinguish them. Assert the release-tag path segment instead.
+grep -q '/download/v1.3.1-8/'                                 <<<"${out}" || fail "pin is not at release v1.3.1-8"
 
 out="$(probe -DET_RUNTIME_VARIANT=bare)"
 grep -q 'stem=executorch-runtime-1.3.1-bare-linux-x86_64'      <<<"${out}" || fail "bare stem wrong"
