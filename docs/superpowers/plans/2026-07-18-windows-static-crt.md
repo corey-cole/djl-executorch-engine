@@ -158,7 +158,7 @@ Everything is a command-line override — `ET_PLATFORM` and `ET_RUNTIME_VARIANT`
 
 **Interfaces:**
 - Consumes: `ET_RUNTIME_URL_logging_windows-x86_64-static` from Task 1.
-- Produces: findings S1–S4, recorded in the findings doc. Task 4 depends on S1.
+- Produces: findings S1–S5, recorded in the findings doc. Task 4 depends on S1; Task 6's scan classification depends on S5.
 
 - [ ] **Step 1: Configure and build the shim against the static row**
 
@@ -230,6 +230,15 @@ Expected: `LIBCMT`/`LIBCPMT`, **not** `MSVCRT`/`MSVCPRT`. If Catch2 shows `MSVCR
 
 This manual check is the spike's one-shot answer. Task 6 makes it permanent by invoking `check_windows_crt.sh native/asan` from `build_qa.sh`, so propagation is re-verified on every QA run rather than trusted indefinitely from this single measurement.
 
+Also record **finding S5** — what an *import* library actually emits, since Task 6's scan classifies on exactly this and the answer is currently assumed rather than measured:
+
+```bash
+dumpbin -nologo -directives /tmp/spike-mt/executorch_djl.lib; echo "rc=$?"
+dumpbin -nologo -directives /tmp/spike-mt/et_runtime.lib | grep -ci 'DEFAULTLIB:'
+```
+
+Expected: the import library exits 0 with **no** `DEFAULTLIB:` lines (it holds import descriptor records, not COFF objects, so it states no CRT), while the static library `et_runtime.lib` reports a non-zero count. If the import library instead exits non-zero, or emits `DEFAULTLIB` lines naming a CRT, Task 6's three-way classification needs adjusting before it ships.
+
 - [ ] **Step 5: Record finding S3 — does it still work?**
 
 ```bash
@@ -263,6 +272,7 @@ Spike run against runtime pin v1.3.1-8, MSVC 2022, on <machine/date>.
 | S1 | Does the QA path link all-`/MT` with Catch2 via FetchContent? | <PASS/FAIL + the Catch2.lib defaultlib line> |
 | S2 | Does the DLL still import VCRUNTIME140/MSVCP140? | <result; include the /MD contrast run> |
 | S3 | Catch2 suite + `./gradlew test` green? | <result> |
+| S5 | What does `dumpbin -directives` emit for the import lib `executorch_djl.lib`? | <exit code + whether any DEFAULTLIB lines appear; contrast with et_runtime.lib> |
 
 Not verified by execution: load on a Windows image that has never had a VC++
 redistributable installed (no such machine available). The claim rests on S2's
@@ -690,10 +700,20 @@ command -v dumpbin >/dev/null 2>&1 \
 
 rc=0
 
-echo "== 1/2 CRT directive scan: every .lib built here must carry LIBCMT/LIBCPMT =="
-libs=0
+echo "== 1/2 CRT directive scan: every CRT-bearing .lib must carry LIBCMT/LIBCPMT =="
+# Three-way classification, NOT two-way. The naive version ("must carry the static marker, else FAIL")
+# false-positives on import libraries: an import lib (e.g. executorch_djl.lib, generated beside the
+# DLL) holds import descriptor records rather than COFF objects, so it carries no linker directives at
+# all and legitimately has no CRT opinion to state.
+#
+# The classification keys on whether the archive states a CRT at all, never on its filename:
+#   dumpbin fails            -> FAIL   (the condition this gate exists to notice; never swallowed)
+#   no DEFAULTLIB: whatever  -> SKIP   (import library, or /Zl) — counted and printed, never silent
+#   has DEFAULTLIB:          -> must be static, must not be dynamic
+# This cannot let a /MD library through: a /MD archive DOES carry DEFAULTLIB:MSVCRT, so it lands in
+# the third bucket and fails there.
+scanned=0; skipped=0
 while IFS= read -r lib; do
-  libs=$((libs+1))
   name="$(basename "${lib}")"
   set +e
   out="$(dumpbin -nologo -directives "${lib}" 2>&1)"; drc=$?
@@ -704,6 +724,11 @@ while IFS= read -r lib; do
     head -5 <<< "${out}" | sed 's/^/          /'
     rc=1; continue
   fi
+  if ! grep -qi 'DEFAULTLIB:' <<< "${out}"; then
+    echo "  skip  ${name} (no linker directives — import library or /Zl)"
+    skipped=$((skipped+1)); continue
+  fi
+  scanned=$((scanned+1))
   # Positive assertion. A C-only lib carries LIBCMT with no LIBCPMT, so the pattern is an OR.
   if grep -qiE 'DEFAULTLIB:"?(LIBCMT|LIBCPMT)' <<< "${out}"; then
     if grep -qiE 'DEFAULTLIB:"?(MSVCRT|MSVCPRT)' <<< "${out}"; then
@@ -712,18 +737,21 @@ while IFS= read -r lib; do
       echo "  ok    ${name}"
     fi
   else
-    echo "  FAIL  ${name} -> no LIBCMT/LIBCPMT marker"; rc=1
+    echo "  FAIL  ${name} -> states a CRT but not a static one"; rc=1
   fi
 done < <(find "${BUILD_DIR}" -name '*.lib' -type f)
 
-# A scan that inspected zero libraries must not report success.
-if [ "${libs}" -eq 0 ]; then
-  echo "FAIL: no .lib files found under ${BUILD_DIR} — the scan proved nothing" >&2
+echo "  -- ${scanned} libs asserted, ${skipped} skipped"
+# A scan that asserted nothing must not report success. Guarding on `scanned` rather than on the file
+# count is deliberate: a tree containing only import libraries would otherwise pass having proved
+# nothing at all.
+if [ "${scanned}" -eq 0 ]; then
+  echo "FAIL: no CRT-bearing .lib found under ${BUILD_DIR} — the scan asserted nothing" >&2
   rc=1
 fi
 
 if [ -z "${DLL}" ]; then
-  [ "${rc}" -eq 0 ] && echo "PASS: static CRT across ${libs} libs in ${BUILD_DIR} (no DLL to check)" \
+  [ "${rc}" -eq 0 ] && echo "PASS: static CRT across ${scanned} libs in ${BUILD_DIR} (no DLL to check)" \
                     || echo "FAIL: windows CRT check"
   exit "${rc}"
 fi
