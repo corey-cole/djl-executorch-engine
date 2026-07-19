@@ -33,9 +33,26 @@ them from Linux.
 | Check | Result |
 |---|---|
 | File trees, dynamic vs static | **Identical** — same 20 `.lib` files, same `lib/cmake/ExecuTorch` (no `tokenizers`/`absl`/`re2`/`pcre2`, no `ETNPExtras`, on either row) |
-| CRT directives (`strings` over the `.lib`s, grepping `DEFAULTLIB`) | dynamic: 1288× `MSVCRT`, static: 1288× `LIBCMT`; zero crossover in either direction |
+| CRT directives, **per library** | All 20 libraries individually carry the expected marker: static → `LIBCMT`/`LIBCPMT` on 20/20, dynamic → `MSVCRT`/`MSVCPRT` on 20/20. Zero libraries carrying both, zero carrying neither, in either tarball. |
 | static `BUILDINFO` | `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`, `CMAKE_BUILD_TYPE=Release`, `EXECUTORCH_BUILD_XNNPACK=ON`, `toolchain=msvc-2022`, `torch_version=2.12.0+cpu` |
 | static tarball SHA256 | matches the `EtRuntimePin.cmake` asset from `v1.3.1-8` |
+
+**Method, and what it does not cover.** The CRT check above was run from Linux with `strings -a` over
+each archive, grepping `DEFAULTLIB:` — not with `dumpbin`. MSVC records the directive as a plain
+string inside the archive, so the two agree on this question, but `strings` is a coarser instrument
+and the per-library counts were taken one archive at a time specifically so that "no dynamic marker
+anywhere" could not be confused with "every library carries a static marker" — those are different
+claims and only the second is load-bearing.
+
+Two limits on the scope of this evidence:
+
+- It covers the **downloaded runtime** only. The engine's own objects — the shim, `et_runtime`, and
+  the FetchContent'd Catch2 — do not exist until a Windows build runs, and are covered by §5.1's gate
+  instead.
+- Every archive here is a real static library. The **import library** produced beside the DLL
+  (`executorch_djl.lib`) is a different kind of file: it holds import descriptor records rather than
+  COFF objects, so it carries no linker directives and states no CRT. Any scan over a build tree must
+  classify that case explicitly rather than treating a missing marker as a failure — see §5.1.
 
 Two consequences that shape the design:
 
@@ -198,10 +215,22 @@ The work order's A5 asks for a load test on a Windows image that has never had a
 redistributable or Visual Studio installed. **No such machine is available**, and a dev box proves
 nothing because it already has the runtime. Two static gates substitute:
 
-- **CRT directive scan** over the shim's own `.lib`, adapted from the producer repo's
-  `scripts/check-windows-crt.sh`. Expect `LIBCMT`/`LIBCPMT`.
+- **CRT directive scan** over the build trees, adapted from the producer repo's
+  `scripts/check-windows-crt.sh`. Expect `LIBCMT`/`LIBCPMT`. Run against **both** trees: the shim
+  (`native/build`) and the QA tree (`native/asan`). The second is not optional — it is the only tree
+  containing Catch2, which arrives via `FetchContent` and is therefore the one target whose CRT the
+  project does not set directly, making it the most likely place for propagation to regress.
 - **Import-table assertion**: `dumpbin -dependents` on the built DLL shows no `VCRUNTIME140.dll` and
-  no `MSVCP140.dll`.
+  no `MSVCP140.dll`. Applies to the shim tree only; the QA tree produces a test executable, not a DLL.
+
+The scan must classify each archive three ways, not two. A `dumpbin` failure is a **failure** — that
+is the exact condition the gate exists to catch. An archive that emits no `DEFAULTLIB:` directive of
+any kind is **skipped and counted**: the import library beside the DLL states no CRT, and treating
+that as a violation would make the gate fail on a correct build. Everything that does state a CRT
+must state a static one. Classifying on the archive's structure rather than its filename keeps this
+robust, and it cannot pass a `/MD` library, which does carry `DEFAULTLIB:MSVCRT`. The zero-result
+guard counts libraries **asserted**, not files found, so a tree containing only import libraries fails
+rather than passing having proved nothing.
 
 Both rules the producer script paid for in debugging time carry over verbatim:
 
