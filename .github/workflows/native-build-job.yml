@@ -139,6 +139,20 @@ jobs:
           & $bash -c './native/build_qa.sh'
           if ($LASTEXITCODE -ne 0) { throw "shim QA failed (exit $LASTEXITCODE)" }
 
+      # Stands in for the clean-image redist test, which we have no machine to run: asserts the CRT
+      # directives across the shim tree and that the DLL imports no VCRUNTIME/MSVCP. Runs before the
+      # upload so a dynamically-linked DLL is never published as an artifact.
+      - name: Assert the shim links the static CRT (MSVC)
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -property installationPath
+          if (-not $vsPath) { throw "vswhere found no Visual Studio installation" }
+          & "$vsPath\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -SkipAutomaticLocation
+          $bash = "${env:ProgramFiles}\Git\bin\bash.exe"
+          & $bash -c './native/tests/check_windows_crt.sh native/build src/main/resources/native/windows-x86_64/executorch_djl.dll'
+          if ($LASTEXITCODE -ne 0) { throw "windows CRT check failed (exit $LASTEXITCODE)" }
+
       - name: Store executorch_djl shim
         uses: actions/upload-artifact@v7
         with:

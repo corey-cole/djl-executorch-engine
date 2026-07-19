@@ -46,6 +46,14 @@ if [ "${ET_HOST_OS}" = "windows" ]; then
     -DCMAKE_BUILD_TYPE=RelWithDebInfo
   cmake --build native/asan --target et_runtime_test -j"${JOBS}"
 
+  # Catch2 comes in via FetchContent, so it is the one target whose CRT we do not set directly — the
+  # global CMAKE_MSVC_RUNTIME_LIBRARY has to propagate into a subproject to reach it. A /MD Catch2
+  # inside this /MT test exe links with no LNK2038 and not even an LNK4098, then corrupts the heap at
+  # runtime. Assert it here, before running the suite, so the failure names its own cause instead of
+  # surfacing as an inexplicable Catch2 crash. No DLL argument: this tree builds a test exe, not a DLL.
+  echo "--- CRT check: QA tree must be uniformly static (/MT) ---"
+  bash native/tests/check_windows_crt.sh native/asan
+
   echo "--- Catch2 unit suite (no sanitizers; MSVC has no LSan) ---"
   ./native/asan/et_runtime_test.exe
   echo "--- Leak harness SKIPPED: no LeakSanitizer under MSVC (Linux-only coverage) ---"

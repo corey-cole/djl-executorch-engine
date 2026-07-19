@@ -40,6 +40,19 @@ awk '/^  build-executorch-shim-windows:/{f=1} f' "${WFJOB}" \
   | grep -q 'logging-windows-x86_64-static' \
   || fail "windows provenance gate must attest the -static tarball"
 
+# The CRT gate is what stands in for the (unavailable) clean-image test, so its absence from the
+# windows job would silently remove the only evidence behind the "no VC++ redist needed" claim.
+awk '/^  build-executorch-shim-windows:/{f=1} f' "${WFJOB}" \
+  | grep -q 'check_windows_crt.sh' \
+  || fail "windows CRT gate missing (check_windows_crt.sh not invoked in the windows job)"
+
+# The QA tree needs its own scan: the workflow step above covers native/build (the shim), which does
+# not contain Catch2. Scoped to build_qa.sh's windows branch — the linux branch neither has nor needs
+# this, so an unscoped grep would stay green if the windows call were deleted.
+awk '/ET_HOST_OS.*=.*"windows"/{f=1} f' native/build_qa.sh \
+  | grep -q 'check_windows_crt.sh native/asan' \
+  || fail "build_qa.sh windows branch must scan the QA tree (Catch2 CRT)"
+
 # Python is optional; if present, assert the file is valid YAML.
 if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
   python3 -c "import yaml,sys; yaml.safe_load(open('${WF}')); yaml.safe_load(open('${WFJOB}')); print('yaml ok')" \
