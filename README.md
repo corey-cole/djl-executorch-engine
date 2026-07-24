@@ -26,6 +26,33 @@ on first load to a content-addressed cache — `%LOCALAPPDATA%\executorch-djl\<s
 `$XDG_CACHE_HOME` (or `~/.cache`) `/executorch-djl/<sha256>/` elsewhere. Set `EXECUTORCH_LIBRARY_PATH` to
 load a specific library instead and bypass extraction entirely.
 
+### Declaring the dependency
+
+The native jars are published as Gradle variants with per-platform capabilities, so Gradle consumers
+should request the platform by capability rather than by classifier:
+
+```kotlin
+dependencies {
+    implementation("org.measly:djl-executorch-engine:<version>")
+    runtimeOnly("org.measly:djl-executorch-engine:<version>") {
+        capabilities { requireCapability("org.measly:djl-executorch-engine-linux-x86_64") }
+    }
+}
+```
+
+Swap `linux-x86_64` for `windows-x86_64` (or add both) as needed. Maven consumers add the
+classifier form alongside the main (classifier-less) dependency:
+
+```xml
+<dependency>
+    <groupId>org.measly</groupId>
+    <artifactId>djl-executorch-engine</artifactId>
+    <version>&lt;version&gt;</version>
+    <classifier>linux-x86_64</classifier>
+    <scope>runtime</scope>
+</dependency>
+```
+
 Windows is built with MSVC 2022 against the `logging` runtime variant; `bare` and `devtools` are
 Linux-only benchmarking builds (see `native/build_variants.sh`).
 
