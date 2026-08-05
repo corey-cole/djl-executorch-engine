@@ -30,7 +30,7 @@ dependencies {
 }
 
 tasks.test {
-    useJUnitPlatform { excludeTags("leak") }
+    useJUnitPlatform { excludeTags("leak", "oom") }
     jvmArgs("-XX:+HeapDumpOnOutOfMemoryError")
     finalizedBy(tasks.jacocoTestReport)
 }
@@ -55,6 +55,15 @@ tasks.register<Test>("leakTest") {
     classpath = sourceSets["test"].runtimeClasspath
     useJUnitPlatform { includeTags("leak") }
     jvmArgs("-Xmx256m", "-XX:MaxDirectMemorySize=64m", "-XX:+HeapDumpOnOutOfMemoryError")
+}
+
+tasks.register<Test>("oomTest") {
+    description = "JNI output-marshalling failure-contract tests under a constrained heap."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("oom") }
+    jvmArgs("-Xmx128m")   // deliberately NO HeapDumpOnOutOfMemoryError: the OOM is the expected outcome
 }
 
 tasks.jacocoTestReport {

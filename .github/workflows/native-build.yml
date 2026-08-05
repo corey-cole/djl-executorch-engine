@@ -49,6 +49,7 @@ jobs:
               ./gradlew build
               ./gradlew test
               ./gradlew leakTest
+              ./gradlew oomTest
         
         - run: tree -h -P "*.xml" --matchdirs build/reports/jacoco
         

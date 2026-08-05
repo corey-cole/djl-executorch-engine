@@ -62,4 +62,19 @@ public final class TestSupport {
             Assumptions.abort("etnp::lstm op is linux-x86_64 only; skipping on " + os + "/" + arch);
         }
     }
+
+    /** Skips the test (assumption) if the native lib or the large-output fixture is unavailable. */
+    public static void assumeMedOutputModelAvailable() {
+        loadNativeLibrary();
+        if (!isModelArtifactAvailable("native/spike/med_output.pte")) {
+            Assumptions.abort(
+                    "Test model native/spike/med_output.pte not found"
+                            + " (build it via native/spike/export_med_output.py).");
+        }
+    }
+
+    /** Absolute path to the large-output spike test model. */
+    public static String medOutputPtePath() {
+        return new File("native/spike/med_output.pte").getAbsolutePath();
+    }
 }
