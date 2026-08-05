@@ -64,7 +64,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   if (g_etMethodMetaClass == nullptr) {
     return JNI_ERR;
   }
-  g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I)V");
+  g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I[Z)V");
   if (g_metaCtor == nullptr) {
     return JNI_ERR;
   }
@@ -131,7 +131,16 @@ Java_org_measly_executorch_jni_EtNative_methodMeta(JNIEnv* env, jclass, jlong ha
     tmp[i] = static_cast<jint>(meta.inputScalarTypes[i]);
   }
   env->SetIntArrayRegion(types, 0, n, tmp.data());
-  return env->NewObject(g_etMethodMetaClass, g_metaCtor, static_cast<jint>(n), types);
+  jbooleanArray planned = env->NewBooleanArray(n);
+  if (planned == nullptr) {
+    return nullptr;  // OOM: exception already pending
+  }
+  std::vector<jboolean> p(n);
+  for (jsize i = 0; i < n; ++i) {
+    p[i] = meta.inputMemoryPlanned[i] ? JNI_TRUE : JNI_FALSE;
+  }
+  env->SetBooleanArrayRegion(planned, 0, n, p.data());
+  return env->NewObject(g_etMethodMetaClass, g_metaCtor, static_cast<jint>(n), types, planned);
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL

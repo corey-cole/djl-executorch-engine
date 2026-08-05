@@ -30,7 +30,8 @@ tasks.test { useJUnitPlatform() }
 // Model artifacts are generated on demand into this directory (see the exportModels task, Task 3).
 val modelsDir = layout.buildDirectory.dir("models")
 
-val exportModels by tasks.registering(Exec::class) {
+//val exportModels by tasks.registering(Exec::class) {
+val exportModels = tasks.register<Exec>("exportModels") {
     group = "build"
     description = "Generate MobileNetV2 .pte + .pt via uv (heavy; needs uv on PATH)."
     val out = modelsDir.get().asFile
@@ -49,6 +50,15 @@ val exportModels by tasks.registering(Exec::class) {
 // Pass the models directory to the JVM so ModelArtifacts can resolve it at runtime.
 tasks.named<JavaExec>("run") {
     systemProperty("example.models.dir", modelsDir.get().asFile.absolutePath)
+}
+
+// The plugin's standard fat jar writes META-INF/services/ai.djl.engine.EngineProvider
+// twice — this project's ExecuTorch provider and djl-api's built-in RPC provider — as two
+// separate zip entries. java.util.zip.ZipFile resolves duplicate names last-entry-wins.
+// EXCLUDE keeps the first entry; project classes are added before the runtime
+// classpath, so the surviving entry is the ExecuTorch provider.
+tasks.named<Jar>("jmhJar") {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
 jmh {
