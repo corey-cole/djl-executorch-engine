@@ -24,10 +24,14 @@ static jmethodID g_metaCtor = nullptr;
 static jclass g_byteBufferClass = nullptr;
 static jmethodID g_byteBufferWrap = nullptr;
 
+static jclass g_runtimeExceptionClass = nullptr;
+static jclass g_illegalArgumentExceptionClass = nullptr;
+
 // Translate a C++ exception into a Java RuntimeException. Call from a catch block.
+// The class is cached at JNI_OnLoad: a per-call FindClass here would itself be UB when an
+// exception is already pending (FindClass fails -> null passed to ThrowNew).
 static void throwJava(JNIEnv* env, const char* fallback, const std::exception* e) {
-  jclass cls = env->FindClass("java/lang/RuntimeException");
-  env->ThrowNew(cls, e ? e->what() : fallback);
+  env->ThrowNew(g_runtimeExceptionClass, e ? e->what() : fallback);
 }
 
 // FindClass -> NewGlobalRef -> DeleteLocalRef. Returns a process-lifetime global ref, or nullptr
@@ -75,6 +79,15 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   }
   g_byteBufferWrap = env->GetStaticMethodID(g_byteBufferClass, "wrap", "([B)Ljava/nio/ByteBuffer;");
   if (g_byteBufferWrap == nullptr) {
+    return JNI_ERR;
+  }
+
+  g_runtimeExceptionClass = cacheGlobalClass(env, "java/lang/RuntimeException");
+  if (g_runtimeExceptionClass == nullptr) {
+    return JNI_ERR;
+  }
+  g_illegalArgumentExceptionClass = cacheGlobalClass(env, "java/lang/IllegalArgumentException");
+  if (g_illegalArgumentExceptionClass == nullptr) {
     return JNI_ERR;
   }
 
@@ -157,7 +170,7 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
 
     void* addr = env->GetDirectBufferAddress(jbuf);
     if (addr == nullptr) {
-      env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),
+      env->ThrowNew(g_illegalArgumentExceptionClass,
                     "EtTensor.data must be a direct ByteBuffer");
       return nullptr;
     }
