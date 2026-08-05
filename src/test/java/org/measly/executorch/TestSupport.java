@@ -20,6 +20,11 @@ public final class TestSupport {
         return new File(path).isFile();
     }
 
+    /** Skips the test if the native library itself is unavailable (no model fixture needed). */
+    public static void assumeNativeLibraryAvailable() {
+        loadNativeLibrary();
+    }
+
     /** Skips the test (assumption) if the native lib or the test model fixture is unavailable. */
     public static void assumeNativeAvailable() {
         loadNativeLibrary();
@@ -33,6 +38,23 @@ public final class TestSupport {
     /** Absolute path to the spike test model. */
     public static String addPtePath() {
         return new File("native/spike/add.pte").getAbsolutePath();
+    }
+
+    /** Absolute path to the borrowed-input add model (exported with alloc_graph_input=False). */
+    public static String addUnplannedPtePath() {
+        return new File("native/spike/add_unplanned.pte").getAbsolutePath();
+    }
+
+    /**
+     * Skips the test (assumption) if the native lib or the unplanned add fixture is unavailable.
+     */
+    public static void assumeUnplannedModelAvailable() {
+        loadNativeLibrary();
+        if (!isModelArtifactAvailable("native/spike/add_unplanned.pte")) {
+            Assumptions.abort(
+                    "Test model native/spike/add_unplanned.pte not found"
+                            + " (build it via native/spike/export_add_unplanned.py).");
+        }
     }
 
     /**
@@ -61,5 +83,20 @@ public final class TestSupport {
         if (!linuxX64) {
             Assumptions.abort("etnp::lstm op is linux-x86_64 only; skipping on " + os + "/" + arch);
         }
+    }
+
+    /** Skips the test (assumption) if the native lib or the large-output fixture is unavailable. */
+    public static void assumeMedOutputModelAvailable() {
+        loadNativeLibrary();
+        if (!isModelArtifactAvailable("native/spike/med_output.pte")) {
+            Assumptions.abort(
+                    "Test model native/spike/med_output.pte not found"
+                            + " (build it via native/spike/export_med_output.py).");
+        }
+    }
+
+    /** Absolute path to the large-output spike test model. */
+    public static String medOutputPtePath() {
+        return new File("native/spike/med_output.pte").getAbsolutePath();
     }
 }

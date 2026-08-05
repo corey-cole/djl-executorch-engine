@@ -94,4 +94,9 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
     boolean isClosed() {
         return handle == 0;
     }
+
+    /** @return the metadata captured at load (test seam, mirrors {@link #isClosed()}). */
+    EtMethodMeta meta() {
+        return meta;
+    }
 }

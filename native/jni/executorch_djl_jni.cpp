@@ -7,6 +7,7 @@
 
 #include "et_runtime.h"
 #include "et_logging.h"
+#include "array_size_limits.h"
 
 using measly::et::EtRuntime;
 using measly::et::InputDesc;
@@ -24,10 +25,24 @@ static jmethodID g_metaCtor = nullptr;
 static jclass g_byteBufferClass = nullptr;
 static jmethodID g_byteBufferWrap = nullptr;
 
+static jclass g_runtimeExceptionClass = nullptr;
+static jclass g_illegalArgumentExceptionClass = nullptr;
+
 // Translate a C++ exception into a Java RuntimeException. Call from a catch block.
+// The class is cached at JNI_OnLoad: a per-call FindClass here would itself be UB when an
+// exception is already pending (FindClass fails -> null passed to ThrowNew).
 static void throwJava(JNIEnv* env, const char* fallback, const std::exception* e) {
-  jclass cls = env->FindClass("java/lang/RuntimeException");
-  env->ThrowNew(cls, e ? e->what() : fallback);
+  env->ThrowNew(g_runtimeExceptionClass, e ? e->what() : fallback);
+}
+
+// Throw IllegalArgumentException from a JNI input check. FindClass is null-checked: it can
+// fail only when an exception is already pending, and that pending exception propagates instead.
+static void throwIllegalArgument(JNIEnv* env, const char* msg) {
+  jclass cls = env->FindClass("java/lang/IllegalArgumentException");
+  if (cls != nullptr) {
+    env->ThrowNew(cls, msg);
+    env->DeleteLocalRef(cls);
+  }
 }
 
 // FindClass -> NewGlobalRef -> DeleteLocalRef. Returns a process-lifetime global ref, or nullptr
@@ -64,7 +79,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   if (g_etMethodMetaClass == nullptr) {
     return JNI_ERR;
   }
-  g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I)V");
+  g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I[Z)V");
   if (g_metaCtor == nullptr) {
     return JNI_ERR;
   }
@@ -75,6 +90,15 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   }
   g_byteBufferWrap = env->GetStaticMethodID(g_byteBufferClass, "wrap", "([B)Ljava/nio/ByteBuffer;");
   if (g_byteBufferWrap == nullptr) {
+    return JNI_ERR;
+  }
+
+  g_runtimeExceptionClass = cacheGlobalClass(env, "java/lang/RuntimeException");
+  if (g_runtimeExceptionClass == nullptr) {
+    return JNI_ERR;
+  }
+  g_illegalArgumentExceptionClass = cacheGlobalClass(env, "java/lang/IllegalArgumentException");
+  if (g_illegalArgumentExceptionClass == nullptr) {
     return JNI_ERR;
   }
 
@@ -131,7 +155,16 @@ Java_org_measly_executorch_jni_EtNative_methodMeta(JNIEnv* env, jclass, jlong ha
     tmp[i] = static_cast<jint>(meta.inputScalarTypes[i]);
   }
   env->SetIntArrayRegion(types, 0, n, tmp.data());
-  return env->NewObject(g_etMethodMetaClass, g_metaCtor, static_cast<jint>(n), types);
+  jbooleanArray planned = env->NewBooleanArray(n);
+  if (planned == nullptr) {
+    return nullptr;  // OOM: exception already pending
+  }
+  std::vector<jboolean> p(n);
+  for (jsize i = 0; i < n; ++i) {
+    p[i] = meta.inputMemoryPlanned[i] ? JNI_TRUE : JNI_FALSE;
+  }
+  env->SetBooleanArrayRegion(planned, 0, n, p.data());
+  return env->NewObject(g_etMethodMetaClass, g_metaCtor, static_cast<jint>(n), types, planned);
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL
@@ -145,7 +178,15 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
   // addresses below remain valid through rt->forward().
   for (jsize i = 0; i < nIn; ++i) {
     jobject jt = env->GetObjectArrayElement(jinputs, i);
+    if (jt == nullptr) {
+      throwIllegalArgument(env, ("EtTensor[" + std::to_string(i) + "] is null").c_str());
+      return nullptr;
+    }
     auto jshape = static_cast<jlongArray>(env->GetObjectField(jt, g_fShape));
+    if (jshape == nullptr) {
+      throwIllegalArgument(env, "EtTensor.shape is null");
+      return nullptr;
+    }
     jint st = env->GetIntField(jt, g_fScalarType);
     jobject jbuf = env->GetObjectField(jt, g_fData);
 
@@ -157,7 +198,7 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
 
     void* addr = env->GetDirectBufferAddress(jbuf);
     if (addr == nullptr) {
-      env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),
+      env->ThrowNew(g_illegalArgumentExceptionClass,
                     "EtTensor.data must be a direct ByteBuffer");
       return nullptr;
     }
@@ -173,11 +214,21 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
     auto outs = result.outputs();
     jsize nOut = static_cast<jsize>(outs.size());
     jobjectArray jout = env->NewObjectArray(nOut, g_etTensorClass, nullptr);
+    if (jout == nullptr) {
+      return nullptr;  // OOM: exception already pending
+    }
 
     for (jsize i = 0; i < nOut; ++i) {
       const auto& v = outs[i];
+      if (measly::et::exceedsJniByteArrayLimit(v.nbytes)) {
+        throwJava(env, "ExecuTorch output exceeds the 2GB JNI array limit", nullptr);
+        return nullptr;
+      }
       jsize ndim = static_cast<jsize>(v.shape.size());
       jlongArray jshape = env->NewLongArray(ndim);
+      if (jshape == nullptr) {
+        return nullptr;  // OOM: exception already pending
+      }
       {
         std::vector<jlong> sh(ndim);
         for (jsize k = 0; k < ndim; ++k) {
@@ -187,11 +238,20 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
       }
       jsize nbytes = static_cast<jsize>(v.nbytes);
       jbyteArray jbytes = env->NewByteArray(nbytes);
+      if (jbytes == nullptr) {
+        return nullptr;  // OOM: exception already pending
+      }
       env->SetByteArrayRegion(jbytes, 0, nbytes, reinterpret_cast<const jbyte*>(v.data));
       jobject jbuf = env->CallStaticObjectMethod(g_byteBufferClass, g_byteBufferWrap, jbytes);
+      if (env->ExceptionCheck()) {
+        return nullptr;  // ByteBuffer.wrap failed; exception pending
+      }
 
       jobject obj = env->NewObject(g_etTensorClass, g_ctor, jshape,
                                    static_cast<jint>(v.scalarType), jbuf);
+      if (obj == nullptr) {
+        return nullptr;  // OOM: exception already pending
+      }
       env->SetObjectArrayElement(jout, i, obj);
 
       env->DeleteLocalRef(jshape);

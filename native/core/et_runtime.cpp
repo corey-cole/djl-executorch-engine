@@ -42,16 +42,16 @@ MethodMeta EtRuntime::methodMeta() const {
   const int n = static_cast<int>(meta->num_inputs());
   MethodMeta out;
   out.numInputs = n;
-  out.inputScalarTypes.resize(n);
-  out.inputShapes.resize(n);
+  out.inputScalarTypes.resize(n, -1);  // non-tensor inputs keep -1
+  out.inputShapes.resize(n);           // non-tensor inputs keep empty
+  out.inputMemoryPlanned.resize(n, 0); // non-tensor inputs keep 0 (no TensorInfo exists)
   for (int i = 0; i < n; ++i) {
     auto info = meta->input_tensor_meta(i);
     if (info.ok()) {
       out.inputScalarTypes[i] = static_cast<int8_t>(info->scalar_type());
       auto sizes = info->sizes();  // Span<const int32_t>
       out.inputShapes[i].assign(sizes.begin(), sizes.end());
-    } else {
-      out.inputScalarTypes[i] = -1;  // non-tensor input; inputShapes[i] left empty
+      out.inputMemoryPlanned[i] = info->is_memory_planned() ? 1 : 0;
     }
   }
   return out;

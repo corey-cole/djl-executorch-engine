@@ -15,6 +15,21 @@ class EtMethodMetaTest {
             EtMethodMeta meta = EtNative.methodMeta(handle);
             assertEquals(2, meta.numInputs);
             assertArrayEquals(new int[] {6, 6}, meta.inputScalarTypes); // two float32 inputs
+            assertArrayEquals(new boolean[] {true, true}, meta.inputMemoryPlanned);
+        } finally {
+            EtNative.destroy(handle);
+        }
+    }
+
+    @Test
+    void readsUnplannedAddModelMetadata() {
+        TestSupport.assumeUnplannedModelAvailable();
+        long handle = EtNative.loadModule(TestSupport.addUnplannedPtePath());
+        try {
+            EtMethodMeta meta = EtNative.methodMeta(handle);
+            assertEquals(2, meta.numInputs);
+            assertArrayEquals(new int[] {6, 6}, meta.inputScalarTypes); // same add model
+            assertArrayEquals(new boolean[] {false, false}, meta.inputMemoryPlanned);
         } finally {
             EtNative.destroy(handle);
         }
