@@ -35,6 +35,9 @@ struct MethodMeta {
   int numInputs;
   std::vector<int8_t> inputScalarTypes;           // -1 for a non-tensor input
   std::vector<std::vector<int64_t>> inputShapes;   // per tensor input; empty for non-tensor (-1)
+  // 1 = memory-planned: ExecuTorch copies this input into its arena at set_input; 0 = borrowed
+  // pointer. Non-tensor inputs are 0 (no TensorInfo exists).
+  std::vector<uint8_t> inputMemoryPlanned;
 };
 
 struct ForwardState;  // pimpl

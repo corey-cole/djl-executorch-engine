@@ -72,6 +72,8 @@ class EtModelTest {
                         model.getBlock()
                                 .forward(null, new NDList(a, b), false);
                 assertArrayEquals(new float[] {5f}, out.singletonOrThrow().toFloatArray());
+                EtSymbolBlock block = (EtSymbolBlock) model.getBlock();
+                assertArrayEquals(new boolean[] {true, true}, block.meta().inputMemoryPlanned);
             }
         }
     }

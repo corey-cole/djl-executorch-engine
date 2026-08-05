@@ -6,6 +6,8 @@ import ai.djl.ndarray.NDManager;
 import ai.djl.ndarray.types.DataType;
 import org.measly.executorch.jni.EtMethodMeta;
 import org.measly.executorch.jni.EtNative;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -15,6 +17,8 @@ import java.util.Map;
 
 /** ExecuTorch {@link ai.djl.Model}: loads a .pte and owns its native handle via the block. */
 public class EtModel extends BaseModel {
+
+    private static final Logger logger = LoggerFactory.getLogger(EtModel.class);
 
     private static final String PTE_SUFFIX = ".pte";
 
@@ -52,6 +56,9 @@ public class EtModel extends BaseModel {
             throw e;
         }
         block = new EtSymbolBlock(handle, (EtNDManager) manager, meta);
+        for (int i = 0; i < meta.numInputs; i++) {
+            logger.info("model {} input {} memoryPlanned={}", getName(), i, meta.inputMemoryPlanned[i]);
+        }
         wasLoaded = true;
     }
 

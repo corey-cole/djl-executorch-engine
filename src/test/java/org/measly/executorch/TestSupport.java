@@ -40,6 +40,23 @@ public final class TestSupport {
         return new File("native/spike/add.pte").getAbsolutePath();
     }
 
+    /** Absolute path to the borrowed-input add model (exported with alloc_graph_input=False). */
+    public static String addUnplannedPtePath() {
+        return new File("native/spike/add_unplanned.pte").getAbsolutePath();
+    }
+
+    /**
+     * Skips the test (assumption) if the native lib or the unplanned add fixture is unavailable.
+     */
+    public static void assumeUnplannedModelAvailable() {
+        loadNativeLibrary();
+        if (!isModelArtifactAvailable("native/spike/add_unplanned.pte")) {
+            Assumptions.abort(
+                    "Test model native/spike/add_unplanned.pte not found"
+                            + " (build it via native/spike/export_add_unplanned.py).");
+        }
+    }
+
     /**
      * Skips the test (assumption) if the native lib or the dtypes multi-dtype fixture is
      * unavailable.

@@ -31,6 +31,24 @@ TEST_CASE("methodMeta: add has two float32 tensor inputs of shape [1]") {
   REQUIRE(meta.inputShapes.size() == 2);
   REQUIRE(meta.inputShapes[0] == std::vector<int64_t>{1});
   REQUIRE(meta.inputShapes[1] == std::vector<int64_t>{1});
+  REQUIRE(meta.inputMemoryPlanned.size() == 2);
+  REQUIRE(meta.inputMemoryPlanned[0] == 1);
+  REQUIRE(meta.inputMemoryPlanned[1] == 1);
+}
+
+#ifndef ADD_UNPLANNED_PTE_PATH
+#define ADD_UNPLANNED_PTE_PATH "add_unplanned.pte"
+#endif
+
+TEST_CASE("methodMeta: add_unplanned inputs are borrowed (not memory-planned)") {
+  EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
+  MethodMeta meta = rt.methodMeta();
+  REQUIRE(meta.numInputs == 2);
+  REQUIRE(meta.inputScalarTypes[0] == 6);
+  REQUIRE(meta.inputScalarTypes[1] == 6);  // same model, different memory plan
+  REQUIRE(meta.inputMemoryPlanned.size() == 2);
+  REQUIRE(meta.inputMemoryPlanned[0] == 0);
+  REQUIRE(meta.inputMemoryPlanned[1] == 0);
 }
 
 TEST_CASE("forward: add(2,3) == 5 with correct view metadata") {
