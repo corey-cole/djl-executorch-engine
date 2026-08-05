@@ -7,6 +7,7 @@
 
 #include "et_runtime.h"
 #include "et_logging.h"
+#include "array_size_limits.h"
 
 using measly::et::EtRuntime;
 using measly::et::InputDesc;
@@ -176,6 +177,10 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
 
     for (jsize i = 0; i < nOut; ++i) {
       const auto& v = outs[i];
+      if (measly::et::exceedsJniByteArrayLimit(v.nbytes)) {
+        throwJava(env, "ExecuTorch output exceeds the 2GB JNI array limit", nullptr);
+        return nullptr;
+      }
       jsize ndim = static_cast<jsize>(v.shape.size());
       jlongArray jshape = env->NewLongArray(ndim);
       {
