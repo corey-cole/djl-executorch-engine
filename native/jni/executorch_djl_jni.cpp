@@ -173,11 +173,17 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
     auto outs = result.outputs();
     jsize nOut = static_cast<jsize>(outs.size());
     jobjectArray jout = env->NewObjectArray(nOut, g_etTensorClass, nullptr);
+    if (jout == nullptr) {
+      return nullptr;  // OOM: exception already pending
+    }
 
     for (jsize i = 0; i < nOut; ++i) {
       const auto& v = outs[i];
       jsize ndim = static_cast<jsize>(v.shape.size());
       jlongArray jshape = env->NewLongArray(ndim);
+      if (jshape == nullptr) {
+        return nullptr;  // OOM: exception already pending
+      }
       {
         std::vector<jlong> sh(ndim);
         for (jsize k = 0; k < ndim; ++k) {
@@ -187,11 +193,20 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
       }
       jsize nbytes = static_cast<jsize>(v.nbytes);
       jbyteArray jbytes = env->NewByteArray(nbytes);
+      if (jbytes == nullptr) {
+        return nullptr;  // OOM: exception already pending
+      }
       env->SetByteArrayRegion(jbytes, 0, nbytes, reinterpret_cast<const jbyte*>(v.data));
       jobject jbuf = env->CallStaticObjectMethod(g_byteBufferClass, g_byteBufferWrap, jbytes);
+      if (env->ExceptionCheck()) {
+        return nullptr;  // ByteBuffer.wrap failed; exception pending
+      }
 
       jobject obj = env->NewObject(g_etTensorClass, g_ctor, jshape,
                                    static_cast<jint>(v.scalarType), jbuf);
+      if (obj == nullptr) {
+        return nullptr;  // OOM: exception already pending
+      }
       env->SetObjectArrayElement(jout, i, obj);
 
       env->DeleteLocalRef(jshape);
