@@ -4,8 +4,10 @@
 #include <vector>
 
 #include "et_log_level.h"
+#include "et_probes.h"
 #include "et_runtime.h"
 #include "array_size_limits.h"
+#include "staging.h"
 
 using namespace measly::et;
 
@@ -91,4 +93,123 @@ TEST_CASE("jni byte[] size limit: outputs above INT32_MAX bytes must be rejected
   using measly::et::exceedsJniByteArrayLimit;
   REQUIRE_FALSE(exceedsJniByteArrayLimit(static_cast<size_t>(INT32_MAX)));
   REQUIRE(exceedsJniByteArrayLimit(static_cast<size_t>(INT32_MAX) + 1));
+}
+
+// --- W7: grow-only per-slot staging for unplanned inputs ---
+
+namespace {
+
+struct ProbeCounters {
+  int grow = 0;         // staging_grow fires
+  int stagedInput = 0;  // staging_input fires with staged==1
+  int totalInput = 0;   // every staging_input fire
+};
+
+ProbeCounters g_probeCounters;
+
+void countProbe(uint32_t id, uint64_t, uint64_t, uint64_t, uint64_t d) {
+  switch (id) {
+    case kProbeStagingGrow:
+      ++g_probeCounters.grow;
+      break;
+    case kProbeStagingInput:
+      ++g_probeCounters.totalInput;
+      if (d != 0) {
+        ++g_probeCounters.stagedInput;
+      }
+      break;
+  }
+}
+
+// RAII registration of the counting probe handler; reset() between scenarios.
+struct ProbeGuard {
+  ProbeGuard() {
+    reset();
+    et_probe_set_handler(countProbe);
+  }
+  ~ProbeGuard() { et_probe_clear_handler(); }
+  void reset() { g_probeCounters = ProbeCounters{}; }
+  int growCount() const { return g_probeCounters.grow; }
+  int stagedInputCount() const { return g_probeCounters.stagedInput; }
+  int totalInputCount() const { return g_probeCounters.totalInput; }
+};
+
+}  // namespace
+
+TEST_CASE("staging: ensure(kStagingPadding) yields an aligned buffer with padding slack") {
+  StagingSlot slot;
+  void* p = slot.ensure(kStagingPadding);
+  REQUIRE(p != nullptr);
+  REQUIRE(reinterpret_cast<uintptr_t>(p) % 64 == 0);
+  REQUIRE(slot.capacity() >= kStagingPadding);
+}
+
+TEST_CASE("staging: slot carries the padding slack row (100 + kStagingPadding)") {
+  StagingSlot slot;
+  slot.ensure(100 + kStagingPadding);
+  REQUIRE(slot.capacity() >= 100 + kStagingPadding);
+}
+
+TEST_CASE("staging: ensure never shrinks (no realloc when capacity suffices)") {
+  StagingSlot slot;
+  void* first = slot.ensure(64);
+  void* again = slot.ensure(32);
+  REQUIRE(again == first);
+  REQUIRE(slot.capacity() >= 64);
+}
+
+TEST_CASE("staging: grow preserves the first min(old, new) bytes") {
+  StagingSlot slot;
+  auto* buf = static_cast<uint8_t*>(slot.ensure(64));
+  for (size_t k = 0; k < 64; ++k) {
+    buf[k] = static_cast<uint8_t>(k);
+  }
+  void* grown = slot.ensure(300);
+  REQUIRE(grown != buf);
+  REQUIRE(slot.capacity() >= 300);
+  auto* g = static_cast<const uint8_t*>(grown);
+  for (size_t k = 0; k < 64; ++k) {
+    REQUIRE(g[k] == static_cast<uint8_t>(k));
+  }
+}
+
+TEST_CASE("forward: unplanned inputs are staged per slot (grow + input probes)") {
+  EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
+  float a = 2.0f, b = 3.0f;
+  std::vector<InputDesc> inputs = {{&a, {1}, 6}, {&b, {1}, 6}};
+  ProbeGuard guard;
+  ForwardResult result = rt.forward(inputs);
+  REQUIRE(*static_cast<const float*>(result.outputs()[0].data) == 5.0f);
+  REQUIRE(guard.growCount() == 2);         // one first alloc per slot, then never again
+  REQUIRE(guard.totalInputCount() == 2);   // one staging_input per tensor input
+  REQUIRE(guard.stagedInputCount() == 2);  // both staged (planned flag = 0)
+}
+
+TEST_CASE("forward: planned inputs pass through (no staging)") {
+  EtRuntime rt(ADD_PTE_PATH);
+  float a = 2.0f, b = 3.0f;
+  std::vector<InputDesc> inputs = {{&a, {1}, 6}, {&b, {1}, 6}};
+  ProbeGuard guard;
+  ForwardResult result = rt.forward(inputs);
+  REQUIRE(*static_cast<const float*>(result.outputs()[0].data) == 5.0f);
+  REQUIRE(guard.growCount() == 0);
+  REQUIRE(guard.totalInputCount() == 2);
+  REQUIRE(guard.stagedInputCount() == 0);  // pass-through: staged flag = 0
+}
+
+TEST_CASE("forward: unplanned inputs survive the caller buffer being freed (ASan lifetime)") {
+  // Under the QA tree (ASan), any retained dereference of the freed heap buffers after delete[]
+  // would trip. Staging copies into engine-owned slots, so this is clean by construction.
+  EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
+  auto* a = new float[1]{2.0f};
+  auto* b = new float[1]{3.0f};
+  std::vector<InputDesc> inputs = {{a, {1}, 6}, {b, {1}, 6}};
+  ForwardResult r1 = rt.forward(inputs);
+  REQUIRE(*static_cast<const float*>(r1.outputs()[0].data) == 5.0f);
+  delete[] a;
+  delete[] b;
+  float c = 10.0f, d = 7.0f;
+  std::vector<InputDesc> inputs2 = {{&c, {1}, 6}, {&d, {1}, 6}};
+  ForwardResult r2 = rt.forward(inputs2);
+  REQUIRE(*static_cast<const float*>(r2.outputs()[0].data) == 17.0f);
 }

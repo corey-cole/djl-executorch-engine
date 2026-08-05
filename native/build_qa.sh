@@ -79,5 +79,7 @@ else
   ./native/asan/et_runtime_test
 
   echo "--- ASan/LSan leak harness (${ITERS} iterations) ---"
-  ./native/asan/et_leak_harness native/spike/add.pte "${ITERS}"
+  ./native/asan/et_leak_harness native/spike/add.pte "${ITERS}"                # planned: grow==0, guards the runtime pin
+  ./native/asan/et_leak_harness native/spike/add_unplanned.pte "${ITERS}" 4    # grow == 2*ITERS; realloc-per-forward would give 8*ITERS
+  ./native/asan/et_leak_harness native/spike/add_unplanned.pte 1 10000         # inverted: grow == 2, isolates steady state
 fi
