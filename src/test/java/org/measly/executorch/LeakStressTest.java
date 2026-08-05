@@ -48,4 +48,30 @@ class LeakStressTest {
             }
         }
     }
+
+    /**
+     * Inference path over the unplanned (borrowed-input) variant of the same add model: W7 stages
+     * each input into an engine-owned slot, so this exercises the staging path under the OOM caps.
+     * Native staging memory is not counted against {@code -Xmx256m} / {@code -XX:MaxDirectMemorySize=64m},
+     * so the assertion is the same "does not OOM/crash" as the planned variant — the point is that
+     * the staging path must not regress the existing gates.
+     */
+    @Test
+    void inferencePathUnderPressureUnplanned() throws Exception {
+        TestSupport.assumeUnplannedModelAvailable(); // calls loadNativeLibrary(); implies assumeNativeAvailable
+        Criteria<float[], Float> criteria =
+                Criteria.builder()
+                        .setTypes(float[].class, Float.class)
+                        .optEngine("ExecuTorch")
+                        .optModelPath(Paths.get("native/spike"))
+                        .optModelName("add_unplanned")
+                        .optTranslator(new AddTranslator())
+                        .build();
+        try (ZooModel<float[], Float> model = criteria.loadModel();
+                Predictor<float[], Float> predictor = model.newPredictor()) {
+            for (int i = 0; i < 20_000; i++) {
+                predictor.predict(new float[] {1f, 2f});
+            }
+        }
+    }
 }
