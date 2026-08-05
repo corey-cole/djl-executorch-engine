@@ -5,6 +5,7 @@
 
 #include "et_log_level.h"
 #include "et_runtime.h"
+#include "array_size_limits.h"
 
 using namespace measly::et;
 
@@ -66,4 +67,10 @@ TEST_CASE("level map: ET PAL chars -> slf4j level codes") {
   REQUIRE(et_djl_level_to_slf4j('F') == kSlf4jError);  // slf4j has no FATAL
   REQUIRE(et_djl_level_to_slf4j('?') == kSlf4jWarn);
   REQUIRE(et_djl_level_to_slf4j('X') == kSlf4jInfo);   // unknown -> INFO default
+}
+
+TEST_CASE("jni byte[] size limit: outputs above INT32_MAX bytes must be rejected") {
+  using measly::et::exceedsJniByteArrayLimit;
+  REQUIRE_FALSE(exceedsJniByteArrayLimit(static_cast<size_t>(INT32_MAX)));
+  REQUIRE(exceedsJniByteArrayLimit(static_cast<size_t>(INT32_MAX) + 1));
 }

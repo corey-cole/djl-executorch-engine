@@ -1,0 +1,869 @@
+# Research Brief: The ExecuTorch Host-Buffer Contract
+
+**Status:** Proposal for feasibility assessment, opened 2026-08-04. This brief
+originated from reading `docs/iree-lessons-learned/2026-08-04-borrowed-host-buffers-findings.md`
+— the completed zero-copy spike on the sibling `djl-iree-engine` — and asking
+which of its findings transfer here. Several do. The most important one
+**inverts**, and that inversion is the reason this brief exists rather than a
+one-line "already handled" note.
+
+**Assume the reader has deep context on `djl-executorch-engine` and its
+history.** Unlike the IREE brief, this one opens with W1 already complete: the
+audit was performed on 2026-08-04 and its answer is recorded below with
+evidence. What remains open is what to *do* about it.
+
+---
+
+## 1. Context
+
+### The finding that transfers, and the finding that inverts
+
+The IREE spike asked "does the engine copy host data per inference call, and can
+it borrow instead?" It answered: IREE copies unless the host pointer is 64-byte
+aligned, the outcome is *observable* (`WRAPPED` vs `STAGED`), and — crucially —
+a misaligned pointer is **refused** at import time. IREE's conclusion was that
+misalignment is "a zero-copy miss, not a fault," which bounded the entire hazard
+class.
+
+ExecuTorch has no such refusal. That single difference reverses the risk
+profile, and it is the core of this brief.
+
+### The original claim, and its correction
+
+`native/core/et_runtime.h:13` states:
+
+```cpp
+// Borrowed input: data is a host pointer the caller keeps valid across forward(). Zero-copy in.
+```
+
+CLAUDE.md repeats it ("Zero-copy in (borrowed input pointers), single-copy
+out"), as do at least six design docs under `docs/superpowers/`. The claim is
+accurate about what *this engine* does and false about what *ExecuTorch* does
+with the pointer it is handed.
+
+`EtRuntime::forward` (`native/core/et_runtime.cpp:70-76`) builds `from_blob`
+tensors over the caller's pointers and calls `module.forward(evalues)`. That
+reaches `Module::execute` (`extension/module/module.cpp`), which calls
+`Method::set_input` per input, which branches
+(`runtime/executor/method.cpp:1244-1255`):
+
+```cpp
+auto tensor_meta = this->method_meta().input_tensor_meta(input_idx);
+if (tensor_meta->is_memory_planned()) {
+  internal::copy_tensor_data(t_dst, t_src);   // memcpy into the arena
+} else {
+  internal::share_tensor_data(t_dst, t_src);  // a real borrow: set_data(ptr)
+}
+```
+
+`is_memory_planned()` is a property baked into the `.pte` at export time by
+`MemoryPlanningPass(alloc_graph_input=...)`, whose default is `True`
+(`exir/passes/memory_planning_pass.py:151`). `tools/scripts/export_mobilenet.py:64`
+calls bare `.to_executorch()` and inherits that default.
+
+**So: every `.pte` in this repository causes ExecuTorch to memcpy each input on
+every `forward()`.** Our `from_blob` pointer is borrowed only for the duration
+of that copy. Nothing logs this and no test asserts it — unlike IREE, the copy
+is completely invisible.
+
+Verified 2026-08-04 against a source checkout at `~/workspace/executorch`, tag
+`v1.3.1` (exactly our pinned runtime version), using its `.venv`:
+
+```
+native/spike/add.pte     num_inputs=2
+   input 0 memory_planned=True
+   input 1 memory_planned=True
+
+fresh export, default                 -> input0 memory_planned = True
+fresh export, alloc_graph_input=False -> input0 memory_planned = False
+```
+
+Both directions proven on real artifacts. The export config is the lever.
+
+### What genuinely differs between the two runtimes
+
+| | IREE | ExecuTorch |
+|---|---|---|
+| Borrow decision | runtime, per allocator compatibility | **export time**, baked into the `.pte` |
+| Observable? | yes — `WRAPPED` / `STAGED` | no — nothing surfaces it |
+| Misaligned pointer | **refused** (`IREE_STATUS_OUT_OF_RANGE`) → staged copy | **accepted silently** |
+| Alignment contract | 64 B, documented (`IREE_HAL_HEAP_BUFFER_ALIGNMENT`) | none at the borrow site; allocator default is `alignof(void*)` = 8 |
+| Over-read past buffer end | none | XNNPACK reads up to `XNN_EXTRA_BYTES` = 16 past the data |
+| Borrow lifetime | released at end of invoke | pointer **retained** in the `Method` after `execute()` returns |
+
+`share_tensor_data`
+(`runtime/core/exec_aten/util/tensor_util_portable.cpp:140-163`) checks only
+`nbytes` equality and non-null, then:
+
+```cpp
+t_dst.unsafeGetTensorImpl()->set_data(t_src_data_ptr);
+```
+
+No alignment check. No padding check. No refusal path at all.
+
+And XNNPACK documents an out-of-bounds **read** (`xnnpack.h:24-32`):
+
+> The number of bytes XNNPACK may read beyond array bounds. The caller must
+> allocate at least this many extra bytes after the tensor data passed to
+> XNNPACK. `XNN_EXTRA_BYTES 16` (128 on Hexagon). Note: XNNPACK reads, but never
+> writes beyond array bounds.
+
+Nothing in ExecuTorch's own `backends/xnnpack/` references `XNN_EXTRA_BYTES` —
+only XNNPACK's vendored `bench/` and `test/` files do. Today the memory-planned
+copy masks this entirely. It stops being masked the moment anyone acts on the
+"we borrow user buffers" claim.
+
+### The IREE usage-style constraint, re-examined
+
+IREE's spike landed on "the engine allocates; the user writes into what the
+engine hands back," implemented as a 64-byte-aligned allocator behind
+`-Diree.engine.alignedBuffers`. **That prototype does not port.** While inputs
+are memory-planned, ExecuTorch copies regardless of how well the source was
+aligned — an aligned allocator here buys exactly nothing.
+
+Nor is the lever an export-time config users must apply. An earlier draft of
+this brief assumed it was, and treated the resulting "please re-export your
+models" as a first-class hazard. That was wrong. The correct framing is
+narrower and lands entirely inside the engine: when an input is *not* memory-
+planned we have no choice about the borrow — `share_tensor_data` takes whatever
+pointer we hand it — so the only question is **whose** buffer ExecuTorch
+borrows. Answering "ours, padded and aligned" is W7, needs nothing from the
+user, and works for either artifact mode.
+
+---
+
+## 2. What this brief is trying to answer
+
+Five questions, in order:
+
+1. **Does the engine copy, and where?** — *Pre-answered (W1).* It copies, in
+   three places, one of which is invisible and none of which are where the docs
+   say. See §3/W1.
+2. **Can the unplanned-input case be made safe without asking users to change
+   their models?** — *Answered by design (W7).* Yes: stage every unplanned
+   input into a padded, engine-owned, grow-only per-slot buffer. We do not get
+   to decline the borrow, so the only lever is *whose* buffer ExecuTorch
+   borrows. What remains is confirming the padding is necessary and sufficient
+   (W4), not deciding whether to ship.
+3. **What does the current path actually cost?** Both the invisible ExecuTorch
+   input copy and the heap `byte[]` output copy need numbers before any user-
+   facing constraint is justified.
+4. **Is the output path the better target?** It is engine-controlled end to end
+   and independent of the input question. It may still be where most of the
+   measurable win is.
+5. **Is a shared aligned-buffer abstraction worth extracting** across this
+   engine and `djl-iree-engine`? IREE's spike already answered "duplicate" for
+   its side; this is the confirmation pass, not a reopening.
+
+---
+
+## 3. Work items
+
+### W1 — Audit the host buffer path
+
+Determine what the engine does today on input and output: copy, borrow, or
+mixed, and whether ExecuTorch honors the borrow.
+
+*Answers:* whether anything below is worth doing. This gates everything.
+
+**Status: COMPLETE (2026-08-04).** It copies. Inventory:
+
+| Step | Copy? |
+|---|---|
+| `EtNDManager.create` → `allocateDirect` + `copyInto` (`EtNDManager.java:60-61`) | **copy 1** (user data → direct buffer) |
+| `manager.from()` / `toByteBuffer()` (`EtSymbolBlock.java:48-55`) | none for an `EtNDArray`; full copy otherwise |
+| JNI `GetDirectBufferAddress` (`executorch_djl_jni.cpp:158`) | none |
+| ET `set_input` → `copy_tensor_data` | **copy 2 — invisible, undocumented** |
+| JNI out: `NewByteArray` + `SetByteArrayRegion` + `ByteBuffer.wrap` (`executorch_djl_jni.cpp:189-191`) | **copy 3, onto the JVM heap** |
+
+Copy 3 has a second-order cost the IREE engine does not have: the returned
+buffer is a **heap** `byte[]`, not direct. Chaining model A → model B therefore
+re-enters the `!buf.isDirect()` branch at `EtSymbolBlock.java:56` and copies a
+fourth time. It also puts every output on the JVM heap — noise for MobileNet's
+4 KB logits, sustained GC pressure for a segmentation head (a 1×21×512×512 f32
+output is 21 MB per inference).
+
+### W2 — Make the copy observable
+
+Plumb `TensorInfo::is_memory_planned()` (public, `runtime/executor/method_meta.h:63`)
+through `MethodMeta` → `EtMethodMeta` and log it at model load. `EtRuntime::methodMeta()`
+already holds the `input_tensor_meta(i)` it needs at `native/core/et_runtime.cpp:48`,
+so this is a single added field. Assert the expected value in the existing model
+tests.
+
+*Answers:* nothing by itself — it is the instrument every other item reads. This
+is the ExecuTorch analogue of IREE's `WRAPPED`/`STAGED` signal, whose absence is
+why this went unnoticed for the engine's whole life.
+
+**Do this regardless of the decision gate.** Roughly an hour; no dependencies.
+
+### W3 — Correct the documented contract
+
+Fix `native/core/et_runtime.h:13`, CLAUDE.md, and the design docs under
+`docs/superpowers/` to say what is true: *borrowed by this engine, subject to
+the model's memory plan; copied by ExecuTorch for any memory-planned input,
+which is the export default.*
+
+*Answers:* nothing measurable. It stops the false claim from being built on
+again, which is how this became load-bearing in six documents.
+
+Independent of everything else. Do it with W2.
+
+### W4 — Over-read confirmation test
+
+**Demoted 2026-08-04 from "the decisive gate" to a confirmation test.** W7 now
+stages every unplanned input into a padded, engine-owned buffer, so the
+over-read cannot reach a caller's buffer on any microarchitecture regardless of
+what this experiment finds. W4 no longer decides whether anything ships; it
+establishes that W7's padding is *necessary* (rather than cargo-culted) and
+*sufficient*, and it produces the reproducer that keeps the question closed.
+
+Run it before W7 rather than after — a positive result is the justification for
+the padding constant, and the same harness re-run with staging enabled is W7's
+regression test.
+
+Determine whether XNNPACK's documented over-read is reachable through a
+borrowed, exact-sized host buffer.
+
+**Revised 2026-08-04 after reading the XNNPACK sources.** The original framing of
+this item ("run it under ASan") was wrong and would have produced a false
+negative. Three findings change the design:
+
+**The over-read is declared, not accidental.** `XNN_OOB_READS`
+(`src/xnnpack/common.h:320`) annotates the affected microkernels — 365 files in
+`qs8-qc8w-gemm/gen`, 297 in `f32-dwconv2d-chw/gen`, 160 in `f32-vbinary/gen`,
+and more. So this is a contract XNNPACK states and expects callers to honor, not
+a latent bug we would be discovering.
+
+**ASan cannot see it.** That macro expands to
+`XNN_DISABLE_TSAN XNN_DISABLE_MSAN XNN_DISABLE_HWASAN XNN_DISABLE_ASAN`, each of
+which is `__attribute__((__no_sanitize__("address")))` plus
+`XNN_NO_INLINE_SANITIZER`. A sanitizer run over these kernels reports nothing by
+construction. **The guard page is the only viable detector** — it is a hardware
+mechanism the annotation cannot suppress. Do not substitute ASan for it.
+
+**ExecuTorch does not pad.** `backends/xnnpack/runtime/XNNExecutor.cpp`,
+`prepare_args`, sets `externals_[i].data = tensor->mutable_data_ptr<float>()` —
+the raw pointer, unpadded. XNNPACK's own harness allocates every external value
+as `malloc(size + XNN_EXTRA_BYTES)` for the identical role
+(`bench/subgraph/benchmark.cc:91`). The violation is *mostly* harmless today
+because memory-planned inputs sit inside the arena, a large contiguous block
+where a 16-byte over-read lands in a neighbouring planned tensor. A fault
+requires the tensor at the end of a mapping — exactly what borrowing an
+exact-sized user buffer creates.
+
+**Open question, and it may make this a live upstream bug.** "Mostly" is doing
+work in that sentence. `Module` allocates each planned buffer at *exactly*
+`meta.memory_planned_buffer_size(i)` with no slack
+(`extension/module/module.cpp:375-382`), so a tensor that memory planning places
+**last in the arena** is over-read past the end of the malloc'd block — today,
+on stock ExecuTorch, with no borrowing involved. It would rarely fault (malloc
+leaves slack and metadata after the block) and ASan cannot see it
+(`XNN_OOB_READS`), which is consistent with nobody having reported it.
+
+UNVERIFIED: whether the planner ever actually places an XNNPACK external input
+at the arena end — it packs by lifetime, so it is plausible but not
+established. Worth settling, because it changes this from "a hazard we would
+introduce" to "a defect we found," with a corresponding change in what we owe
+upstream. Cheap to test: the same guard-page harness, pointed at a
+memory-planned model, with the arena allocator swapped for a guarded one.
+
+**Mechanism and shape rule.** The tail path is ISA-dependent. AVX
+(`src/xnnpack/simd/f32-avx-base.h:172`) uses `_mm256_maskload_ps` and is
+architecturally safe. SSE2 (`src/xnnpack/simd/f32-sse2-base.h:195`) is not:
+
+```c
+xnn_load_tail_f32(const float* input, size_t num_elements) XNN_OOB_READS {
+  assert(num_elements < xnn_simd_size_f32);
+  return _mm_loadu_ps(input);   // full 16 bytes regardless of num_elements
+}
+```
+
+For f32/SSE the rule is **N % 4 != 0**, worst at **N % 4 == 1** (12 bytes past
+the end). Annotated x86 ISAs by kernel family:
+
+| Kernel family | Over-reads on |
+|---|---|
+| `f32-vbinary`, `f32-vsigmoid` | sse, sse2, sse41 only |
+| `f32-gemm`, `f32-igemm` | sse, **fma3** |
+| `f32-dwconv` | sse (+ neon/wasm) |
+| `qs8-qc8w-gemm` | **avx512vnni, avx512skx, avx2, avx**, sse41, sse2 |
+
+The f32 paths are safe on AVX-512 hardware; the quantized paths are not — int8
+has no cheap masked byte-load on x86, so they over-read across the whole ISA
+range.
+
+**Construction — two routes, run in this order.**
+
+*Route A (f32, forced ISA).* Single-op model (clamp or add) consuming the graph
+input directly, `N % 4 == 1`, exported with `alloc_graph_input=False` so
+`share_tensor_data` is taken. `mmap` a region, `mprotect(PROT_NONE)` the
+following page, place the tensor so its last byte abuts the guard page. Force
+SSE kernel selection with `qemu-x86_64 -cpu Nehalem` — `src/configs/hardware-config.c`
+has no environment override, so masking CPUID under qemu-user is the cheap
+lever and needs no runtime rebuild. Deterministic; proves the mechanism.
+
+*Route B (plain f32 model, AMD Zen).* **Revised 2026-08-04 — the original
+"statically quantized int8 model" version of this route is dead, tested and
+disproven; see below.** The live route is a plain f32 `Linear`/`Conv` model
+whose first op consumes the graph input, with **K % 4 != 0** (`K` = in_features,
+or `C*kh*kw` for conv), exported `alloc_graph_input=False`.
+
+The lever is microarchitecture, not ISA. `src/configs/gemm-config.c:1444-1471`
+selects the f32 igemm microkernel by a priority chain (avx512f > fma3 > avx >
+sse2), and inside the fma3 branch switches on uarch:
+
+```c
+case xnn_uarch_zen:
+case xnn_uarch_dhyana:
+    ...ukernel_4x16s4__fma3_broadcast    // ANNOTATED XNN_OOB_READS
+default:
+    ...ukernel_5x16__fma3_broadcast_prfm // not annotated
+```
+
+The `s4` ("shuffle 4") kernels read 4 K-elements per iteration and over-read the
+A matrix — the activations, i.e. **our borrowed input for the first op** — when
+K is not a multiple of 4. So:
+
+| Hardware | f32 first-touch kernel | Over-reads |
+|---|---|---|
+| Intel AVX-512 (incl. this dev box, Tiger Lake) | `avx512f_broadcast` | no |
+| **AMD Zen 1–3** (Ryzen 1000–5000, EPYC Naples/Rome/Milan) | **`4x16s4__fma3_broadcast`** | **yes** |
+| Other FMA3 (Haswell–Skylake client/Xeon) | `5x16__fma3_broadcast_prfm` | no |
+| AVX only | `avx_broadcast` | no |
+| SSE2 only | `sse` | yes |
+
+This is the IREE brief's "passes every test on the developer's machine" hazard
+in its sharpest form: our dev box selects the safe kernel and a very large
+production population — every Zen 1–3 cloud instance — selects the annotated
+one. Emulate with `qemu-x86_64 -cpu EPYC-Rome` (Zen 2 CPUID → `xnn_uarch_zen`).
+Verify that XNNPACK's cpuinfo-based uarch detection actually resolves to
+`xnn_uarch_zen` under qemu before trusting a negative from this route.
+
+**Disproven sub-route, recorded so it is not retried.** The original Route B
+proposed a statically quantized int8 model reaching `qs8-qc8w-gemm` (annotated
+across avx512vnni/skx/avx2/avx). Tested 2026-08-04 with the standard PT2E flow
+(`XNNPACKQuantizer` + `prepare_pt2e`/`convert_pt2e`, `Linear(129, 64)`,
+`alloc_graph_input=False`). Result: the whole quantize/linear/dequantize cluster
+is absorbed into the delegate, and the runtime reports
+
+```
+input 0: dtype=6 (float32) sizes=(1,129) nbytes=516 memory_planned=False
+```
+
+— the graph input stays **f32** and feeds `executorch_call_delegate` directly.
+The borrow works (`memory_planned=False`), but the kernel that touches our
+buffer is the f32→qs8 convert, and `f32-qs8-vcvt` is annotated only on
+sse2/sse41, hence safe on AVX. The qs8 GEMM over-reads an XNNPACK-internal int8
+buffer, not ours. Getting an int8 *graph input* would require hand-building a
+graph whose placeholder is already quantized; not worth it now that Route B has
+a native f32 path.
+
+*Answers:* whether W7's padding is necessary and sufficient, and — with the
+staging path enabled — supplies its regression test. Given the annotations,
+expect positive; the useful output is the *conditions*, not the yes/no. A
+negative from Route A alone is weak evidence: it proves the kernels that model
+selected did not over-read on that ISA, not that none will. Record it as such
+rather than as a clearance. **Note that a negative no longer licenses skipping
+the padding** — W7 pads because the contract says to, and because the uarch
+table below shows the dev box is the unrepresentative case.
+
+Not ⚠️-tagged: the ASan rebuild is not part of this item any more, and the
+guard-page harness itself is tiny.
+
+### W5 — Establish the cost ⚠️
+
+Measure, against kernel time:
+
+- the ExecuTorch-side input copy — A/B a MobileNet exported with
+  `alloc_graph_input` both ways through the existing `example/src/jmh` harness;
+- the heap `byte[]` output copy, including its GC cost, at output sizes well
+  past MobileNet's 4 KB.
+
+*Answers:* whether any of this is defensible to users. The IREE spike's own
+numbers predict the input answer — copies were ~0.5% of a 61.6 ms MobileNet
+kernel there, and our input copy is a single 600 KB memcpy against a comparable
+kernel. Expect the input result to be "noise," and treat a surprise as the
+finding. The output/GC arm is the one with genuine uncertainty.
+
+**Per standing practice, the user runs benchmarks; this item produces the
+harness edit and the run recipe, not the run.** Tagged ⚠️ — see §7; a
+large-tensor arm here would reproduce the IREE W2 memory profile exactly.
+
+### W6 — Prototype: direct-buffer outputs
+
+Replace copy 3's `NewByteArray` + `ByteBuffer.wrap` with a JNI-allocated block
+exposed via `NewDirectByteBuffer`, freed by a `java.lang.ref.Cleaner`. This
+stays a copy — `OutputView.data` points into ExecuTorch's arena and is invalid
+after the next `forward()`, so the copy is mandatory. Only its *destination*
+changes: off-heap instead of on-heap, and direct, which also removes the
+model-chaining re-copy at `EtSymbolBlock.java:56`.
+
+IREE's W4 prototype ports here nearly verbatim, including its two hard-won
+rules: register **only the address primitive** with the Cleaner (capturing the
+`ByteBuffer` keeps it strongly reachable and the Cleaner never fires), and make
+free idempotent so a mis-registration cannot double-free. Carry its caveat too:
+JNI-allocated buffers are **not** counted against `-XX:MaxDirectMemorySize`,
+which is precisely the mechanism behind the 20.7 GB OOM-kill recorded in the
+IREE brief's §7.
+
+**Required, not optional: W6 silently defeats an existing leak gate.**
+`LeakStressTest.inferencePathUnderPressure` detects an output leak *because*
+heap `byte[]` and direct buffers count against its `-Xmx256m` /
+`-XX:MaxDirectMemorySize=64m` caps. Move outputs to a JNI-allocated block and
+they stop counting — the same mechanism as the IREE OOM-kill. The 20,000-predict
+loop would then pass regardless of whether outputs leak, and **nothing would
+announce the loss of coverage.**
+
+So W6 must ship with a replacement signal in the same change: IREE used a native
+alive-counter (`aliveAlignedBuffers()`) polled from the test; the W8 probes give
+the same property with better granularity. Either is acceptable; shipping W6
+without one is a net reduction in coverage disguised as a performance
+improvement.
+
+*Answers:* feasibility of the likelier win, and supplies W5's comparison arm.
+
+**Not gated by W4** — outputs are engine-allocated and never handed to XNNPACK
+as inputs, so the over-read question does not apply. This is the item most
+likely to ship.
+
+### W7 — Grow-only per-slot staging for unplanned inputs
+
+**This is the shipping design for the input path.** It replaces the earlier
+"input borrow behind a flag," which mis-stated the problem.
+
+**Provenance note.** The grow-only per-slot staging pattern comes from a
+`djl-iree-engine` session that is **not** captured in
+`docs/iree-lessons-learned/` — neither the brief nor the findings doc there
+mentions it (grep for "grow", "staging buffer", "per-slot"). It is recorded
+here as a design this repo adopts on the reasoning below, not as a result
+inherited with evidence attached. If the IREE measurement behind it matters
+later, it will have to be re-obtained.
+
+**The framing correction.** When `is_memory_planned == false`, we do not have a
+choice about borrowing. `share_tensor_data` takes whatever pointer we hand it
+and there is no opt-out. The question is never "should we borrow" — it is
+**"whose buffer does ExecuTorch borrow: a JVM-owned, unpadded, arbitrarily
+aligned one, or an engine-owned one we control?"** So the staging buffer is not
+a performance feature. It is the only mechanism that satisfies XNNPACK's
+padding contract when the artifact forces a borrow.
+
+**The design.** In `EtRuntime::forward` (`native/core/et_runtime.cpp:70-76`),
+for each input whose `is_memory_planned()` is false, memcpy the incoming
+borrowed pointer into a per-slot, engine-owned buffer and pass *that* pointer
+to `from_blob`. Grow-only, so steady state is zero allocations. Allocate
+64-byte aligned and over-allocate by the padding constant, which makes the
+over-read land in our own slack on every microarchitecture.
+
+Own the buffers in `RuntimeState`, **not** in Java. Three consequences, all
+good:
+
+- The borrowed pointer's lifetime becomes tied to the `Method`'s *by
+  construction* — same owner, same destructor. That closes the §4 lifetime
+  hazard (`share_tensor_data` leaves a pointer in the `Method` that nothing
+  resets) without any ordering argument.
+- None of IREE's W4 machinery is needed: no `NewDirectByteBuffer`, no
+  `Cleaner`, no address-only capture rule, no `-XX:MaxDirectMemorySize`
+  accounting surprise. The buffer is pure native and invisible to Java.
+- It is roughly 30 lines at the `from_blob` site, gated on the per-input flag
+  from W2. `is_memory_planned()` is per-input, so mixed models fall out
+  naturally — stage only the unplanned slots.
+
+**Be honest that this costs.** Today the unplanned path is genuinely zero-copy
+(one copy at `EtNDManager.create`, then ExecuTorch borrows the direct buffer).
+Staging makes it two. That is a real regression on that path — safety bought
+with a memcpy, not a gain. Do not let "staging buffer" imply speed. What it
+buys is proportionate: the over-read, the alignment question, and the lifetime
+hazard all close together.
+
+**The separate, genuine perf win is on the *planned* path.**
+`EtSymbolBlock.java:56-61` allocates a fresh direct `ByteBuffer` **per forward**
+for any non-direct input, and our own outputs are heap `byte[]`
+(`executorch_djl_jni.cpp:189-191`), so chaining model A → model B drives B down
+that branch every single call. The same grow-only per-slot buffer eliminates
+that allocation. Measure it in W5.
+
+So the matrix:
+
+| Model input | Engine behavior |
+|---|---|
+| `memory_planned=false` | **stage** — padded, aligned, engine-owned (safety, mandatory) |
+| `memory_planned=true`, non-direct input | **stage** — kills the per-call `allocateDirect` (perf, optional) |
+| `memory_planned=true`, direct input | nothing — ExecuTorch copies into its arena, already correct |
+
+**Stage at `forward()`, not `create()`.** Writing straight into the slot buffer
+at create time would keep it at one copy, but per-slot reuse breaks `NDArray`
+value semantics the moment a caller creates two inputs for the same slot or
+holds one across calls. The copy at forward time is the price of DJL's object
+model. Thread safety needs no new constraint: `EtSymbolBlock.forward()` is
+already documented as one `Model`/`Predictor` per thread.
+
+**Padding constant.** `XNN_EXTRA_BYTES` is 16 on x86/ARM and 128 on Hexagon,
+but it lives in `xnnpack.h`, which is delegate-internal and not on our include
+path. Hardcode 128 (the maximum) with a comment citing the source rather than
+taking a dependency; the waste is per-slot, not per-call.
+
+**Prerequisite: there is no unplanned test fixture, so this path would ship
+untested.** Every `.pte` in the repo is `memory_planned=True`, and
+`EtNDManager.create` always returns a direct buffer — so under the matrix above,
+the entire existing suite takes the pass-through row and never stages. Add a
+fixture exported with
+`ExecutorchBackendConfig(memory_planning_pass=MemoryPlanningPass(alloc_graph_input=False))`
+and point both the native leak harness and a JVM test at it. Confirmed working
+on v1.3.1, including through an XNNPACK-delegated partition. This lands *with*
+W7, not after it.
+
+*Answers:* whether the unplanned-input case can be made safe without asking
+users to change anything about their models. Unlike the old W7, this ships
+regardless of the export config — we handle whichever mode the artifact is in.
+
+### W8 — USDT probes and leak-test coverage
+
+Two static probes in `native/core/et_runtime.cpp`, plus the test changes they
+make possible.
+
+**Why not on `Method`.** The obvious place to put a slot-size probe is
+ExecuTorch's `Method`, and that is the one place it must not go: `Method` is
+upstream code shipped prebuilt in the pinned tarball, so instrumenting it means
+patching ExecuTorch inside `executorch-runtime-dist` and carrying that patch
+across every version bump. The existing `etnp::lstm` USDTs are not a precedent —
+that op is first-party dist code. W7's staging lives in our own `RuntimeState`,
+so the probes are free and the lifetime question does not arise.
+
+**The slot probably never grows, which changes what to measure.**
+`TensorInfo::nbytes()` is available at load for planned *and* unplanned inputs
+(the 2026-08-04 probe reported `nbytes=516` on a `memory_planned=False` input).
+Static shapes make it exact; dynamic shapes make it an upper bound. Either way
+the slots can be sized once in `methodMeta()` and never resized — "grow-only"
+degenerates to "allocate once." So:
+
+| Probe | Fires | Job |
+|---|---|---|
+| `staging_grow(slot, old_bytes, new_bytes)` | once per slot, ideally never after | anomaly detector — a fire means an input exceeded its declared bound |
+| `staging_input(slot, nbytes, planned, staged)` | per input, per forward | the actual observability |
+
+`staging_input` is the complement to W2, not a duplicate: W2 logs the mode once
+at load because per-forward logging would be unusable noise, and USDT is exactly
+the tool for the per-call view at nop cost when disabled.
+
+**What the probes let the leak tests assert that they cannot today.** The
+dominant failure mode of grow-only staging is *reallocate-every-call* — a
+`>` vs `>=` slip, byte-count/element-count confusion, or shrink-then-regrow
+oscillation on dynamic shapes. That bug frees correctly every time, so **LSan
+reports nothing, RSS stays flat, and all three existing gates pass.** Its only
+symptom is throughput, which none of them measure. Every current assertion is
+aggregate and negative (LSan at exit, or OOM under a cap); none can express
+"this allocated once."
+
+- **`native/harness/et_leak_harness.cpp`** — 1000 loads × 4 forwards over
+  `add.pte` (2 inputs) should fire `staging_grow` **exactly 2000 times**; a
+  realloc-per-forward bug gives 8000. An equality assertion, not a bound. Also
+  add an inverted variant — **1 load × 10,000 forwards** — and assert exactly
+  `numTensorInputs` fires total; the current shape does not isolate steady
+  state. This is the no-JVM binary with a stable build-output path, so it is
+  where the probes should be developed (§7's attach caveats do not apply).
+- **`LeakStressTest.inferencePathUnderPressure`** — already the right shape
+  (one model, 20,000 predicts). Blocked on W7's fixture prerequisite, not on
+  the probe: with `add.pte` it never stages.
+- **`LeakStressTest.directBufferLifecycleUnderPressure`** — native-free
+  (`NDManager.create` only, no forward). The probes add nothing; recorded so
+  nobody instruments it hunting a signal that cannot be there.
+- **W6's replacement leak signal** — see W6. Whichever mechanism is chosen,
+  this is where it is asserted.
+
+**Bonus: a regression guard on the runtime pin.** `staging_input` asserted
+across a QA run fails loudly if a future ExecuTorch changes *when* `set_input`
+borrows versus copies. Nothing would notice that today, and the pin is this
+repo's supply-chain review gate — so the guard fits the existing posture.
+
+*Answers:* nothing about the design; it makes W6 and W7 testable to a standard
+the current suite cannot reach.
+
+**Operational notes.** The shim is `System.load`ed from a content-addressed
+cache (`~/.cache/executorch-djl/<sha256>/`), so a `usdt:/path/...` target
+changes every build — resolve from `/proc/<pid>/maps` or attach with `-p`. The
+library is not mapped until `EtNative` static init, so attaching to the JVM
+before first model load sees no probes. Both are avoided entirely by developing
+against `et_timing_harness` / `et_leak_harness`, into which the JNIEnv-free core
+is also linked. Match the dist's LSTM probes on semaphore usage so one set of
+tooling covers both.
+
+### W9 — Shared abstraction assessment
+
+Confirm or overturn IREE's "duplicate, don't extract" verdict now that a second
+engine has a concrete aligned-buffer/Cleaner need (W6).
+
+*Answers:* whether to factor out a shared module. The IREE finding was that the
+genuine overlap is ~60 lines and the JNI half is per-engine ABI surface;
+ExecuTorch's need is narrower still (outputs only, no alignment contract to
+honor), which if anything strengthens "duplicate." Expect a short confirmation.
+Assessment only; no execution.
+
+---
+
+## 4. Hazards to assess
+
+The IREE brief's three hazards, re-assessed for ExecuTorch, plus two that are
+new here.
+
+**Lifetime versus GC — worse than IREE's.** JNI pins the buffer for the duration
+of the native call, so mid-call collection is impossible; that much is inherited
+and already true of the copy path. But IREE releases its import at the end of
+`Invoke`, whereas `share_tensor_data` writes the borrowed pointer into the
+`Method`'s own `EValue` and **nothing resets it on return**. The only reset is
+`internal::reset_data_ptr`, reached solely from an explicit `FreeCall`
+instruction the program may or may not emit (`runtime/executor/method.cpp:1591`).
+So a borrowed input pointer plausibly outlives `forward()` inside a live
+`Method`. It is not dereferenced until the next execution — but freeing the Java
+buffer after `forward()` returns leaves a dangling pointer in the runtime.
+
+**Closed by W7's design, not by an argument.** Owning the staging buffers in
+`RuntimeState` ties the borrowed pointer's lifetime to the `Method`'s by
+construction: same owner, same destructor, no ordering to reason about. This is
+the main reason to put staging in the native core rather than expose engine-
+allocated buffers to Java. Still worth an ASan case (free the Java buffer after
+`forward()`, then run a second `forward()`) as a regression test for the
+property, rather than as the thing that establishes it.
+
+**Completion versus return.** `Module::execute` is synchronous — `set_input`s,
+then `method->execute()`, then `get_outputs()` — so call return equals
+completion today, as with IREE. The same recorded constraint applies: a borrow
+contract built on call return breaks if async delegate execution is ever
+introduced.
+
+**Aliasing — bounded by W7, and worth the note anyway.** `et_runtime.cpp:71`
+does `from_blob(const_cast<void*>(in.data), ...)`, handing ExecuTorch a mutable
+tensor over the caller's memory. IREE bounded this by being inference-only with
+no in-place surface; ExecuTorch explicitly supports mutable buffers and stateful
+models (KV caches), so "kernels do not write inputs" is a weaker assumption
+here. W7 removes the user-visible half of this: a kernel that writes an
+unplanned input now scribbles on the engine's staging buffer, not the caller's
+`NDArray`. The remaining consequence is that such a write is silently discarded
+at the next `forward()` — correct for inference, wrong for a stateful model, and
+therefore a thing to revisit if this engine ever grows KV-cache support.
+
+**NEW — no refusal semantics.** IREE's entire safety argument rested on the
+allocator refusing bad pointers. ExecuTorch accepts whatever it is given. Every
+"bounded either way" conclusion in the IREE findings must be re-derived here
+rather than inherited; where the IREE doc says a violation degrades to a copy,
+the ExecuTorch equivalent is undefined behavior.
+
+**NEW — the engine's behavior varies by an artifact property nobody inspects.**
+The original form of this hazard was "we will have to tell users to re-export
+with `alloc_graph_input=False`." W7 removes that ask entirely: the engine
+handles whichever mode the artifact is in, and no user changes anything. What
+survives is subtler and still real — the engine takes materially different code
+paths (stage vs. pass-through) based on a `.pte` property that is invisible in
+the filename, the DJL API, and every log line today. A user debugging a
+performance difference between two models has no way to see it. W2 is the
+mitigation and is not optional: report the mode at load, and the variance
+becomes explicable instead of spooky.
+
+---
+
+## 5. Dependencies and sequencing
+
+```
+W1 (audit, COMPLETE) ──> W2 (observe) ──> W3 (docs)      [do regardless]
+                     │
+                     ├─> W2 ──> W7 (staging when unplanned)  [safety; ships]
+                     │            ↑        + unplanned fixture
+                     │          W4 (over-read confirmation) ──┘  [justifies padding,
+                     │                                            becomes W7's test]
+                     ├─> W6 (direct-buffer outputs) ─────┐
+                     │      + replacement leak signal    │
+                     ├─> W8 (probes) ────────────────────┤
+                     └─> W5 (measure) ───────────────────┴──> scope gate ──> W9
+```
+
+- **W1 is done.** Its answer is what makes the rest non-trivial: the copy is
+  real, invisible, and mis-documented.
+- **W2 and W3 are unconditional.** W2 is now a hard dependency of W7, not just
+  good hygiene — W7 branches per input on exactly the flag W2 plumbs through.
+- **W4 no longer gates anything.** It runs *before* W7 so a positive result
+  justifies the padding constant, and the same harness re-run with staging on
+  becomes W7's regression test. A negative does not license dropping the
+  padding (§3/W4).
+- **W7 ships on safety grounds, not on a measurement.** It is the only way to
+  satisfy XNNPACK's padding contract for an unplanned input, and we do not get
+  to decline the borrow. Its cost (one memcpy on that path) is accepted, not
+  justified by W5.
+- **W6 is independent** of the entire input question and is where the
+  measurable win most likely is. Start it in parallel.
+- **W5 depends on W6** for its comparison arm, but the current-path baseline
+  can be measured immediately. It also measures W7's *other* effect — removing
+  the per-forward `allocateDirect` on the non-direct input path.
+- **Scope gate** after W5/W6: this is now a question of how much to ship, not
+  whether. W7 is in regardless; W6 and the planned-path staging are the
+  discretionary parts, and the measurement decides them.
+- **W8 (probes) is not on anyone's critical path, but two items are weaker
+  without it.** W6 must not ship without *some* replacement leak signal, and
+  W7's realloc-per-call failure mode is invisible to every existing gate. Build
+  the probes against the native harness first, where none of the attach
+  caveats apply.
+- **Two test artifacts are prerequisites, not follow-ups:** the unplanned
+  `.pte` fixture (W7) and W6's replacement leak signal. Both ship in the same
+  change as the work they cover, or that work is untested.
+- **W9 is last** and is a confirmation of an existing verdict, not an open
+  question. Note W7 weakens it further: staging lives in the native core with
+  no JNI or `Cleaner` surface, so the overlap with IREE's aligned-allocator
+  work is now nearly nil.
+
+---
+
+## 6. Expected output
+
+- A determination on each of §2's five questions, with pointers. Question 1 is
+  already answered above and should be carried forward, not re-derived.
+- A hard result on the XNNPACK over-read (W4), stated as positive/negative with
+  the negative explicitly qualified as model-specific.
+- Measured numbers for the invisible input copy and the heap output copy,
+  retained regardless of the decision.
+- W7 landed: staging for unplanned inputs, with the ASan lifetime case and the
+  W4 harness as its regression tests. This is not gated on a measurement.
+- A go / go-with-constraints / no-go on the **discretionary** parts — the
+  direct-buffer output change (W6) and staging on the planned-path non-direct
+  input — decided separately and on the W5 numbers.
+- README terms. Note that the earlier expected output here — an export-time
+  requirement users must satisfy — is **no longer needed**: W7 handles either
+  artifact mode. What the README owes users instead is that the engine's input
+  handling depends on how their `.pte` was exported, and how to see which mode
+  they are in (W2).
+- Leak-test coverage that survives the changes: an unplanned-input fixture, a
+  replacement output-leak signal for W6, and an exact-count assertion on
+  staging allocations. Stated as a requirement because two of the three
+  otherwise represent coverage *lost* rather than gained (W6, W8).
+- A confirmation or overturn of IREE's "duplicate, don't extract" (W9), which
+  explicitly permits duplication as the outcome.
+
+---
+
+## 7. Execution safety controls
+
+The OOM-kill incident recorded in the IREE brief's §7 happened on **this host**
+(Ubuntu 24.04, systemd 255, 31 G RAM) on 2026-08-04: an uncontained JMH fork
+grew to 20.7 GB anon-RSS and `systemd-oomd` killed whole units — the Firefox
+scope and then the terminal scope, taking the shell with it. The risk here is
+inherited rather than reproduced, and this repo's current JMH harness is
+MobileNet-only, so its present profile is mild. One item recreates the dangerous
+profile:
+
+- **W5**, if it adds a large-tensor arm — that *is* the IREE `CopyCostBenchmark`
+  shape, and W6's Cleaner-freed buffers reproduce the exact mechanism, since JNI
+  allocations are not counted against `-XX:MaxDirectMemorySize`.
+
+**W4 is no longer in this category.** Its revision dropped the ASan rebuild
+(`native/build_qa.sh` at `-j$(nproc)` — concurrent instrumented compilers were
+the memory spike), because ASan cannot observe the over-read at all. The
+guard-page harness is a small standalone binary. Any *other* work that rebuilds
+the ASan tree still belongs under these controls.
+
+Use the control verified on this host:
+
+```bash
+systemd-run --user --scope -p MemoryMax=4G taskset -c 0-3 timeout 900 bash <cmd>
+```
+
+This confines any kill to a transient scope inside the user manager's delegated
+cgroup and — critically — moves the run out of the terminal's own scope, so an
+oomd kill cannot take the shell. Always pair with `timeout` (a memory cap does
+not stop a hang) and `taskset` (which lowers `nproc`-derived job counts, and is
+not a safety mechanism by itself). `ulimit -v` is incompatible with ASan, whose
+shadow memory reserves ~16 TB of address space. Full rationale and fallbacks:
+`docs/iree-lessons-learned/borrowed-host-buffers-brief.md` §7.
+
+Two project-specific notes:
+
+- **Benchmarks are run by the user, not the agent.** W5 produces the harness
+  edit and the recipe; the run is the user's.
+- **Container builds leave root-owned outputs.** `bench.sh`, `build_qa.sh`, and
+  `build_variants.sh` do not chown their outputs back (only `build.sh` does, via
+  its EXIT trap). After any W4/W5 container run:
+  `sudo chown -R "$(id -u):$(id -g)" native/bench native/bench-results native/asan`.
+
+---
+
+## 8. Sources
+
+All upstream citations verified 2026-08-04 against `~/workspace/executorch` at
+tag `v1.3.1` — the exact runtime version pinned in
+`native/cmake/EtRuntimePin.cmake`. The pinned tarball ships headers only, so
+upstream `.cpp` behavior is not readable from `native/*/\_deps/`; that checkout
+is the authority.
+
+### Reproducing the probes
+
+That checkout's `.venv` has a working `executorch` + `torch` + exir toolchain.
+To read a `.pte`'s per-input memory-plan mode — the check behind W1, and the
+acceptance test for W2:
+
+```python
+from executorch.runtime import Runtime
+mm = Runtime.get().load_program(path).load_method("forward").metadata
+for i in range(mm.num_inputs()):
+    ti = mm.input_tensor_meta(i)
+    print(i, ti.dtype(), ti.sizes(), ti.nbytes(), ti.is_memory_planned())
+```
+
+Three mechanics that cost time to rediscover:
+
+- **`flatc` must be on `PATH` to export a *delegated* `.pte`.** It ships at
+  `.venv/bin/flatc` but is not on `PATH`, and its absence surfaces as a bare
+  `FileNotFoundError: 'flatc'` from deep inside `_serialize/_flatbuffer.py`.
+  Non-delegated exports (plain `to_executorch()`) do **not** need it, so the
+  failure only appears once a partitioner is added — which is exactly when
+  building W7's unplanned fixture. Prefix with
+  `PATH=<checkout>/.venv/bin:$PATH`.
+- **`src/test/resources/lstm/lstm.pte` fails to load in that venv** with
+  `error: 0x:14` — the first-party `etnp::lstm` custom op is not registered
+  there. Expected, not a signal; use a different fixture.
+- The ExecuTorch ScalarType codes that appear in these dumps: `1` = int8,
+  `3` = int32, `4` = int64, `6` = **float32**, `7` = float64. `dtype=6` with
+  `nbytes == numel * 4` is the confirmation that a quantized model's graph
+  input is still f32 (the disproven Route B sub-route, W4).
+
+- `runtime/executor/method.cpp:1143-1255` — `Method::set_input`, the
+  memory-planned branch.
+- `runtime/executor/method.cpp:1575-1592` — `FreeCall` / `reset_data_ptr`, the
+  only borrowed-pointer reset.
+- `runtime/core/exec_aten/util/tensor_util_portable.cpp:140-163` —
+  `share_tensor_data`, no alignment or padding check.
+- `runtime/executor/method_meta.h:63` — `TensorInfo::is_memory_planned()`, public.
+- `runtime/core/memory_allocator.h:45` — `kDefaultAlignment = alignof(void*)`.
+- `extension/module/module.cpp` — `Module::execute`, synchronous, calls
+  `set_input` per input.
+- `exir/passes/memory_planning_pass.py:151` — `alloc_graph_input: bool = True`.
+- `cmake-out/include/xnnpack.h:24-32` — `XNN_EXTRA_BYTES`, the documented
+  over-read.
+- `backends/xnnpack/runtime/XNNExecutor.cpp` — `prepare_args`, hands XNNPACK the
+  unpadded `mutable_data_ptr()`.
+
+XNNPACK citations are relative to
+`backends/xnnpack/third-party/XNNPACK/` in the same checkout:
+
+- `src/xnnpack/common.h:288-321` — `XNN_OOB_READS` and the
+  `XNN_DISABLE_{TSAN,MSAN,HWASAN,ASAN}` it expands to; this is why ASan cannot
+  observe the over-read.
+- `src/xnnpack/simd/f32-sse2-base.h:195` — `xnn_load_tail_f32`, the unmasked
+  `_mm_loadu_ps` tail load, annotated `XNN_OOB_READS`.
+- `src/xnnpack/simd/f32-avx-base.h:172` — the AVX counterpart,
+  `_mm256_maskload_ps`, architecturally safe.
+- `bench/subgraph/benchmark.cc:91` — `malloc(size + XNN_EXTRA_BYTES)` for every
+  external value; XNNPACK's own harness honoring the contract ExecuTorch does
+  not.
+- `test/vunary-microkernel-tester.h:225` — unconditional input over-allocation
+  by `XNN_EXTRA_BYTES / sizeof(In)`.
+- `src/configs/hardware-config.c` — no environment override for ISA selection,
+  hence the qemu CPUID-masking approach in W4 Route A.
+- `src/configs/gemm-config.c:1444-1471` — the f32 igemm selection chain and the
+  `xnn_uarch_zen` / `xnn_uarch_dhyana` case that picks the annotated `s4`
+  kernel; the basis for W4 Route B.
+- `src/f32-qs8-vcvt/gen/` — f32→qs8 convert, annotated only on sse2/sse41; why
+  the quantized sub-route of Route B is safe on AVX and therefore useless as a
+  probe.
+
+- `docs/iree-lessons-learned/2026-08-04-borrowed-host-buffers-findings.md` — the
+  sibling spike this brief derives from; §4 there holds the JDK direct-buffer
+  alignment histogram (`addr % 64 ∈ {0,16,32,48}`, ~40% at 0), which is reusable
+  here as an observation but not as a guarantee — the JVM promises 8-byte
+  alignment.

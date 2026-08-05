@@ -10,7 +10,11 @@
 
 namespace measly::et {
 
-// Borrowed input: data is a host pointer the caller keeps valid across forward(). Zero-copy in.
+// Borrowed input: data is a host pointer the caller keeps valid across forward().
+// NOT zero-copy end to end. ExecuTorch's Method::set_input copies this into its arena for any
+// input where MethodMeta::input_tensor_meta(i)->is_memory_planned() is true -- the export
+// default (MemoryPlanningPass(alloc_graph_input=True)) -- and borrows the pointer only when
+// the .pte was exported with alloc_graph_input=False.
 struct InputDesc {
   const void* data;
   std::vector<int64_t> shape;

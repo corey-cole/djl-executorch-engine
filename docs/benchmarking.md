@@ -20,9 +20,12 @@ and comparing them on the axes where ExecuTorch's case actually lives.
 
 The engine has two input/output surfaces; the benchmark uses the **general** one:
 
-- **General Phase 2a path** — zero-copy, arbitrary-shape, multi-dtype tensors via `NDList` /
+- **General Phase 2a path** — direct-buffer, arbitrary-shape, multi-dtype tensors via `NDList` /
   `Predictor`. **Benchmark through this.** It has been capable since Phase 2a and imposes no shape
-  restriction, so any standard single-tensor-in/out model runs without engine changes.
+  restriction, so any standard single-tensor-in/out model runs without engine changes. (Direct
+  buffers are what the engine hands to the runtime; they are not zero-copy end to end — ExecuTorch
+  copies memory-planned inputs into its arena, which is the export default. See
+  `executorch-host-buffer-contract-brief.md`.)
 - **Phase 2b `MapTranslator`** — named *scalar* params → `double[]`. A tabular/feature surface; **no
   well-known DL model fits it**, so it is not the benchmark vehicle. (The models that fit it — a
   housing-regression MLP, a DLRM-style scorer — aren't recognizable enough to make the PR case.)
