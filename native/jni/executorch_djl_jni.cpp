@@ -30,6 +30,16 @@ static void throwJava(JNIEnv* env, const char* fallback, const std::exception* e
   env->ThrowNew(cls, e ? e->what() : fallback);
 }
 
+// Throw IllegalArgumentException from a JNI input check. FindClass is null-checked: it can
+// fail only when an exception is already pending, and that pending exception propagates instead.
+static void throwIllegalArgument(JNIEnv* env, const char* msg) {
+  jclass cls = env->FindClass("java/lang/IllegalArgumentException");
+  if (cls != nullptr) {
+    env->ThrowNew(cls, msg);
+    env->DeleteLocalRef(cls);
+  }
+}
+
 // FindClass -> NewGlobalRef -> DeleteLocalRef. Returns a process-lifetime global ref, or nullptr
 // (pending exception) so the caller can fail JNI_OnLoad.
 static jclass cacheGlobalClass(JNIEnv* env, const char* name) {
@@ -145,7 +155,15 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
   // addresses below remain valid through rt->forward().
   for (jsize i = 0; i < nIn; ++i) {
     jobject jt = env->GetObjectArrayElement(jinputs, i);
+    if (jt == nullptr) {
+      throwIllegalArgument(env, ("EtTensor[" + std::to_string(i) + "] is null").c_str());
+      return nullptr;
+    }
     auto jshape = static_cast<jlongArray>(env->GetObjectField(jt, g_fShape));
+    if (jshape == nullptr) {
+      throwIllegalArgument(env, "EtTensor.shape is null");
+      return nullptr;
+    }
     jint st = env->GetIntField(jt, g_fScalarType);
     jobject jbuf = env->GetObjectField(jt, g_fData);
 
