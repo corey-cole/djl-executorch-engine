@@ -205,4 +205,8 @@ if(ET_BUILD_QA)
 
   add_executable(et_leak_harness ${CMAKE_CURRENT_SOURCE_DIR}/harness/et_leak_harness.cpp)
   target_link_libraries(et_leak_harness PRIVATE et_runtime)
+
+  # W4 guard-page harness (manual runs only; never executes in CI — see the brief §3/W4).
+  add_executable(et_overread_harness ${CMAKE_CURRENT_SOURCE_DIR}/harness/et_overread_harness.cpp)
+  target_link_libraries(et_overread_harness PRIVATE et_runtime)
 endif()
