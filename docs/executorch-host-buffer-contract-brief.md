@@ -1514,7 +1514,29 @@ the change eliminates. Two candidate fixes, both design decisions:
    Restores deterministic release and would have prevented the OOM kill outright.
    Does not address Defect 1.
 
-Raw JMH logs for all six runs are in the session scratchpad and are not
+**Replication of the heap baseline (2026-08-06), and a caveat it closes.** The
+S1 arms were run against a saved `/tmp/et-pre-w6.so`, which on later inspection
+turned out to be pre-W6 (correct) but *also* pre-F1 — it lacks the "declares at
+most" bound check, so the heap baseline and the W6 direct arm ran on different
+shim vintages. The heap sweep was therefore re-run against a shim built from
+this branch, which carries all of F1–F5 and none of W6:
+
+```
+  size      -gc true                     -gc false
+            saved shim  branch shim      saved shim  branch shim
+  4 KB      0.010       0.012            0.012       0.014
+  256 KB    0.117       0.117            0.145       0.145
+  4 MB      1.700       1.713            1.923       1.871
+  64 MB     25.130      25.277           29.291      28.253
+```
+
+Every pair agrees inside its error bar, which is expected — F1–F5 add only a few
+scalar checks per input, on a two-input add model, against 0.01–29 ms of work.
+The confound is measured and immaterial rather than merely argued, and the W6
+conclusion is unaffected. **Do not reuse a saved shim file for a future run**:
+build the baseline shim from the commit under test, as the replication did.
+
+Raw JMH logs for all eight runs are in the session scratchpad and are not
 committed; the numbers above are the record.
 
 ### Upstream sources
