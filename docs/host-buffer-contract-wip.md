@@ -234,8 +234,13 @@ as the raw 139) and a fresh gdb port per run.
   placement line first (input last in its buffer: yes/no), then fault-or-clean.
   If "yes" + SIGSEGV → re-verify against ExecuTorch `main`
   (`~/workspace/executorch`, tag v1.3.1 is not upstream's tip) before filing
-  Claim 2 (§3/W4 of the brief). If "no" or clean → record "the planner does
-  not place an XNNPACK external input last" and close the concern; do NOT file.
+  Claim 2 (§3/W4 of the brief). **If "no" or clean, record the fixture-specific
+  form** — "`lin129_planned.pte`'s planner did not place its external input last
+  in a single 848-byte buffer" — not the general "the planner never does", and
+  do NOT file. Settle the general question by reading
+  `exir/passes/memory_planning_pass.py` (lifetime packing predicts graph inputs
+  are placed *first*, which would make Claim 2 structurally unreachable) rather
+  than by collecting fixtures. See F5.
 - **Kernel observation** per run (the evidence block is unusable without the
   selected-kernel line): gdb under qemu — terminal 1:
   `ASAN_OPTIONS=detect_leaks=0:handle_segv=0 qemu-x86_64 -g 12345 -cpu EPYC
@@ -249,10 +254,24 @@ as the raw 139) and a fresh gdb port per run.
   symbol is the selected kernel (ukernel symbols are global in the linked dist
   lib). The user's `perf_users` group wrapper (`/usr/bin/perf`,
   root:perf_users) covers `perf_event_paranoid=4`.
-- **Manual re-run with staging enabled** is a nice-to-have confirmation only —
-  never a regression gate. Remember the harness's borrowed mode deliberately
-  bypasses `EtRuntime::forward`, so the "with staging" run means running the
-  real engine path (`et_leak_harness`/JNI) rather than this harness.
+- **Sufficiency arm (config (c)) — run this, it is one command.** Every route
+  above proves the padding is *necessary*; none touches the engine's own path,
+  because `borrowed` mode deliberately bypasses `EtRuntime::forward`. Show the
+  same uarch clean through the real path:
+
+  ```bash
+  ASAN_OPTIONS=detect_leaks=0 qemu-x86_64 -cpu EPYC \
+    ./native/asan/et_leak_harness native/spike/lin129.pte 1 2
+  ```
+
+  Same fixture, same annotated `1x16s4__fma3_broadcast` kernel, but through the
+  padded slot. Expect exit 0 and `grow=0 staged_input=2 total_input=2` (verified
+  to run natively 2026-08-05; the qemu leg is what remains). **Run it in the
+  same sitting as Route B** — "faults raw / clean staged, identical hardware and
+  fixture" is the claim, and either half alone is weak. Still a manual
+  confirmation, never a regression gate: W7's in-repo coverage is the alignment
+  and padding-size assertions, the stage-vs-pass-through case, the ASan lifetime
+  case, and `grow == 0`.
 
 Record each run as a dated evidence block in the brief's §8 (W4 evidence log),
 using the existing template: date, exact command, model, N/K, the kernel
@@ -651,3 +670,59 @@ declare tensor-only inputs, so F3 was entirely latent before this.
 - Shim reconfigured (`-S native`, `JAVA_HOME=zulu-17`) and relinked; XNNPACK
   post-link assertion passed.
 - `./gradlew test leakTest --rerun-tasks` → **73 tests, 0 failures, 0 errors**.
+
+---
+
+## F4, F5, and the W8 table, 2026-08-05
+
+Documentation only; no code. All five review findings are now closed.
+
+**Brief §3/W8 probe table corrected.** It described `staging_grow` as firing
+"once per slot, ideally never after". Neither half survived implementation: it
+first shipped firing once per slot *per load* (the F2 bug), and after F1 and F3
+it fires **never** — the tensor path is gone because inputs past their declared
+bound are rejected, and the non-tensor path is gone because such models are
+rejected at load. The table now says "never / tripwire on the invariants that
+make it unreachable", with a dated paragraph tracing how it got there and an
+instruction not to delete the dead branch. The stale
+"`staging_grow` exactly 2000 times" leak-harness bullet is superseded by
+`grow == 0`, with a note on why the zero form is strictly stronger — it fails on
+a realloc-per-forward slip *and* on a regression to caller-shape sizing, which
+the 2000-count form would have accepted. Also corrected the
+`inferencePathUnderPressure` bullet to state what the unplanned variant does
+*not* buy: native staging memory counts against neither JVM cap and slots are
+sized once, so that test cannot observe a staging leak.
+
+**F4 — sufficiency arm added** to both the brief's run recipe and the manual
+instructions above, as configuration **(c)**:
+`qemu-x86_64 -cpu EPYC ./native/asan/et_leak_harness native/spike/lin129.pte 1 2`.
+Same fixture and same annotated kernel as Route B, but through
+`EtRuntime::forward` and its padded slot; expect exit 0 and `grow=0`. The
+recipe requires it be run in the same sitting as Route B, because "faults raw /
+clean staged, identical hardware and fixture" is the claim and either half alone
+is weak. §8's evidence template gains a `(c)` configuration and a `pairs with:`
+field so a (c) block without its (a) counterpart reads as incomplete.
+
+**F5 — the config (b) negative is now qualified** in both copies. A "no" result
+records as *"`lin129_planned.pte`'s planner did not place its external input
+last in a single 848-byte buffer"*, not as "the planner never does" — the same
+rule the brief already applies to Route A negatives. Added the cheaper route to
+the general answer: read `exir/passes/memory_planning_pass.py`, since lifetime
+packing predicts graph inputs are placed *first*, which would make Claim 2
+structurally unreachable. Do that before building a second fixture; if it holds,
+retire config (b) rather than collecting more `.pte`s.
+
+### Review status
+
+| Finding | State |
+|---|---|
+| F1 — unvalidated staging memcpy | fixed, `0f64c70` |
+| F2 — slots sized lazily | fixed, `934cf38` |
+| F3 — non-tensor inputs staged | fixed, `94c8174` |
+| F4 — no sufficiency run | recipe added (run still owed) |
+| F5 — over-generalized (b) negative | qualified in both copies |
+| Minor: `ensure()` null on OOM | fixed with F2 |
+| Minor: `dtypeSize` default:4 load-bearing | **open** |
+| Minor: probe macros lack `do/while(0)` | **open** |
+| Minor: `ensure()` preserves dead bytes | **open**, harmless |
+| Minor: W4 status reads "complete" | **open** |

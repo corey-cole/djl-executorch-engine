@@ -585,8 +585,23 @@ it; and a fresh gdb port per run.
   placement line first (input last in its buffer: yes/no), then fault-or-clean.
   If "yes" + SIGSEGV → upstream report track: re-verify against ExecuTorch
   `main` (`~/workspace/executorch`, tag v1.3.1 is not upstream's tip) before
-  filing Claim 2. If "no" or clean → record "the planner does not place an
-  XNNPACK external input last" and close the concern; do NOT file.
+  filing Claim 2.
+
+  **Qualifying a negative — this is one fixture, not a survey.** If the run
+  reports "no" or exits clean, the finding is *"`lin129_planned.pte`'s planner
+  did not place its XNNPACK external input last in a single 848-byte arena
+  buffer."* It is **not** "the planner never does." Record it in that form and
+  do not file — but do not write it up as a clearance either; the brief applies
+  the same rule to Route A negatives and the reasoning is identical.
+
+  Settling the general question is cheaper by reading than by collecting
+  fixtures: memory planning packs by lifetime and graph inputs have the earliest
+  start, which predicts they are placed *first* and would make Claim 2
+  structurally unreachable. That argument, confirmed against
+  `exir/passes/memory_planning_pass.py`, closes the question in a way no number
+  of `.pte`s can. Do that before adding a second fixture. If it holds, record it
+  as the answer and retire config (b); if it does not, the fixture that breaks
+  it is the one worth building.
 - Kernel observation per run (the evidence block is unusable without the
   selected-kernel line): gdb under qemu — terminal 1:
   `ASAN_OPTIONS=detect_leaks=0:handle_segv=0 qemu-x86_64 -g 12345 -cpu EPYC
@@ -601,11 +616,29 @@ it; and a fresh gdb port per run.
   symbol is the selected kernel (ukernel symbols are global in the linked dist
   lib). The user's `perf_users` group wrapper (`/usr/bin/perf`,
   root:perf_users) covers `perf_event_paranoid=4`.
-- Manual re-run with staging enabled is a nice-to-have confirmation only —
-  never a regression gate. Note the harness's borrowed mode bypasses
-  `EtRuntime::forward` on purpose: W7 staging pads the slot and absorbs the
-  over-read, so the harness exercises the raw `from_blob` → `set_input`
-  (`share_tensor_data`) path the brief names.
+- **Sufficiency arm — run this, it is one command.** Every route above proves
+  the padding is *necessary*; none exercises the engine's own path, because
+  `et_overread_harness borrowed` deliberately bypasses `EtRuntime::forward` (W7
+  staging would pad the slot and absorb the over-read, making every route report
+  a meaningless negative). So the same uarch that faults on the raw path should
+  be shown **clean** through the real one:
+
+  ```bash
+  ASAN_OPTIONS=detect_leaks=0 qemu-x86_64 -cpu EPYC \
+    ./native/asan/et_leak_harness native/spike/lin129.pte 1 2
+  ```
+
+  Same fixture, same annotated `1x16s4__fma3_broadcast` kernel, but through
+  `EtRuntime::forward` and its padded slot. Expect exit 0 and
+  `grow=0 staged_input=2 total_input=2`. Verified to run natively during the
+  2026-08-05 review; the qemu leg is what remains. Pair it with the Route B run
+  in the same sitting — *faults raw / clean staged, on identical hardware and
+  fixture* is the whole claim, and either half alone is weak.
+
+  This is still a manual confirmation, not a regression gate: W7's in-repo
+  coverage is the alignment and padding-size assertions, the stage-vs-
+  pass-through case, the ASan lifetime case, and `grow == 0` (§3/W7). Those run
+  on any microarchitecture; this one cannot.
 
 Run evidence goes into §8 using the existing W4 evidence template. A negative
 from any route does not license dropping the staging padding (§3/W4).
@@ -818,8 +851,37 @@ degenerates to "allocate once." So:
 
 | Probe | Fires | Job |
 |---|---|---|
-| `staging_grow(slot, old_bytes, new_bytes)` | once per slot, ideally never after | anomaly detector — a fire means an input exceeded its declared bound |
+| `staging_grow(slot, old_bytes, new_bytes)` | **never** — see below | tripwire on the invariants that make it unreachable |
 | `staging_input(slot, nbytes, planned, staged)` | per input, per forward | the actual observability |
+
+**Revised 2026-08-05, after implementation.** `staging_grow` ended up stricter
+than this table originally described, and the difference matters to anyone
+reading the probe's output.
+
+It first shipped firing once per slot per load — routine first-touch, because
+slots were sized lazily from the caller's shape rather than at load from
+`TensorInfo::nbytes()` as this section specifies. That made a genuine overflow
+indistinguishable from normal operation, and `et_leak_harness` asserted the
+first-touch count, so it was measuring the wrong steady state. Sizing at load
+(commit `934cf38`) fixed that and restored the intended anomaly semantics.
+
+Two later changes then made the probe **unreachable**:
+
+- rejecting any input past its declared bound before the staging copy
+  (`0f64c70`) removed the tensor path — `actual` can no longer exceed the bound
+  a slot was sized from;
+- rejecting methods with non-tensor inputs at load (`94c8174`) removed the
+  other — a slot with no declared bound can no longer exist.
+
+So the probe is now a **tripwire, not a detector**: it fires only if slot sizing
+and the bound check stop agreeing with each other. `et_leak_harness`'s
+assertion is correspondingly `grow == 0` for any number of loads and forwards,
+which is strictly stronger than the per-load count it replaced — it catches a
+realloc-per-forward slip *and* a regression to sizing from the caller's shape.
+The dead branch is deliberate and commented as such in `et_runtime.cpp`; do not
+delete it as unreachable code.
+
+`staging_input` is unaffected and remains the per-call observability.
 
 `staging_input` is the complement to W2, not a duplicate: W2 logs the mode once
 at load because per-forward logging would be unusable noise, and USDT is exactly
@@ -834,16 +896,27 @@ symptom is throughput, which none of them measure. Every current assertion is
 aggregate and negative (LSan at exit, or OOM under a cap); none can express
 "this allocated once."
 
-- **`native/harness/et_leak_harness.cpp`** — 1000 loads × 4 forwards over
-  `add.pte` (2 inputs) should fire `staging_grow` **exactly 2000 times**; a
-  realloc-per-forward bug gives 8000. An equality assertion, not a bound. Also
-  add an inverted variant — **1 load × 10,000 forwards** — and assert exactly
-  `numTensorInputs` fires total; the current shape does not isolate steady
-  state. This is the no-JVM binary with a stable build-output path, so it is
-  where the probes should be developed (§7's attach caveats do not apply).
+- **`native/harness/et_leak_harness.cpp`** — **as built (2026-08-05), the
+  assertion is `grow == 0`**, for every fixture and every loads × forwards
+  shape. The original plan here (1000 loads × 4 forwards should fire
+  `staging_grow` exactly 2000 times, a realloc-per-forward bug gives 8000) was
+  written before sizing-at-load; it encoded first-touch allocation as expected
+  behavior. The zero-count form supersedes it and is strictly stronger: it fails
+  on the realloc-per-forward bug *and* on any regression to sizing from the
+  caller's shape, which the 2000-count form would have accepted. The inverted
+  variant (**1 load × 10,000 forwards**) is still worth running and is wired in
+  `build_qa.sh` — it isolates steady state, where the per-load count could
+  otherwise hide a per-forward leak. Equality assertions throughout, not bounds.
+  This is the no-JVM binary with a stable build-output path, so it is where the
+  probes were developed (§7's attach caveats do not apply).
 - **`LeakStressTest.inferencePathUnderPressure`** — already the right shape
-  (one model, 20,000 predicts). Blocked on W7's fixture prerequisite, not on
-  the probe: with `add.pte` it never stages.
+  (one model, 20,000 predicts). The unplanned variant landed as a separate test
+  (`inferencePathUnderPressureUnplanned`) once the fixture existed. Be clear
+  about what it does *not* buy: staging memory is native and counts against
+  neither `-Xmx256m` nor `-XX:MaxDirectMemorySize=64m`, and slots are sized once
+  at load, so this test cannot observe a staging leak. It guards the JNI/NDArray
+  path over a staged model, and the native harness's `grow == 0` is what covers
+  staging itself.
 - **`LeakStressTest.directBufferLifecycleUnderPressure`** — native-free
   (`NDManager.create` only, no forward). The probes add nothing; recorded so
   nobody instruments it hunting a signal that cannot be there.
@@ -1121,7 +1194,7 @@ test report. One block per executed route; a block without a
 
 Template:
   date:            YYYY-MM-DD
-  configuration:   (a) borrowed input  |  (b) arena end
+  configuration:   (a) borrowed input  |  (b) arena end  |  (c) staged, engine path
   route:           A (forced SSE, qemu) | B (Zen uarch, qemu) | B (native Zen hw)
   environment:     qemu-x86_64 -cpu <model>  |  <cloud instance type>
   model:           <path>, N=<n> / K=<k>, alloc_graph_input=<True|False>
@@ -1131,6 +1204,8 @@ Template:
   outcome:         SIGSEGV on guard page | clean run | harness error
   reading:         positive / negative-and-model-specific / inconclusive
   upstream:        <(b) only: filed / not-filed + why; main re-verified y/n>
+  pairs with:      <(c) only: the (a) run it is the clean half of — same uarch,
+                    same fixture, or the pair proves nothing>
 ```
 
 ### Upstream sources
