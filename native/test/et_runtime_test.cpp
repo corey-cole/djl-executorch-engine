@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "dtype_size.h"
 #include "et_log_level.h"
 #include "et_probes.h"
 #include "et_runtime.h"
@@ -158,18 +159,21 @@ TEST_CASE("staging: ensure never shrinks (no realloc when capacity suffices)") {
   REQUIRE(slot.capacity() >= 64);
 }
 
-TEST_CASE("staging: grow preserves the first min(old, new) bytes") {
+TEST_CASE("staging: grow yields a larger aligned buffer (contents not preserved)") {
+  // The staging caller overwrites the whole slot right after ensure(), so preserving the old bytes
+  // was discarded work. What must hold is that growth produces a bigger, still-64-byte-aligned
+  // buffer that is safe to write.
   StagingSlot slot;
   auto* buf = static_cast<uint8_t*>(slot.ensure(64));
   for (size_t k = 0; k < 64; ++k) {
     buf[k] = static_cast<uint8_t>(k);
   }
-  void* grown = slot.ensure(300);
-  REQUIRE(grown != buf);
+  auto* grown = static_cast<uint8_t*>(slot.ensure(300));
+  REQUIRE(grown != nullptr);
+  REQUIRE(reinterpret_cast<uintptr_t>(grown) % 64 == 0);
   REQUIRE(slot.capacity() >= 300);
-  auto* g = static_cast<const uint8_t*>(grown);
-  for (size_t k = 0; k < 64; ++k) {
-    REQUIRE(g[k] == static_cast<uint8_t>(k));
+  for (size_t k = 0; k < 300; ++k) {
+    grown[k] = static_cast<uint8_t>(k);  // writable to the full requested extent (ASan checks this)
   }
 }
 
@@ -237,6 +241,25 @@ TEST_CASE("load: a method with a non-tensor input is rejected") {
   // reject at load rather than at first inference. This also keeps inputMemoryPlanned == 0 meaning
   // exactly "borrowed tensor" for forward()'s staging branch.
   REQUIRE_THROWS_AS([] { EtRuntime rt(PRIM_INPUT_PTE_PATH); }(), std::invalid_argument);
+}
+
+TEST_CASE("forward: an input whose dtype differs from the model's is rejected") {
+  // `actual` is dtypeSize(caller's code) x shape product, so a wrong dtype mis-sizes the staging
+  // copy. Must be caught before it, not by ExecuTorch inside module.forward().
+  EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
+  double a = 2.0;  // 8 bytes, declared as FLOAT64 (7) against a FLOAT32 (6) model
+  float b = 3.0f;
+  std::vector<InputDesc> inputs = {{&a, {1}, 7}, {&b, {1}, 6}};
+  REQUIRE_THROWS_AS(rt.forward(inputs), std::invalid_argument);
+}
+
+TEST_CASE("dtypeSize: unsupported codes report 0, not a guessed width") {
+  REQUIRE(dtypeSize(6) == 4);   // FLOAT32
+  REQUIRE(dtypeSize(4) == 8);   // INT64
+  REQUIRE(dtypeSize(11) == 1);  // BOOL
+  REQUIRE(dtypeSize(5) == 0);   // FLOAT16 — 2 bytes; guessing 4 would double a memcpy length
+  REQUIRE(dtypeSize(2) == 0);   // INT16
+  REQUIRE(dtypeSize(-1) == 0);  // non-tensor sentinel
 }
 
 TEST_CASE("forward: an input at exactly its declared bound is accepted") {

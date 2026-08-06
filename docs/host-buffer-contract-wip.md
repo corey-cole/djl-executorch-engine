@@ -722,7 +722,59 @@ retire config (b) rather than collecting more `.pte`s.
 | F4 — no sufficiency run | recipe added (run still owed) |
 | F5 — over-generalized (b) negative | qualified in both copies |
 | Minor: `ensure()` null on OOM | fixed with F2 |
-| Minor: `dtypeSize` default:4 load-bearing | **open** |
-| Minor: probe macros lack `do/while(0)` | **open** |
-| Minor: `ensure()` preserves dead bytes | **open**, harmless |
-| Minor: W4 status reads "complete" | **open** |
+| Minor: `dtypeSize` default:4 load-bearing | fixed, `2026-08-05` (see below) |
+| Minor: probe macros lack `do/while(0)` | fixed |
+| Minor: `ensure()` preserves dead bytes | fixed |
+| Minor: W4 status reads "complete" | fixed |
+
+---
+
+## Minors fixed, 2026-08-05
+
+**`dtypeSize` catch-all removed, and the hole behind it closed.** The default
+arm returned 4 for any unknown ScalarType. Harmless while it only sized harness
+scratch buffers; it became a memcpy length when staging landed, where guessing 4
+for a 2-byte FLOAT16 reads twice the source. Three changes, because the catch-all
+was a symptom:
+
+- `dtypeSize` returns **0** for unsupported codes, documented as "callers must
+  treat as unsupported, never as a size."
+- `EtRuntime`'s constructor rejects a model declaring any input dtype that sizes
+  to 0, alongside the F3 non-tensor check. Matches `EtDataTypes` on the Java
+  side, which already refuses those codes in both directions.
+- `forward()` rejects an input whose `scalarType` differs from the model's.
+  This was the actual reachable hole: `actual` is
+  `dtypeSize(caller's code) x shape product`, so a caller claiming FLOAT64 over
+  a FLOAT32 model computed twice the real bytes. ExecuTorch checks this too
+  (`method.cpp:1203`) but only inside `module.forward()`, after the staging
+  copy. `EtSymbolBlock` performs the same check in Java; the core now owns it
+  for every consumer.
+
+Together these make `dtypeSize`'s zero arm unreachable from the harnesses, which
+only ever pass metadata from a successfully loaded model.
+
+**Probe macros wrapped in `do/while(0)`.** Both expand to two statements; an
+unbraced `if (cond) ET_PROBE_...;` would have fired the dispatch unconditionally
+— a spurious probe fire, not a compile error, so it would have been invisible.
+
+**`ensure()` no longer preserves contents across growth.** The only caller
+overwrites the whole slot immediately after, so the copy was always discarded.
+The contract is now explicit ("contents are NOT preserved"), and the test asserts
+what must actually hold: growth yields a larger, still-64-byte-aligned buffer
+that is writable to the full requested extent (ASan checks the write).
+
+**W4 status wording.** `complete (manual runs pending)` → `harness complete,
+result pending`, with the reason stated: deliverable 3 is unmet, §8's log is
+empty, and the question W4 asks is therefore still open.
+
+### Verification
+
+- `et_runtime_test`: **23 cases, 170 assertions, all pass**. Assertion count
+  fell from 226 because the preservation test's 64-iteration `REQUIRE` loop
+  became plain writes; three cases were added (dtype mismatch, `dtypeSize`
+  table, plus the reworked growth case).
+- Leak harness `grow=0` on five fixtures, now including `dtypes.pte`
+  (INT64 + FLOAT32) to exercise a non-f32 dtype through the checks:
+  `staged=0 total=40`.
+- Shim relinked; XNNPACK post-link assertion passed.
+- `./gradlew test leakTest --rerun-tasks` → **73 tests, 0 failures, 0 errors**.

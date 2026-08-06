@@ -87,6 +87,15 @@ EtRuntime::EtRuntime(const std::string& ptePath)
           "EtRuntime: input " + std::to_string(i) + " of \"forward\" is not a tensor; this engine "
           "supports only methods whose inputs are all tensors: " + ptePath);
     }
+    // Same reasoning one step further: a dtype we cannot size is a dtype we cannot stage, and
+    // dtypeSize() is what turns a shape into a memcpy length. Rejecting here is what lets every
+    // later use of dtypeSize() assume a nonzero result. This matches EtDataTypes on the Java side,
+    // which already refuses these codes in both directions.
+    if (dtypeSize(state_->meta.inputScalarTypes[i]) == 0) {
+      throw std::invalid_argument(
+          "EtRuntime: input " + std::to_string(i) + " of \"forward\" has unsupported ScalarType " +
+          std::to_string(static_cast<int>(state_->meta.inputScalarTypes[i])) + ": " + ptePath);
+    }
   }
 
   // One slot per input position; resize() would default-construct null unique_ptrs, so create each
@@ -119,6 +128,19 @@ ForwardResult EtRuntime::forward(std::span<const InputDesc> inputs) {
   for (size_t i = 0; i < inputs.size(); ++i) {
     const auto& in = inputs[i];
     shapes[i].assign(in.shape.begin(), in.shape.end());
+
+    // The dtype has to match the model's before it can be trusted to size anything: `actual` below
+    // is dtypeSize(caller's code) x shape product, so a caller claiming FLOAT32 over a FLOAT16
+    // buffer would compute twice the bytes that are really there. ExecuTorch checks this too
+    // (set_input, method.cpp:1203) but only inside module.forward(), after the staging copy.
+    // EtSymbolBlock performs the same check in Java; this is the core owning it for every consumer.
+    if (i < state_->meta.inputScalarTypes.size() &&
+        in.scalarType != state_->meta.inputScalarTypes[i]) {
+      throw std::invalid_argument(
+          "EtRuntime: input " + std::to_string(i) + " has ScalarType " +
+          std::to_string(static_cast<int>(in.scalarType)) + " but the model declares " +
+          std::to_string(static_cast<int>(state_->meta.inputScalarTypes[i])));
+    }
 
     // Byte count of this input; product of an empty shape is 1. Matches dtypeSize's conventions
     // (the subset the harnesses build buffers for), so planned/unplanned classification is exact.

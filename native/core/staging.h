@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <new>
 
 #if defined(_WIN32)
@@ -60,7 +59,11 @@ class StagingSlot {
     return *this;
   }
   // Returns the buffer, allocating if capacity_ < needed. New capacity = ceil(needed / 64) * 64.
-  // On realloc, preserves the first min(old, new) bytes. Never fails except via allocation failure.
+  //
+  // Contents are NOT preserved across a growing call: the only caller overwrites the whole slot
+  // with the incoming input immediately afterwards, so copying the old bytes forward was work whose
+  // result was always discarded. Callers that need the old contents must save them first.
+  // Throws std::bad_alloc if the allocation fails.
   void* ensure(size_t needed) {
     if (needed <= capacity_) {
       return data_;
@@ -73,10 +76,7 @@ class StagingSlot {
       // into the same load failure as any other, and forward() into a clean exception.
       throw std::bad_alloc();
     }
-    if (capacity_ > 0) {
-      std::memcpy(fresh, data_, capacity_);  // preserve the first min(old, new) bytes
-      detail::stagingFree(data_);
-    }
+    detail::stagingFree(data_);  // no-op on nullptr; old contents are intentionally dropped
     data_ = fresh;
     capacity_ = rounded;
     return data_;

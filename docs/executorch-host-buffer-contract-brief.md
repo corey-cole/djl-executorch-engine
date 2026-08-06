@@ -24,7 +24,7 @@ exists in both its non-delegated (`add_unplanned.pte`) and delegated (`clamp5.pt
 | W2 — make the copy observable | **complete** — `is_memory_planned()` plumbed through to Java and asserted (#20) |
 | W3 — correct the documented contract | **complete** — live surfaces corrected (`20768a0`), one residual noted in §3/W3 |
 | W7 fixture prerequisite | **complete** — `add_unplanned.pte` (`7eed3b8`) plus delegated `clamp5.pte`/`lin129.pte`/`lin129_planned.pte` (`export_w4_models.py`); leak harness wired with exact-count staging assertions |
-| W4 — over-read confirmation | **complete** (manual runs pending — see §3/W4) — guard-page harness `native/harness/et_overread_harness.cpp`, both configurations, builds in the QA tree, never CI |
+| W4 — over-read confirmation | **harness complete, result pending** — `native/harness/et_overread_harness.cpp` covers both configurations and builds in the QA tree, never CI; deliverable 3 (dated evidence) is unmet and §8's log is empty, so the *question* W4 asks is still open |
 | W7 — grow-only per-slot staging | **complete** — `native/core/staging.h` + `forward()` integration, in-repo coverage (§3/W7) |
 | W8 — USDT probes and leak-test coverage | **complete** — `native/core/et_probes.h`, exact-count assertions in `et_leak_harness` + `build_qa.sh` |
 | W5, W6, W9 | open |

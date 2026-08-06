@@ -29,10 +29,19 @@ inline void et_probe_clear_handler() { et_probe_set_handler(nullptr); }
 // SDT macro first (matches the dist's etnp::lstm probes: provider "etnp", Semaphore: 0x0 — plain
 // DTRACE_PROBE*, no _ENABLED/semaphore — so one set of bpftrace/perf tooling covers both), then
 // the in-process dispatch.
+// Both expand to two statements, so they are wrapped in do/while(0): without it an unbraced
+// `if (cond) ET_PROBE_...;` would fire the dispatch unconditionally, which is the classic form of
+// this bug and would be invisible here (a spurious probe fire, not a compile error).
 #define ET_PROBE_STAGING_GROW(slot, old_bytes, new_bytes)                                            \
-  DTRACE_PROBE4(measly, staging_grow, (slot), (old_bytes), (new_bytes), 0);                          \
-  ::measly::et::probe_dispatch(::measly::et::kProbeStagingGrow, (slot), (old_bytes), (new_bytes), 0)
+  do {                                                                                               \
+    DTRACE_PROBE4(measly, staging_grow, (slot), (old_bytes), (new_bytes), 0);                        \
+    ::measly::et::probe_dispatch(::measly::et::kProbeStagingGrow, (slot), (old_bytes), (new_bytes),  \
+                                 0);                                                                 \
+  } while (0)
 
 #define ET_PROBE_STAGING_INPUT(slot, nbytes, planned, staged)                                        \
-  DTRACE_PROBE5(measly, staging_input, (slot), (nbytes), (planned), (staged), 0);                    \
-  ::measly::et::probe_dispatch(::measly::et::kProbeStagingInput, (slot), (nbytes), (planned), (staged))
+  do {                                                                                               \
+    DTRACE_PROBE5(measly, staging_input, (slot), (nbytes), (planned), (staged), 0);                  \
+    ::measly::et::probe_dispatch(::measly::et::kProbeStagingInput, (slot), (nbytes), (planned),      \
+                                 (staged));                                                          \
+  } while (0)
