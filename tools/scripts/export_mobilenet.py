@@ -22,7 +22,9 @@ Run with uv so the pinned deps are provisioned automatically:
     uv run tools/scripts/export_mobilenet.py
 
 Writes into the current working directory:
-  - mobilenet_v2.pte  (torch.export -> XNNPACK to_edge_transform_and_lower -> to_executorch)
+  - mobilenet_v2.pte  (torch.export -> XNNPACK to_edge_transform_and_lower -> to_executorch,
+                       default memory planning: inputs are memory-planned)
+  - mobilenet_v2_unplanned.pte  (same weights, alloc_graph_input=False: inputs are borrowed)
   - mobilenet_v2.pt   (torch.jit.trace -> torch.jit.save)  [.pt: DJL PyTorch resolves by model name]
   - versions.json     ({torch, torchvision, executorch} for reproducibility)
 
@@ -41,7 +43,8 @@ from importlib.metadata import PackageNotFoundError, version
 import torch
 import torchvision
 from torch.export import export
-from executorch.exir import to_edge_transform_and_lower
+from executorch.exir import ExecutorchBackendConfig, to_edge_transform_and_lower
+from executorch.exir.passes import MemoryPlanningPass
 from executorch.backends.xnnpack.partition.xnnpack_partitioner import XnnpackPartitioner
 
 
@@ -57,13 +60,24 @@ def main() -> None:
     model = torchvision.models.mobilenet_v2(weights=weights).eval()
     example = (torch.randn(1, 3, 224, 224),)
 
-    # ExecuTorch .pte, XNNPACK-lowered.
+    # ExecuTorch .pte, XNNPACK-lowered (default export config: memory-planned inputs).
     lowered = to_edge_transform_and_lower(
         export(model, example),
         partitioner=[XnnpackPartitioner()],
-    ).to_executorch()
+    )
     with open("mobilenet_v2.pte", "wb") as f:
-        f.write(lowered.buffer)
+        f.write(lowered.to_executorch().buffer)
+
+    # Same weights, alloc_graph_input=False: ExecuTorch borrows the input pointer
+    # (share_tensor_data) instead of memcpy'ing into the arena — the W5 input A/B arm.
+    # Pattern: native/spike/export_w4_models.py calls to_executorch() twice on one lowered.
+    unplanned = lowered.to_executorch(
+        config=ExecutorchBackendConfig(
+            memory_planning_pass=MemoryPlanningPass(alloc_graph_input=False)
+        )
+    )
+    with open("mobilenet_v2_unplanned.pte", "wb") as f:
+        f.write(unplanned.buffer)
 
     # TorchScript .pt from the SAME weights.
     traced = torch.jit.trace(model, example)
@@ -80,7 +94,7 @@ def main() -> None:
             indent=2,
         )
 
-    print("wrote mobilenet_v2.pte, mobilenet_v2.pt, versions.json")
+    print("wrote mobilenet_v2.pte, mobilenet_v2_unplanned.pte, mobilenet_v2.pt, versions.json")
 
 
 if __name__ == "__main__":
