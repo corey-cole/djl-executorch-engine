@@ -27,7 +27,9 @@ exists in both its non-delegated (`add_unplanned.pte`) and delegated (`clamp5.pt
 | W4 — over-read confirmation | **harness complete, result pending** — `native/harness/et_overread_harness.cpp` covers both configurations and builds in the QA tree, never CI; deliverable 3 (dated evidence) is unmet and §8's log is empty, so the *question* W4 asks is still open |
 | W7 — grow-only per-slot staging | **complete** — `native/core/staging.h` + `forward()` integration, in-repo coverage (§3/W7) |
 | W8 — USDT probes and leak-test coverage | **complete** — `native/core/et_probes.h`, exact-count assertions in `et_leak_harness` + `build_qa.sh` |
-| W5, W6, W9 | open |
+| W5 — establish the cost | **harness + recipe complete, runs pending** — edits on `feature/w5-w6-direct-outputs` (W5-1..W5-3); run recipes in §3/W5, evidence log in §8/W5 |
+| W6 — direct-buffer outputs | open |
+| W9 — shared aligned-buffer abstraction | open |
 
 ---
 
@@ -666,6 +668,68 @@ finding. The output/GC arm is the one with genuine uncertainty.
 harness edit and the run recipe, not the run.** Tagged ⚠️ — see §7; a
 large-tensor arm here would reproduce the IREE W2 memory profile exactly.
 
+#### Run recipe (implemented 2026-08-06)
+
+Harness edits live on `feature/w5-w6-direct-outputs`: the `exportMode` A/B in
+`MobilenetBenchmark` and the `AddOutputBenchmark` sweep (models from
+`tools/scripts/export_w5_add_models.py`, task `:example:exportW5Models`).
+Two sessions, because the W6 arm swaps the shim: the heap baseline runs at the
+W5-tip commit (pre-W6) against the saved pre-W6 shim `/tmp/et-pre-w6.so` (a file
+path, per `LibUtils.loadLibrary`); the W6 comparison runs at the branch tip with
+the rebuilt, jar-bundled shim.
+
+Both sessions use the §7 control and a jar built with
+`./gradlew :example:jmhJar --no-configuration-cache --rerun-tasks`
+(`--no-configuration-cache` is required by the JMH plugin — see
+`example/README.md`).
+
+**S1 — input A/B + output baseline (heap path), at the W5-tip commit:**
+
+```bash
+git worktree add /tmp/et-w5-baseline <W5-tip-SHA>
+cd /tmp/et-w5-baseline
+./gradlew :example:exportModels --no-configuration-cache --rerun-tasks   # uv; flatc fallback if needed
+./gradlew :example:exportW5Models --no-configuration-cache --rerun-tasks
+./gradlew :example:jmhJar --no-configuration-cache --rerun-tasks
+
+# input A/B: same MobileNet, planned vs unplanned export (the invisible input copy)
+# ET_NATIVE (not ET_HYBRID): the fat jar's META-INF/services keeps only the ExecuTorch
+# provider (jmhJar duplicatesStrategy=EXCLUDE — see docs/iree-lessons-learned §3), so a
+# PyTorch-backed arm cannot load from java -jar. The A/B delta is the export mode alone;
+# ET_NATIVE also keeps the fork LibTorch-free.
+EXECUTORCH_LIBRARY_PATH=/tmp/et-pre-w6.so systemd-run --user --scope -p MemoryMax=4G taskset -c 0-3 \
+  timeout 900 bash -c 'java -jar example/build/libs/example-jmh.jar -f 1 -w 250ms -r 250ms -gc true \
+  -jvmArgs "-Xmx1536M -Dexample.models.dir=example/build/models -Dai.djl.pytorch.num_interop_threads=1" \
+  -p variant=ET_NATIVE -p exportMode=planned,unplanned MobilenetBenchmark.steadyState'
+
+# output baseline: heap byte[] marshalling + its GC cost, four sizes
+EXECUTORCH_LIBRARY_PATH=/tmp/et-pre-w6.so systemd-run --user --scope -p MemoryMax=4G taskset -c 0-3 \
+  timeout 900 bash -c 'java -jar example/build/libs/example-jmh.jar -f 1 -w 250ms -r 250ms -gc true -prof gc \
+  -jvmArgs "-Xmx1536M -Dexample.models.dir=example/build/models" \
+  AddOutputBenchmark.steadyState'
+```
+
+`-gc true` + `-Xmx1536M` + `-w/-r 250ms` is the config proven on this host by the
+IREE spike (findings §3) — per-iteration GC keeps the W6 arm's Cleaner draining;
+`-prof gc` reports the per-op allocation rate and GC time. The export tasks must
+run from the repo root; if a delegated export fails with
+`FileNotFoundError: 'flatc'`, re-run with
+`PATH=$HOME/workspace/executorch/.venv/bin:$PATH` (brief §8 flatc caveat).
+
+**S2 — W6 comparison (direct outputs), at the branch tip after rebuilding the shim:**
+
+```bash
+cmake --build native/build -j"$(nproc)"    # native/build is the shipping-shim cache (ET_BUILD_QA/OFF, BENCH/OFF, logging)
+cp native/build/libexecutorch_djl.so src/main/resources/native/linux-x86_64/
+./gradlew :example:jmhJar --no-configuration-cache --rerun-tasks
+# output comparison: SAME AddOutputBenchmark command as S1, no EXECUTORCH_LIBRARY_PATH
+# (the jar now bundles the W6 shim)
+```
+
+If a cmake reconfigure is needed (stale cache), set `JAVA_HOME` to the Zulu 17
+used for the JVM tests first (`CMakeLists.txt` reads `$ENV{JAVA_HOME}` at
+configure). The W6 direct arm's numbers go into the same §8/W5 log blocks.
+
 ### W6 — Prototype: direct-buffer outputs
 
 Replace copy 3's `NewByteArray` + `ByteBuffer.wrap` with a JNI-allocated block
@@ -1206,6 +1270,28 @@ Template:
   upstream:        <(b) only: filed / not-filed + why; main re-verified y/n>
   pairs with:      <(c) only: the (a) run it is the clean half of — same uarch,
                     same fixture, or the pair proves nothing>
+```
+
+### W5 evidence log
+
+W5's runs are manual, off-CI, user-run sessions (§3/W5). One block per arm: the
+input A/B arm, the output heap baseline arm, and the output W6 direct arm. A
+block without the `-prof gc` lines on the output arm, or without both A/B arms,
+is not a usable result.
+
+```
+(empty — W5 has not been run)
+
+Template:
+  date:            YYYY-MM-DD
+  arm:             input A/B | output heap baseline | output W6 direct
+  commit/branch:   <sha> on <branch>  (A/B and output baseline: the W5 tip; output W6: the branch tip)
+  models + sizes:  mobilenet_v2.pte vs mobilenet_v2_unplanned.pte
+                   | add_4kb (N=1024) .. add_64mb (N=16777216)
+  ms/op ± err:     <JMH output, per arm>
+  -prof gc:        <allocation rate + GC time/op>  (output arm only)
+  CPU/OS/glibc:    <lscpu model name / uname -r / ldd --version | head -1>
+  reading:         <what the numbers mean for the W6 decision — see §3/W5>
 ```
 
 ### Upstream sources
