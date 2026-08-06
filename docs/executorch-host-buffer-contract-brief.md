@@ -681,7 +681,8 @@ the rebuilt, jar-bundled shim.
 Both sessions use the §7 control and a jar built with
 `./gradlew :example:jmhJar --no-configuration-cache --rerun-tasks`
 (`--no-configuration-cache` is required by the JMH plugin — see
-`example/README.md`).
+`example/README.md`). All commands below were validated in shape on
+2026-08-06 (smoke runs; non-evidence scores in §8/W5).
 
 **S1 — input A/B + output baseline (heap path), at the W5-tip commit:**
 
@@ -1304,6 +1305,33 @@ Template:
   CPU/OS/glibc:    <lscpu model name / uname -r / ldd --version | head -1>
   reading:         <what the numbers mean for the W6 decision — see §3/W5>
 ```
+
+#### Harness validation record (2026-08-06 — smoke runs, NOT evidence)
+
+The recipe's commands were validated in shape before the user-run sessions:
+`git worktree add … c1ea5dd` (then removed), both export tasks (all six
+artifacts probe-verified: planned/unplanned flags, `(1, N)` f32 outputs),
+`jmhJar`, the S2 shim rebuild + stage (`cmake --build native/build -j$(nproc)`
++ copy), and the `EXECUTORCH_LIBRARY_PATH` mechanism (`LibUtils` →
+`System.load(override)`; `/tmp/et-pre-w6.so` present, 12,156,592 bytes). Each
+arm below executes and prints a score from the fat jar with the recipe's
+`-p`/`-jvmArgs` shape, and the logs show the expected artifact load lines
+(e.g. `mobilenet_v2 input 0 memoryPlanned=true` vs `mobilenet_v2_unplanned
+input 0 memoryPlanned=false`).
+
+The scores are JMH smokes (`-f 1 -wi 0 -i 1 -w 1ms -r 1ms`: no warmup, 1 ms
+windows, no `-gc true`, no `-prof gc`) and MUST NOT be cited as measurements —
+they only prove the arms run. The full §7 `systemd-run` invocations with
+`-gc true`/`-prof gc` and real iteration counts were not run; those are the
+S1/S2 user sessions.
+
+| arm | shim | smoke score |
+|---|---|---|
+| AddOutputBenchmark add_4kb | pre-W6 (heap `byte[]`; jar-bundled copy of the saved shim) | 0.060 ms/op |
+| AddOutputBenchmark add_4mb | pre-W6 (heap `byte[]`) | 2.927 ms/op |
+| AddOutputBenchmark add_4kb | W6 (direct, rebuilt shim) | 0.064 ms/op |
+| MobilenetBenchmark steadyState planned (ET_NATIVE) | pre-W6 (heap `byte[]`) | 22.422 ms/op |
+| MobilenetBenchmark steadyState unplanned (ET_NATIVE) | pre-W6 (heap `byte[]`) | 15.134 ms/op |
 
 ### Upstream sources
 
