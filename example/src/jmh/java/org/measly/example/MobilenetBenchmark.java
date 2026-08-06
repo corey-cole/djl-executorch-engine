@@ -36,14 +36,23 @@ public class MobilenetBenchmark {
     @State(Scope.Benchmark)
     public static class Config {
         @Param public Variant variant;
+        /** Selects the ExecuTorch .pte export mode; ignored for PYTORCH (always the .pt). */
+        @Param({"planned", "unplanned"}) public String exportMode;
 
         Path modelsDir;
         Image image;
         List<String> synset;
 
+        /** Model name for the arm; PYTORCH always uses the .pt's name. */
+        String modelName() {
+            return variant == Variant.PYTORCH
+                    ? "mobilenet_v2"
+                    : ("unplanned".equals(exportMode) ? "mobilenet_v2_unplanned" : "mobilenet_v2");
+        }
+
         @Setup(Level.Trial)
         public void setup() throws Exception {
-            String artifact = variant == Variant.PYTORCH ? "mobilenet_v2.pt" : "mobilenet_v2.pte";
+            String artifact = modelName() + (variant == Variant.PYTORCH ? ".pt" : ".pte");
             modelsDir = ModelArtifacts.require(artifact).getParent();
             try (InputStream in = MobilenetBenchmark.class.getResourceAsStream("/kitten.jpg")) {
                 image = ImageFactory.getInstance().fromInputStream(in);
@@ -55,12 +64,13 @@ public class MobilenetBenchmark {
     }
 
     /** Builds the Criteria for the arm under test, parameterized by variant. */
-    static Criteria<Image, Classifications> criteria(Config cfg, CloseableImageTranslator translator) {
+    static Criteria<Image, Classifications> criteria(
+            Config cfg, CloseableImageTranslator translator, String modelName) {
         return Criteria.builder()
                 .setTypes(Image.class, Classifications.class)
                 .optEngine(cfg.variant.engine)
                 .optModelPath(cfg.modelsDir)
-                .optModelName("mobilenet_v2")
+                .optModelName(modelName)
                 .optTranslator(translator)
                 .build();
     }
@@ -80,7 +90,7 @@ public class MobilenetBenchmark {
         public void setup(Config cfg) throws Exception {
             translator = cfg.variant.newTranslator(cfg.synset);
             try {
-                model = criteria(cfg, translator).loadModel();
+                model = criteria(cfg, translator, cfg.modelName()).loadModel();
                 predictor = model.newPredictor();
                 predictor.predict(cfg.image); // warm once so first measured op is steady-state
             } catch (Throwable t) {
@@ -113,7 +123,7 @@ public class MobilenetBenchmark {
     @OutputTimeUnit(TimeUnit.MILLISECONDS)
     public Classifications coldStart(Config cfg) throws Exception {
         try (CloseableImageTranslator translator = cfg.variant.newTranslator(cfg.synset);
-                ZooModel<Image, Classifications> model = criteria(cfg, translator).loadModel();
+                ZooModel<Image, Classifications> model = criteria(cfg, translator, cfg.modelName()).loadModel();
                 Predictor<Image, Classifications> predictor = model.newPredictor()) {
             return predictor.predict(cfg.image); // load + first forward, per invocation
         }
