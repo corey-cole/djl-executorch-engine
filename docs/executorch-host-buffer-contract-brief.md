@@ -28,7 +28,7 @@ exists in both its non-delegated (`add_unplanned.pte`) and delegated (`clamp5.pt
 | W7 — grow-only per-slot staging | **complete** — `native/core/staging.h` + `forward()` integration, in-repo coverage (§3/W7) |
 | W8 — USDT probes and leak-test coverage | **complete** — `native/core/et_probes.h`, exact-count assertions in `et_leak_harness` + `build_qa.sh` |
 | W5 — establish the cost | **harness + recipe complete, runs pending** — edits on `feature/w5-w6-direct-outputs` (W5-1..W5-3); run recipes in §3/W5, evidence log in §8/W5 |
-| W6 — direct-buffer outputs | open |
+| W6 — direct-buffer outputs | **complete (prototype, decision pending on W5 numbers)** — W6-1..W6-4 on `feature/w5-w6-direct-outputs` |
 | W9 — shared aligned-buffer abstraction | open |
 
 ---
@@ -195,7 +195,7 @@ mixed, and whether ExecuTorch honors the borrow.
 | `manager.from()` / `toByteBuffer()` (`EtSymbolBlock.java:48-55`) | none for an `EtNDArray`; full copy otherwise |
 | JNI `GetDirectBufferAddress` (`executorch_djl_jni.cpp:158`) | none |
 | ET `set_input` → `copy_tensor_data` | **copy 2 — invisible, undocumented** |
-| JNI out: `NewByteArray` + `SetByteArrayRegion` + `ByteBuffer.wrap` (`executorch_djl_jni.cpp:189-191`) | **copy 3, onto the JVM heap** |
+| JNI out: `allocOutputBuffer` → `NewDirectByteBuffer` (`executorch_djl_jni.cpp`; pre-W6: `NewByteArray` + `ByteBuffer.wrap`) | **copy 3, into a JNI-allocated direct buffer, freed by a Cleaner (pre-W6: onto the JVM heap)** |
 
 Copy 3 has a second-order cost the IREE engine does not have: the returned
 buffer is a **heap** `byte[]`, not direct. Chaining model A → model B therefore
@@ -739,6 +739,17 @@ after the next `forward()`, so the copy is mandatory. Only its *destination*
 changes: off-heap instead of on-heap, and direct, which also removes the
 model-chaining re-copy at `EtSymbolBlock.java:56`.
 
+**Status: complete (prototype, decision pending on W5 numbers).** Implemented
+2026-08-06 on `feature/w5-w6-direct-outputs` (W6-1..W6-4): copy 3's destination
+is now a JNI-allocated block exposed via `NewDirectByteBuffer`
+(`native/jni/et_output_buffer.h`, `executorch_djl_jni.cpp`), freed by a
+`java.lang.ref.Cleaner` registered in `EtOutputBuffers` the moment an output
+`EtTensor` is wrapped. The replacement leak signal is the native alive-counter
+(`EtNative.aliveOutputBuffers`), asserted to drain by `LeakStressTest`; the
+heap-independent marshalling contract is pinned by `EtNativeOomTest` under
+`-Xmx128m`. Whether this stays or is reverted is decided on the W5 numbers
+(§3/W5, §8/W5).
+
 IREE's W4 prototype ports here nearly verbatim, including its two hard-won
 rules: register **only the address primitive** with the Cleaner (capturing the
 `ByteBuffer` keeps it strongly reachable and the Cleaner never fires), and make
@@ -755,11 +766,11 @@ they stop counting — the same mechanism as the IREE OOM-kill. The 20,000-predi
 loop would then pass regardless of whether outputs leak, and **nothing would
 announce the loss of coverage.**
 
-So W6 must ship with a replacement signal in the same change: IREE used a native
-alive-counter (`aliveAlignedBuffers()`) polled from the test; the W8 probes give
-the same property with better granularity. Either is acceptable; shipping W6
-without one is a net reduction in coverage disguised as a performance
-improvement.
+W6 shipped with a replacement signal in the same change: the native
+alive-counter `EtNative.aliveOutputBuffers` (IREE's `aliveAlignedBuffers()`
+pattern, polled from the test), asserted to drain by `LeakStressTest`'s
+deadline-poll helper after each pressure run. Shipping W6 without one would
+have been a net reduction in coverage disguised as a performance improvement.
 
 *Answers:* feasibility of the likelier win, and supplies W5's comparison arm.
 
