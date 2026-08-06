@@ -58,7 +58,7 @@ tasks.register<Test>("leakTest") {
 }
 
 tasks.register<Test>("oomTest") {
-    description = "JNI output-marshalling failure-contract tests under a constrained heap."
+    description = "JNI output-marshalling contract under a constrained heap."
     group = "verification"
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath

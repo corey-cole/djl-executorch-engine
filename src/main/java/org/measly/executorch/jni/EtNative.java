@@ -1,5 +1,6 @@
 package org.measly.executorch.jni;
 
+import java.nio.ByteBuffer;
 import org.measly.executorch.engine.LibUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +24,23 @@ public final class EtNative {
     public static native EtTensor[] forward(long handle, EtTensor[] inputs);
 
     public static native void destroy(long handle);
+
+    /**
+     * Returns the native address of a direct buffer's backing memory, or 0 for a non-direct
+     * buffer (JNI spec; never throws). Used to wire engine-allocated output buffers into the
+     * Cleaner.
+     */
+    public static native long bufferAddress(ByteBuffer buffer);
+
+    /**
+     * Frees a JNI-allocated output buffer by address. {@code 0} is a no-op (idempotent by
+     * contract, so a mis-registration can never double-free). Called exactly once per buffer,
+     * from the Cleaner registered by {@code EtOutputBuffers}; plain Java code never calls it.
+     */
+    public static native void freeOutputBuffer(long address);
+
+    /** Live JNI-allocated output buffers (leak probe for tests — see LeakStressTest). */
+    public static native long aliveOutputBuffers();
 
     /**
      * Called from native code (the ExecuTorch PAL sink) to route an ET_LOG message to slf4j.

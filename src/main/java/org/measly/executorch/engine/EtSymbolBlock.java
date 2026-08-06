@@ -67,6 +67,9 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
         NDList ret = new NDList(out.length);
         for (EtTensor t : out) {
             DataType dt = EtDataTypes.fromScalarType(t.scalarType);
+            // Output buffers are JNI-allocated: free the native block once the ByteBuffer is
+            // unreachable. Inputs are never registered (only the output loop).
+            EtOutputBuffers.register(t.data);
             ret.add(target.wrap(t.data, new Shape(t.shape), dt));
         }
         return ret;

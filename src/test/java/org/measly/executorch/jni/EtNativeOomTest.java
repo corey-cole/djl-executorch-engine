@@ -1,6 +1,7 @@
 package org.measly.executorch.jni;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -9,26 +10,29 @@ import org.junit.jupiter.api.Test;
 import org.measly.executorch.TestSupport;
 
 /**
- * OOM contract for the output-marshalling path: a 512 MiB output must surface as a clean
- * OutOfMemoryError, never an unchecked native crash. Run via the {@code oomTest} Gradle task
- * under {@code -Xmx128m}: the test heap cannot hold the marshalled byte[], so
- * {@code NewByteArray} fails and the JNI code must observe the failure instead of writing into
- * a null array.
+ * Output-marshalling contract under a constrained heap. Repurposed for W6: the 512 MiB output is
+ * now marshalled into a JNI-allocated block, so the forward no longer allocates on the
+ * {@code -Xmx128m} test heap at all — the test proves the output path is heap-independent and
+ * exercises the alive counter (allocate → observe 1 → free → observe 0). Run via the
+ * {@code oomTest} Gradle task under {@code -Xmx128m}.
  */
 @Tag("oom")
 class EtNativeOomTest {
 
     @Test
-    void oversizedOutputThrowsOutOfMemory() {
+    void oversizedOutputAllocatesOffHeap() {
         TestSupport.assumeMedOutputModelAvailable();
         long handle = EtNative.loadModule(TestSupport.medOutputPtePath());
         try {
             ByteBuffer input = ByteBuffer.allocateDirect(4).order(ByteOrder.nativeOrder());
             input.putFloat(0, 1f);
             EtTensor tensor = new EtTensor(new long[] {1}, 6 /*Float*/, input);
-            assertThrows(
-                    OutOfMemoryError.class,
-                    () -> EtNative.forward(handle, new EtTensor[] {tensor}));
+            EtTensor[] out = EtNative.forward(handle, new EtTensor[] {tensor});
+            assertNotNull(out);
+            assertEquals(1, out.length);
+            assertEquals(1, EtNative.aliveOutputBuffers());
+            EtNative.freeOutputBuffer(EtNative.bufferAddress(out[0].data));
+            assertEquals(0, EtNative.aliveOutputBuffers());
         } finally {
             EtNative.destroy(handle);
         }

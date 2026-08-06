@@ -1,5 +1,7 @@
 package org.measly.executorch;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import ai.djl.inference.Predictor;
 import ai.djl.ndarray.NDManager;
 import ai.djl.ndarray.types.Shape;
@@ -8,11 +10,15 @@ import ai.djl.repository.zoo.ZooModel;
 import java.nio.file.Paths;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.measly.executorch.jni.EtNative;
 
 /**
- * Leak gates that turn a lifecycle leak into a deterministic OutOfMemoryError. Run via the
- * {@code leakTest} Gradle task under {@code -XX:MaxDirectMemorySize=64m -Xmx256m}; a correct
- * lifecycle survives the GC-reclaim retry, a leak exhausts memory and fails.
+ * Leak gates that turn a lifecycle leak into a failure. Heap/direct-buffer lifecycle leaks are
+ * caught by the OOM caps under {@code -XX:MaxDirectMemorySize=64m -Xmx256m} (a correct lifecycle
+ * survives the GC-reclaim retry, a leak exhausts memory and fails). Since W6, output buffers are
+ * JNI-allocated and do not count against those caps, so the output leak gate is the native
+ * alive-counter ({@link EtNative#aliveOutputBuffers()}), asserted to drain once unreachable.
+ * Run via the {@code leakTest} Gradle task under {@code -XX:MaxDirectMemorySize=64m -Xmx256m}.
  */
 @Tag("leak")
 class LeakStressTest {
@@ -47,6 +53,7 @@ class LeakStressTest {
                 predictor.predict(new float[] {1f, 2f});
             }
         }
+        assertOutputBuffersDrained();
     }
 
     /**
@@ -73,5 +80,22 @@ class LeakStressTest {
                 predictor.predict(new float[] {1f, 2f});
             }
         }
+        assertOutputBuffersDrained();
+    }
+
+    /**
+     * W6 leak gate: JNI-allocated output buffers do not count against the heap/direct-memory caps,
+     * so the alive counter — not memory pressure — is the output-leak signal. Every predict's
+     * output wraps on the PredictorContext manager, which predict() closes, making the buffer
+     * unreachable; the Cleaner must free it, or this poll fails after 5 s.
+     */
+    private static void assertOutputBuffersDrained() throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (System.currentTimeMillis() < deadline && EtNative.aliveOutputBuffers() != 0) {
+            System.gc();
+            Thread.sleep(25);
+        }
+        assertEquals(0, EtNative.aliveOutputBuffers(),
+                "Cleaner must free every JNI-allocated output buffer once unreachable");
     }
 }
