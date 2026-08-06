@@ -27,8 +27,8 @@ exists in both its non-delegated (`add_unplanned.pte`) and delegated (`clamp5.pt
 | W4 — over-read confirmation | **harness complete, result pending** — `native/harness/et_overread_harness.cpp` covers both configurations and builds in the QA tree, never CI; deliverable 3 (dated evidence) is unmet and §8's log is empty, so the *question* W4 asks is still open |
 | W7 — grow-only per-slot staging | **complete** — `native/core/staging.h` + `forward()` integration, in-repo coverage (§3/W7) |
 | W8 — USDT probes and leak-test coverage | **complete** — `native/core/et_probes.h`, exact-count assertions in `et_leak_harness` + `build_qa.sh` |
-| W5 — establish the cost | **harness + recipe complete, runs pending** — edits on `feature/w5-w6-direct-outputs` (W5-1..W5-3); run recipes in §3/W5, evidence log in §8/W5 |
-| W6 — direct-buffer outputs | open |
+| W5 — establish the cost | **complete — run 2026-08-06, results in §8/W5.** Input A/B: no measurable difference (12.7 vs 13.0 ms/op, CIs overlap). Output: the W6 direct path is 24–87% *slower* than heap at ≥256 KB and OOM-kills without an external GC trigger |
+| W6 — direct-buffer outputs | **prototyped and rejected on the W5 numbers — not on this branch.** The prototype lives unmerged on `feature/w5-w6-direct-outputs` as the record; §8/W5 has the measurements and the two blocking defects (per-op `operator new`/`delete` of the full output; a free path with no backpressure). Reopening it means beating the heap path's `-gc false` numbers first |
 | W9 — shared aligned-buffer abstraction | open |
 
 ---
@@ -658,6 +658,16 @@ Measure, against kernel time:
 - the heap `byte[]` output copy, including its GC cost, at output sizes well
   past MobileNet's 4 KB.
 
+**What the input A/B can and cannot measure (established 2026-08-06).** It is
+*not* a copy-vs-no-copy comparison. `et_runtime.cpp:169-192` copies the input
+once on **both** paths: planned inputs are memcpy'd by ExecuTorch's
+`copy_tensor_data` into its arena, unplanned inputs are memcpy'd by W7 into the
+staging slot. The A/B delta is therefore the *export mode's* whole-graph effect
+(arena layout and planner output), with the two copies cancelling. To price the
+copy itself, use the `staging_input` USDT probe or the native timing harness —
+not JMH. The arm is still worth running, because "does `alloc_graph_input=False`
+cost anything end to end?" is the question a user actually has.
+
 *Answers:* whether any of this is defensible to users. The IREE spike's own
 numbers predict the input answer — copies were ~0.5% of a 61.6 ms MobileNet
 kernel there, and our input copy is a single 600 KB memcpy against a comparable
@@ -698,20 +708,46 @@ cd /tmp/et-w5-baseline
 # PyTorch-backed arm cannot load from java -jar. The A/B delta is the export mode alone;
 # ET_NATIVE also keeps the fork LibTorch-free.
 EXECUTORCH_LIBRARY_PATH=/tmp/et-pre-w6.so systemd-run --user --scope -p MemoryMax=4G taskset -c 0-3 \
-  timeout 900 bash -c 'java -jar example/build/libs/example-jmh.jar -f 1 -w 250ms -r 250ms -gc true \
-  -jvmArgs "-Xmx1536M -Dexample.models.dir=example/build/models -Dai.djl.pytorch.num_interop_threads=1" \
+  timeout 1800 bash -c 'java -jar example/build/libs/example-jmh.jar -f 3 -wi 5 -w 1s -i 5 -r 1s -gc true \
+  -jvmArgs "-Xmx1536M -Dexample.models.dir=<abs>/example/build/models -Dai.djl.pytorch.num_interop_threads=1" \
   -p variant=ET_NATIVE -p exportMode=planned,unplanned MobilenetBenchmark.steadyState'
 
-# output baseline: heap byte[] marshalling + its GC cost, four sizes
+# output baseline: heap byte[] marshalling + its GC cost, four sizes.
+# Run TWICE, -gc true and -gc false; see the note below. /usr/bin/time -v for peak RSS.
 EXECUTORCH_LIBRARY_PATH=/tmp/et-pre-w6.so systemd-run --user --scope -p MemoryMax=4G taskset -c 0-3 \
-  timeout 900 bash -c 'java -jar example/build/libs/example-jmh.jar -f 1 -w 250ms -r 250ms -gc true -prof gc \
-  -jvmArgs "-Xmx1536M -Dexample.models.dir=example/build/models" \
+  timeout 1800 bash -c '/usr/bin/time -v java -jar example/build/libs/example-jmh.jar \
+  -f 3 -wi 5 -w 1s -i 5 -r 1s -gc true -prof gc \
+  -jvmArgs "-Xmx1536M -Dexample.models.dir=<abs>/example/build/models" \
   AddOutputBenchmark.steadyState'
 ```
 
-`-gc true` + `-Xmx1536M` + `-w/-r 250ms` is the config proven on this host by the
-IREE spike (findings §3) — per-iteration GC keeps the W6 arm's Cleaner draining;
-`-prof gc` reports the per-op allocation rate and GC time. The export tasks must
+`-gc true` + `-Xmx1536M` is the config proven on this host by the IREE spike
+(findings §3) — per-iteration GC keeps the W6 arm's Cleaner draining; `-prof gc`
+reports the per-op allocation rate and GC time.
+
+Four corrections to the original recipe, all made after the 2026-08-06 runs:
+
+- **`-f 3`, not `-f 1`.** With one fork JMH's `±` is within-fork only and
+  understates run-to-run spread. Three forks also expose thermal drift on this
+  laptop part (turbo on, `powersave` governor); the 2026-08-06 runs showed none.
+- **`-wi 5 -w 1s`, not `-w 250ms`.** At ~13 ms/op, 250 ms windows give ~11 ops
+  per iteration — too few for C2 to finish the DJL/translator path.
+- **Run the output sweep at both `-gc true` and `-gc false`.** `-gc true` moves
+  collection *out of* the measured window, so its ms/op is marshalling-only. The
+  `-gc false` pass is the number a user actually pays; on 2026-08-06 it was
+  13–24% higher on the heap path. Both belong in the log.
+- **Absolute `example.models.dir`, shared between S1 and S2.** The artifacts are
+  export-script outputs, not build outputs of either commit, so pointing both
+  sessions at one directory makes the two sessions byte-identical in fixtures
+  and removes a re-export from the S1 setup.
+
+One host-specific note worth not "fixing" later: `taskset -c 0-3` is correct on
+this box because its SMT siblings are 0/4, 1/5, 2/6, 3/7 — so 0-3 is four
+distinct physical cores. On a machine with a different sibling layout the same
+mask would put two threads on one core. Check
+`/sys/devices/system/cpu/cpu*/topology/thread_siblings_list` before reusing it.
+
+The export tasks must
 run from the repo root; if a delegated export fails with
 `FileNotFoundError: 'flatc'`, re-run with
 `PATH=$HOME/workspace/executorch/.venv/bin:$PATH` (brief §8 flatc caveat).
@@ -738,6 +774,28 @@ stays a copy — `OutputView.data` points into ExecuTorch's arena and is invalid
 after the next `forward()`, so the copy is mandatory. Only its *destination*
 changes: off-heap instead of on-heap, and direct, which also removes the
 model-chaining re-copy at `EtSymbolBlock.java:56`.
+
+**Status: prototyped, measured, and rejected — deliberately NOT on this branch.**
+The prototype was built 2026-08-06 (W6-1..W6-4) and lives unmerged on
+`feature/w5-w6-direct-outputs`: copy 3's destination becomes a JNI-allocated
+block exposed via `NewDirectByteBuffer` (`native/jni/et_output_buffer.h`,
+`executorch_djl_jni.cpp`), freed by a `java.lang.ref.Cleaner` registered in
+`EtOutputBuffers`, with the native alive-counter (`EtNative.aliveOutputBuffers`)
+replacing the heap-pressure leak signal and `EtNativeOomTest` pinning the
+heap-independent contract under `-Xmx128m`.
+
+W5 then measured it and it lost: 24–87% *slower* than the heap path at every
+size, and it OOM-kills without an external GC trigger. It does deliver the
+intended ~33,000x cut in allocation rate at 64 MB, which is the only argument
+still standing for it. §8/W5 has the numbers, the two blocking defects, and the
+two candidate fixes.
+
+**If you reopen this**, the kill criterion is already set: a reworked direct path
+must beat the heap path's `-gc false` numbers (1.923 ms/op at 4 MB, 29.291 at
+64 MB), *and* bound its own native memory without depending on a GC. Removing
+the mmap churn alone is known not to be sufficient — see the
+`MALLOC_MMAP_THRESHOLD_` experiment in §8/W5.
+
 
 IREE's W4 prototype ports here nearly verbatim, including its two hard-won
 rules: register **only the address primitive** with the Cleaner (capturing the
@@ -1280,7 +1338,7 @@ block without the `-prof gc` lines on the output arm, or without both A/B arms,
 is not a usable result.
 
 ```
-(empty — W5 has not been run)
+(executed 2026-08-06 — blocks below the template)
 
 Template:
   date:            YYYY-MM-DD
@@ -1293,6 +1351,171 @@ Template:
   CPU/OS/glibc:    <lscpu model name / uname -r / ldd --version | head -1>
   reading:         <what the numbers mean for the W6 decision — see §3/W5>
 ```
+
+#### Harness validation record (2026-08-06 — smoke runs, NOT evidence)
+
+The recipe's commands were validated in shape before the user-run sessions:
+`git worktree add … c1ea5dd` (then removed), both export tasks (all six
+artifacts probe-verified: planned/unplanned flags, `(1, N)` f32 outputs),
+`jmhJar`, the S2 shim rebuild + stage (`cmake --build native/build -j$(nproc)`
++ copy), and the `EXECUTORCH_LIBRARY_PATH` mechanism (`LibUtils` →
+`System.load(override)`; `/tmp/et-pre-w6.so` present, 12,156,592 bytes). Each
+arm below executes and prints a score from the fat jar with the recipe's
+`-p`/`-jvmArgs` shape, and the logs show the expected artifact load lines
+(e.g. `mobilenet_v2 input 0 memoryPlanned=true` vs `mobilenet_v2_unplanned
+input 0 memoryPlanned=false`).
+
+The scores are JMH smokes (`-f 1 -wi 0 -i 1 -w 1ms -r 1ms`: no warmup, 1 ms
+windows, no `-gc true`, no `-prof gc`) and MUST NOT be cited as measurements —
+they only prove the arms run. The full §7 `systemd-run` invocations with
+`-gc true`/`-prof gc` and real iteration counts were not run; those are the
+S1/S2 user sessions.
+
+| arm | shim | smoke score |
+|---|---|---|
+| AddOutputBenchmark add_4kb | pre-W6 (heap `byte[]`; jar-bundled copy of the saved shim) | 0.060 ms/op |
+| AddOutputBenchmark add_4mb | pre-W6 (heap `byte[]`) | 2.927 ms/op |
+| AddOutputBenchmark add_4kb | W6 (direct, rebuilt shim) | 0.064 ms/op |
+| MobilenetBenchmark steadyState planned (ET_NATIVE) | pre-W6 (heap `byte[]`) | 22.422 ms/op |
+| MobilenetBenchmark steadyState unplanned (ET_NATIVE) | pre-W6 (heap `byte[]`) | 15.134 ms/op |
+
+**Superseded 2026-08-06 by the real runs below.** Every smoke score was wrong by
+a wide margin, and the MobileNet pair was wrong in a way that would have driven
+a false conclusion: the smoke showed unplanned 33% *faster* (22.4 vs 15.1),
+which is physically impossible for a 600 KB memcpy against a ~13 ms kernel. The
+measured delta is 2.4%, inside the error bars. Retained as a worked example of
+why a shape-validation smoke must never be read as a result.
+
+#### W5 results (2026-08-06 — measurements)
+
+Common to all blocks:
+
+```
+  environment:     11th Gen Intel Core i7-1185G7 (4 physical cores, SMT on,
+                   turbo enabled, powersave governor) / Linux 7.0.0-28-generic
+                   / glibc 2.39 / Zulu OpenJDK 17.0.19
+  control:         systemd-run --user --scope -p MemoryMax=4G, taskset -c 0-3
+                   (four distinct physical cores on this host), timeout 1800
+  JMH config:      -f 3 -wi 5 -w 1s -i 5 -r 1s   (15 measured iterations/arm)
+  fixtures:        one shared example/build/models for both sessions
+                   mobilenet_v2.pte     sha256 e406d020…d962f
+                   mobilenet_v2_unplanned.pte  sha256 88bf1fb6…7c4a2
+  note:            runs executed by the agent at the user's explicit request,
+                   as an exception to the §7 "benchmarks are run by the user"
+                   practice.
+```
+
+```
+  date:            2026-08-06
+  arm:             input A/B
+  commit/branch:   c1ea5dd on feature/w5-w6-direct-outputs (W5 tip), shim /tmp/et-pre-w6.so
+  models + sizes:  mobilenet_v2.pte vs mobilenet_v2_unplanned.pte (600 KB input)
+  ms/op ± err:     planned    12.733 ± 1.151 ms/op  (min 9.073, max 13.830, sd 1.077)
+                   unplanned  13.046 ± 0.426 ms/op  (min 12.482, max 13.736, sd 0.399)
+  reading:         NO MEASURABLE DIFFERENCE. Delta 0.31 ms (2.4%) with overlapping
+                   CIs. The planned arm's wider error is one outlier — fork 1's
+                   first measured iteration at 9.073 ms, faster than every other
+                   iteration in the run, i.e. a boost window, not the arm. Drop it
+                   and both arms sit at ~13.0 ms with a ~0.5% delta.
+                   No thermal drift: all 30 iterations lie in 12.3–13.8 ms with no
+                   trend across forks, so the §7 control holds on this host.
+                   Consistent with the analysis above — both paths memcpy the input
+                   exactly once, so ~0 was the predicted answer and is the observed one.
+```
+
+```
+  date:            2026-08-06
+  arm:             output heap baseline
+  commit/branch:   c1ea5dd (W5 tip), shim /tmp/et-pre-w6.so
+  models + sizes:  add_4kb (N=1024) .. add_64mb (N=16777216)
+  ms/op ± err:     size      -gc true          -gc false
+                   4 KB      0.010 ± 0.001     0.012 ± 0.001
+                   256 KB    0.117 ± 0.004     0.145 ± 0.005
+                   4 MB      1.700 ± 0.058     1.923 ± 0.133
+                   64 MB     25.130 ± 0.832    29.291 ± 1.149
+  -prof gc:        gc.alloc.rate.norm = output bytes + ~1.8 KB, at every size
+                   (5,880 / 263,928 / 4,196,267 / 67,110,853 B/op) — i.e. exactly
+                   one heap allocation of the full output per op, as designed.
+                   gc.alloc.rate 0.49–2.54 GB/sec.
+  peak RSS:        1.94 GB (-gc true) / 0.58 GB (-gc false), whole run
+  reading:         Effective marshalling throughput ~2.3 GB/s at 64 MB
+                   (64 MB / 29.291 ms). Fixed per-call floor is 0.010 ms.
+                   -gc true understates the true cost by 13–24% because it moves
+                   collection out of the measured window; -gc false is the honest
+                   number.
+```
+
+```
+  date:            2026-08-06
+  arm:             output W6 direct
+  commit/branch:   907fee5 on feature/w5-w6-direct-outputs (tip), jar-bundled W6 shim
+  models + sizes:  add_4kb .. add_64mb
+  ms/op ± err:     size      -gc true          vs heap -gc true   -gc false
+                   4 KB      0.013 ± 0.001     +30%               0.015
+                   256 KB    0.145 ± 0.014     +24%               ~0.38 (unstable, 0.16–0.51)
+                   4 MB      2.862 ± 0.106     +68%               6.5–6.7, then OOM-killed
+                   64 MB     46.986 ± 1.088    +87%               not reached
+  -prof gc:        gc.alloc.rate.norm FLAT at 1,848–2,065 B/op across all four
+                   sizes — the output no longer touches the heap at all.
+                   gc.count ≈ 0 at 4 MB and 64 MB (vs 445–550 on the heap path).
+                   At 64 MB that is 67 MB/op → 2 KB/op, a ~33,000x reduction.
+  peak RSS:        2.29 GB (-gc true), the highest of any arm
+  reading:         W6 AS WRITTEN LOSES ON BOTH COUNTS IT WAS MEANT TO WIN.
+                   (1) Slower at every size, and the gap widens with size: 1.43 GB/s
+                   effective at 64 MB against the heap path's 2.29 GB/s.
+                   (2) No backpressure. See the two defect blocks below.
+```
+
+Both defect blocks below cite W6 files (`native/jni/et_output_buffer.h`,
+`EtNDArray.java`'s Cleaner wiring) that exist **only** on the unmerged record
+branch `feature/w5-w6-direct-outputs` at `907fee5` — not on this branch, and not
+on `main`. Neither defect affects the shipped heap `byte[]` output path.
+
+**Defect 1 — per-op `mmap`/`munmap` of the whole output.**
+`native/jni/et_output_buffer.h` allocates each output with `::operator new` and
+frees it with `::operator delete`. Above glibc's 128 KB mmap threshold that is a
+fresh `mmap` + kernel page-zeroing + `munmap` on every single `forward()`, where
+the JVM's `byte[]` comes from an already-resident, warm heap region. The
+crossover in the data sits right at that threshold. Confirmed by re-running the
+direct arm with `MALLOC_MMAP_THRESHOLD_=1073741824`: 4 MB improved 2.862 →
+2.388 ms/op (−17%), while 64 MB was unchanged (46.986 → 47.531) — exactly what
+the hypothesis predicts, because glibc caps that tunable at
+`DEFAULT_MMAP_THRESHOLD_MAX` = 32 MB, so 64 MB still goes to `mmap` regardless.
+The env var is a diagnostic, not a fix; only in-process reuse helps at 64 MB.
+Note the 4 MB case is still slower than heap (2.388 vs 1.700) with mmap churn
+removed, so mmap churn is a *confirmed contributor*, not the whole gap.
+
+**Defect 2 — the free path has no backpressure, and OOM-kills.**
+`EtNDArray.close()` (`EtNDArray.java:64`) only nulls its reference; the native
+block is freed by the `EtOutputBuffers` Cleaner, which needs a GC to observe the
+`ByteBuffer` as unreachable. But the direct path allocates ~2 KB/op on the heap,
+so nothing *causes* a GC — the mechanism that releases the memory is starved by
+the very change that saves the allocations. With `-gc false` at 4 MB/op the
+measured JMH fork went **1,043 MB → 4,190 MB RSS in five seconds** (sampled from
+`/proc/<pid>/status`) and was killed at the `MemoryMax=4G` cap; with
+`-Xmx1536M`, ~2.6 GB of that 4.19 GB was JNI-allocated output blocks. This is
+the IREE brief's §7 20.7 GB OOM reproduced in miniature, and it is why the
+`-gc true` numbers above exist at all. The heap path cannot fail this way: its
+`byte[]` counts against `-Xmx`, so it self-limits.
+
+**Decision input for W6.** Do not ship as written. The prototype does deliver
+its stated benefit — the ~33,000x drop in allocation rate at 64 MB is real and
+matters for a small-heap latency-sensitive service — but that benefit is
+currently unrealizable, because the only thing that frees the memory is the GC
+the change eliminates. Two candidate fixes, both design decisions:
+
+1. **Pool the output blocks** per (method, output index), grow-only, exactly as
+   `StagingSlot` already does for inputs. Removes the `mmap` churn *and* bounds
+   native memory by construction. Costs a contract change — an output buffer
+   would be valid only until the next `forward()` — which mirrors the contract
+   ExecuTorch's own arena already imposes, and which the input path has already
+   accepted.
+2. **Free eagerly in `EtNDArray.close()`**, demoting the Cleaner to a backstop.
+   Restores deterministic release and would have prevented the OOM kill outright.
+   Does not address Defect 1.
+
+Raw JMH logs for all six runs are in the session scratchpad and are not
+committed; the numbers above are the record.
 
 ### Upstream sources
 
