@@ -1,6 +1,8 @@
 // Thin JNI shell over measly::et::EtRuntime. Raw JNI, no fbjni. Translation only.
 #include <jni.h>
 
+#include <cstring>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -8,6 +10,7 @@
 #include "et_runtime.h"
 #include "et_logging.h"
 #include "array_size_limits.h"
+#include "et_output_buffer.h"
 
 using measly::et::EtRuntime;
 using measly::et::InputDesc;
@@ -21,9 +24,6 @@ static jmethodID g_ctor = nullptr;
 
 static jclass g_etMethodMetaClass = nullptr;
 static jmethodID g_metaCtor = nullptr;
-
-static jclass g_byteBufferClass = nullptr;
-static jmethodID g_byteBufferWrap = nullptr;
 
 static jclass g_runtimeExceptionClass = nullptr;
 static jclass g_illegalArgumentExceptionClass = nullptr;
@@ -81,15 +81,6 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   }
   g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I[Z)V");
   if (g_metaCtor == nullptr) {
-    return JNI_ERR;
-  }
-
-  g_byteBufferClass = cacheGlobalClass(env, "java/nio/ByteBuffer");
-  if (g_byteBufferClass == nullptr) {
-    return JNI_ERR;
-  }
-  g_byteBufferWrap = env->GetStaticMethodID(g_byteBufferClass, "wrap", "([B)Ljava/nio/ByteBuffer;");
-  if (g_byteBufferWrap == nullptr) {
     return JNI_ERR;
   }
 
@@ -218,6 +209,24 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
       return nullptr;  // OOM: exception already pending
     }
 
+    // JNI-allocated output blocks are freed from Java (EtOutputBuffers' Cleaner), so the
+    // GC-managed failure behavior of the old NewByteArray path is not inherited: on ANY early
+    // return below, Java never receives the buffers, so every block allocated so far must be
+    // freed or it leaks. `committed` flips only after the loop completes.
+    std::vector<void*> allocated;
+    allocated.reserve(nOut);
+    struct OutputGuard {
+      std::vector<void*>& allocated;
+      bool committed = false;
+      ~OutputGuard() {
+        if (!committed) {
+          for (void* p : allocated) {
+            measly::et::jni::freeOutputBuffer(p);
+          }
+        }
+      }
+    } guard{allocated};
+
     for (jsize i = 0; i < nOut; ++i) {
       const auto& v = outs[i];
       if (measly::et::exceedsJniByteArrayLimit(v.nbytes)) {
@@ -237,28 +246,32 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
         env->SetLongArrayRegion(jshape, 0, ndim, sh.data());
       }
       jsize nbytes = static_cast<jsize>(v.nbytes);
-      jbyteArray jbytes = env->NewByteArray(nbytes);
-      if (jbytes == nullptr) {
-        return nullptr;  // OOM: exception already pending
+      void* block;
+      try {
+        block = measly::et::jni::allocOutputBuffer(v.nbytes);
+      } catch (const std::bad_alloc&) {
+        throwJava(env, "ExecuTorch output allocation failed (out of memory)", nullptr);
+        return nullptr;
       }
-      env->SetByteArrayRegion(jbytes, 0, nbytes, reinterpret_cast<const jbyte*>(v.data));
-      jobject jbuf = env->CallStaticObjectMethod(g_byteBufferClass, g_byteBufferWrap, jbytes);
-      if (env->ExceptionCheck()) {
-        return nullptr;  // ByteBuffer.wrap failed; exception pending
+      allocated.push_back(block);
+      std::memcpy(block, v.data, v.nbytes);  // copy 3, into a JNI-allocated direct block
+      jobject jbuf = env->NewDirectByteBuffer(block, static_cast<jlong>(v.nbytes));
+      if (jbuf == nullptr) {
+        return nullptr;  // exception pending (e.g. JVM OOM); OutputGuard frees `allocated`
       }
 
       jobject obj = env->NewObject(g_etTensorClass, g_ctor, jshape,
                                    static_cast<jint>(v.scalarType), jbuf);
       if (obj == nullptr) {
-        return nullptr;  // OOM: exception already pending
+        return nullptr;  // OOM: exception already pending; OutputGuard frees `allocated`
       }
       env->SetObjectArrayElement(jout, i, obj);
 
       env->DeleteLocalRef(jshape);
-      env->DeleteLocalRef(jbytes);
       env->DeleteLocalRef(jbuf);
       env->DeleteLocalRef(obj);
     }
+    guard.committed = true;
     return jout;
   } catch (const std::exception& e) {
     throwJava(env, "ExecuTorch forward() failed", &e);
@@ -273,4 +286,24 @@ Java_org_measly_executorch_jni_EtNative_destroy(JNIEnv* env, jclass, jlong handl
   } catch (const std::exception& e) {
     throwJava(env, "EtRuntime destroy failed", &e);
   }
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_org_measly_executorch_jni_EtNative_bufferAddress(JNIEnv* env, jclass, jobject buffer) {
+  // GetDirectBufferAddress returns 0 for non-direct buffers (and never throws).
+  return reinterpret_cast<jlong>(env->GetDirectBufferAddress(buffer));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_measly_executorch_jni_EtNative_freeOutputBuffer(JNIEnv*, jclass, jlong address) {
+  // 0 is a no-op: free is idempotent by contract, so a mis-registration can never double-free.
+  if (address == 0) {
+    return;
+  }
+  measly::et::jni::freeOutputBuffer(reinterpret_cast<void*>(static_cast<intptr_t>(address)));
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_org_measly_executorch_jni_EtNative_aliveOutputBuffers(JNIEnv*, jclass) {
+  return static_cast<jlong>(measly::et::jni::aliveOutputBuffers());
 }
