@@ -686,7 +686,7 @@ Both sessions use the §7 control and a jar built with
 **S1 — input A/B + output baseline (heap path), at the W5-tip commit:**
 
 ```bash
-git worktree add /tmp/et-w5-baseline <W5-tip-SHA>
+git worktree add /tmp/et-w5-baseline c1ea5dda9c6d9a03a74fbaccd3306a408c5d7c61   # W5 tip
 cd /tmp/et-w5-baseline
 ./gradlew :example:exportModels --no-configuration-cache --rerun-tasks   # uv; flatc fallback if needed
 ./gradlew :example:exportW5Models --no-configuration-cache --rerun-tasks
