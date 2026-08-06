@@ -9,7 +9,12 @@
 #endif
 
 namespace measly::et {
-enum EtProbeId : uint32_t { kProbeStagingGrow = 0, kProbeStagingInput = 1 };
+enum EtProbeId : uint32_t {
+  kProbeStagingGrow = 0,
+  kProbeStagingInput = 1,
+  kProbeOutputAlloc = 2,
+  kProbeOutputFree = 3,
+};
 using EtProbeFn = void (*)(uint32_t id, uint64_t a, uint64_t b, uint64_t c, uint64_t d);
 
 // One handler slot shared by the dispatch and the setter/clearer: function-local statics in the
@@ -44,4 +49,16 @@ inline void et_probe_clear_handler() { et_probe_set_handler(nullptr); }
     DTRACE_PROBE5(measly, staging_input, (slot), (nbytes), (planned), (staged), 0);                  \
     ::measly::et::probe_dispatch(::measly::et::kProbeStagingInput, (slot), (nbytes), (planned),      \
                                  (staged));                                                          \
+  } while (0)
+
+#define ET_PROBE_OUTPUT_ALLOC(nbytes, addr)                                                            \
+  do {                                                                                                 \
+    DTRACE_PROBE4(measly, output_alloc, (nbytes), (addr), 0, 0);                                       \
+    ::measly::et::probe_dispatch(::measly::et::kProbeOutputAlloc, (nbytes), (addr), 0, 0);             \
+  } while (0)
+
+#define ET_PROBE_OUTPUT_FREE(addr)                                                                     \
+  do {                                                                                                 \
+    DTRACE_PROBE4(measly, output_free, (addr), 0, 0, 0);                                               \
+    ::measly::et::probe_dispatch(::measly::et::kProbeOutputFree, (addr), 0, 0, 0);                     \
   } while (0)
