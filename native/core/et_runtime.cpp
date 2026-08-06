@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include <executorch/extension/module/module.h>
@@ -112,6 +113,21 @@ ForwardResult EtRuntime::forward(std::span<const InputDesc> inputs) {
     size_t actual = dtypeSize(in.scalarType);
     for (int64_t d : in.shape) {
       actual *= static_cast<size_t>(d);
+    }
+
+    // The declared bound is the only thing that makes `actual` safe to act on: it is derived from
+    // the caller's shape, and nothing upstream cross-checks that shape against the buffer behind
+    // in.data. ExecuTorch does validate (resize_tensor, method.cpp:1240) — but only inside
+    // module.forward(), which is after the staging memcpy below, so a shape larger than the source
+    // buffer would over-read it before ExecuTorch ever saw the input. Checked for every tensor
+    // input, not just staged ones, so the diagnostic is the same on both paths. nbytes() is exact
+    // for a static shape and an upper bound for a dynamic one, so `>` is the right comparison in
+    // both cases. Non-tensor inputs have no bound to check against (F3).
+    if (i < state_->meta.inputNbytes.size() && state_->meta.inputScalarTypes[i] >= 0 &&
+        actual > state_->meta.inputNbytes[i]) {
+      throw std::invalid_argument(
+          "EtRuntime: input " + std::to_string(i) + " is " + std::to_string(actual) +
+          " bytes but the model declares at most " + std::to_string(state_->meta.inputNbytes[i]));
     }
 
     const void* blob = in.data;

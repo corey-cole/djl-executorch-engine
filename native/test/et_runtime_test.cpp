@@ -206,19 +206,37 @@ TEST_CASE("staging: slots are sized at load, so repeated forwards never grow") {
   REQUIRE(guard.stagedInputCount() == 200);   // still staged every call
 }
 
-TEST_CASE("staging: an input past its declared bound fires staging_grow (anomaly path)") {
-  // The slot is sized at nbytes + kStagingPadding, so the probe's threshold is the declared bound
-  // *plus* the padding: a 1-float slot holds 4 + 128 bytes rounded to 192, and only an input past
-  // that grows it. 64 floats (256 + 128 = 384) clears it. The buffer really is 64 floats, so the
-  // copy stays in bounds — ExecuTorch then rejects the shape (static-shape method), which is the
-  // pre-existing contract and not what this case is asserting.
+TEST_CASE("forward: an input past its declared bound is rejected before the staging copy") {
+  // The staging memcpy's length comes from the caller's shape, so an oversized shape would read
+  // past the source buffer -- before module.forward() runs and ExecuTorch gets to reject it. The
+  // bound check must fire first: no copy, no slot growth, a diagnostic naming both sizes.
   EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
-  std::vector<float> big(64, 1.0f);
+  std::vector<float> big(64, 1.0f);  // a real 64-float buffer; the shape is what is being tested
   float b = 3.0f;
   std::vector<InputDesc> inputs = {{big.data(), {64}, 6}, {&b, {1}, 6}};
   ProbeGuard guard;
-  REQUIRE_THROWS(rt.forward(inputs));
-  REQUIRE(guard.growCount() == 1);  // slot 0 only; slot 1 was within its bound
+  REQUIRE_THROWS_AS(rt.forward(inputs), std::invalid_argument);
+  REQUIRE(guard.growCount() == 0);         // rejected before ensure()
+  REQUIRE(guard.stagedInputCount() == 0);  // rejected before the memcpy
+}
+
+TEST_CASE("forward: the declared-bound check applies to planned inputs too") {
+  // ExecuTorch would catch this one on its own (it copies planned inputs itself, after validating),
+  // but the diagnostic should not depend on which memory-plan mode the .pte happens to be in.
+  EtRuntime rt(ADD_PTE_PATH);
+  std::vector<float> big(64, 1.0f);
+  float b = 3.0f;
+  std::vector<InputDesc> inputs = {{big.data(), {64}, 6}, {&b, {1}, 6}};
+  REQUIRE_THROWS_AS(rt.forward(inputs), std::invalid_argument);
+}
+
+TEST_CASE("forward: an input at exactly its declared bound is accepted") {
+  // Guards the off-by-one: the check is `>`, not `>=`.
+  EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
+  float a = 2.0f, b = 3.0f;
+  std::vector<InputDesc> inputs = {{&a, {1}, 6}, {&b, {1}, 6}};
+  ForwardResult result = rt.forward(inputs);
+  REQUIRE(*static_cast<const float*>(result.outputs()[0].data) == 5.0f);
 }
 
 TEST_CASE("forward: planned inputs pass through (no staging)") {

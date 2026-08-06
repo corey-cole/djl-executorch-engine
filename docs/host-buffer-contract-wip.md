@@ -513,3 +513,70 @@ capacity — which is the same check F1 needs.
 - Shim relinked; XNNPACK post-link assertion passed (2653 `xnn_*` text symbols).
 - `./gradlew test --rerun-tasks` → BUILD SUCCESSFUL;
   `./gradlew leakTest --rerun-tasks` → `tests="3" skipped="0" failures="0"`.
+
+---
+
+## F1 fixed, 2026-08-05
+
+`forward()` now rejects any tensor input whose byte count exceeds the bound the
+`.pte` declares, before the staging memcpy. The reproducer that produced the
+256-byte over-read now yields:
+
+```
+threw: EtRuntime: input 0 is 256 bytes but the model declares at most 4
+```
+
+### Changes
+
+- **`et_runtime.cpp` / `forward()`** — one guard, placed before the staging
+  branch: if `actual > inputNbytes[i]` for a tensor input, throw
+  `std::invalid_argument` naming both sizes. `nbytes()` is exact for a static
+  shape and an upper bound for a dynamic one, so `>` is correct in both cases.
+  The JNI maps any `std::exception` from `forward()` to a Java
+  `RuntimeException` carrying `what()`, so the diagnostic reaches DJL callers
+  intact with no JNI change.
+- **`et_runtime_test.cpp`** — the old anomaly case is replaced (see below) by
+  three: rejection before the copy on the unplanned path (asserting
+  `grow == 0` *and* `staged == 0`, i.e. rejected before both `ensure()` and the
+  memcpy), the same rejection on the planned path, and an at-the-bound case
+  guarding the `>` vs `>=` off-by-one.
+
+### Applied to planned inputs too, deliberately
+
+ExecuTorch validates planned inputs on its own (`resize_tensor` runs before
+`copy_tensor_data`), so the guard is redundant there for safety. It is applied
+anyway so the *diagnostic* does not depend on which memory-plan mode the
+artifact happens to be in — otherwise the same caller error produces
+`EtRuntime: input 0 is 256 bytes but the model declares at most 4` on one model
+and an opaque `ExecuTorch forward() failed` on another, which is the hazard
+§4 of the brief names ("the engine's behavior varies by an artifact property
+nobody inspects"). No existing test asserted the opaque form.
+
+### This makes `staging_grow` unreachable for tensor inputs
+
+Worth stating plainly, because it changes what the probe is for. With the bound
+check in place, `actual` can never exceed `inputNbytes[i]`, so
+`actual + kStagingPadding` can never exceed a slot sized at
+`inputNbytes[i] + kStagingPadding`. The growth path is now dead code for any
+tensor input.
+
+It is kept, and it still has exactly one live trigger: a **non-tensor** input,
+which has no declared bound, is not sized at load, and is not covered by the
+guard — F3. So `staging_grow` has become a precise detector for the F3 hole
+rather than a general anomaly signal. The leak harness's `grow == 0` assertion
+holds either way and is now a statement about F3 not being hit.
+
+The F2 note above described the probe's threshold as "declared bound plus
+padding"; after F1 that slack is unreachable from the caller, so the earlier
+caveat about small overruns being invisible no longer applies — they are
+rejected outright.
+
+### Verification
+
+- `et_runtime_test`: **20 cases, 225 assertions, all pass**.
+- Leak harness unchanged and still exact: `grow=0` on all four fixtures.
+- Shim relinked; XNNPACK post-link assertion passed.
+- `./gradlew test leakTest --rerun-tasks` → BUILD SUCCESSFUL; 23 test classes,
+  **0 failures, 0 errors** across unit, IT, and leak suites.
+- F1 reproducer re-run against the fixed core: clean `std::invalid_argument`,
+  no ASan report.
