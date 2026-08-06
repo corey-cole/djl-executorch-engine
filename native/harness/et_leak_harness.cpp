@@ -105,7 +105,11 @@ int main(int argc, char** argv) {
       }
     }
   }
-  const size_t expectGrow = numUnplanned * static_cast<size_t>(outerIters);
+  // Slots are sized in EtRuntime's constructor from TensorInfo::nbytes(), so staging_grow is an
+  // anomaly signal, not a first-touch event: the correct steady-state count is zero, for any number
+  // of loads or forwards. A realloc-per-forward slip, or a slot sized from the caller's shape
+  // instead of the model's, both show up here immediately.
+  const size_t expectGrow = 0;
   const size_t expectStagedInput =
       numUnplanned * static_cast<size_t>(outerIters) * static_cast<size_t>(forwardsPerLoad);
   const size_t expectTotalInput =

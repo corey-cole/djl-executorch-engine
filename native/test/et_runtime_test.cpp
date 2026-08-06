@@ -173,16 +173,52 @@ TEST_CASE("staging: grow preserves the first min(old, new) bytes") {
   }
 }
 
-TEST_CASE("forward: unplanned inputs are staged per slot (grow + input probes)") {
+TEST_CASE("forward: unplanned inputs are staged per slot (no grow: slots sized at load)") {
   EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
   float a = 2.0f, b = 3.0f;
   std::vector<InputDesc> inputs = {{&a, {1}, 6}, {&b, {1}, 6}};
   ProbeGuard guard;
   ForwardResult result = rt.forward(inputs);
   REQUIRE(*static_cast<const float*>(result.outputs()[0].data) == 5.0f);
-  REQUIRE(guard.growCount() == 2);         // one first alloc per slot, then never again
+  REQUIRE(guard.growCount() == 0);         // sized from TensorInfo::nbytes() in the ctor
   REQUIRE(guard.totalInputCount() == 2);   // one staging_input per tensor input
   REQUIRE(guard.stagedInputCount() == 2);  // both staged (planned flag = 0)
+}
+
+TEST_CASE("methodMeta: declared input byte counts are captured at load") {
+  EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
+  MethodMeta meta = rt.methodMeta();
+  REQUIRE(meta.inputNbytes.size() == 2);
+  REQUIRE(meta.inputNbytes[0] == sizeof(float));  // add model: two 1-element f32 inputs
+  REQUIRE(meta.inputNbytes[1] == sizeof(float));
+}
+
+TEST_CASE("staging: slots are sized at load, so repeated forwards never grow") {
+  EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
+  float a = 2.0f, b = 3.0f;
+  std::vector<InputDesc> inputs = {{&a, {1}, 6}, {&b, {1}, 6}};
+  ProbeGuard guard;
+  for (int k = 0; k < 100; ++k) {
+    ForwardResult result = rt.forward(inputs);
+    REQUIRE(*static_cast<const float*>(result.outputs()[0].data) == 5.0f);
+  }
+  REQUIRE(guard.growCount() == 0);            // the whole point of sizing at load
+  REQUIRE(guard.stagedInputCount() == 200);   // still staged every call
+}
+
+TEST_CASE("staging: an input past its declared bound fires staging_grow (anomaly path)") {
+  // The slot is sized at nbytes + kStagingPadding, so the probe's threshold is the declared bound
+  // *plus* the padding: a 1-float slot holds 4 + 128 bytes rounded to 192, and only an input past
+  // that grows it. 64 floats (256 + 128 = 384) clears it. The buffer really is 64 floats, so the
+  // copy stays in bounds — ExecuTorch then rejects the shape (static-shape method), which is the
+  // pre-existing contract and not what this case is asserting.
+  EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
+  std::vector<float> big(64, 1.0f);
+  float b = 3.0f;
+  std::vector<InputDesc> inputs = {{big.data(), {64}, 6}, {&b, {1}, 6}};
+  ProbeGuard guard;
+  REQUIRE_THROWS(rt.forward(inputs));
+  REQUIRE(guard.growCount() == 1);  // slot 0 only; slot 1 was within its bound
 }
 
 TEST_CASE("forward: planned inputs pass through (no staging)") {

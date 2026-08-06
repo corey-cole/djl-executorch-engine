@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 
 #if defined(_WIN32)
 #include <malloc.h>
@@ -66,6 +67,12 @@ class StagingSlot {
     }
     const size_t rounded = ((needed + 63) / 64) * 64;
     uint8_t* fresh = static_cast<uint8_t*>(detail::stagingAlloc(rounded));
+    if (fresh == nullptr) {
+      // Slots are sized at load from the model's declared bound, so this is reachable with a real
+      // allocation request. Throw rather than memcpy through null: EtRuntime's constructor turns it
+      // into the same load failure as any other, and forward() into a clean exception.
+      throw std::bad_alloc();
+    }
     if (capacity_ > 0) {
       std::memcpy(fresh, data_, capacity_);  // preserve the first min(old, new) bytes
       detail::stagingFree(data_);
