@@ -70,22 +70,34 @@ EtRuntime::EtRuntime(const std::string& ptePath)
     throw std::runtime_error("EtRuntime: failed to load .pte: " + ptePath);
   }
   state_->meta = buildMethodMeta(state_->module);
+
+  // This engine builds a tensor for every input (forward() has only from_blob), so a method with a
+  // non-tensor input -- a prim int/double/bool, or None -- cannot be driven correctly through it:
+  // InputDesc has no way to express the traced prim value that Method::set_input demands. Reject at
+  // load rather than at first inference, where it surfaced as a garbage from_blob over ScalarType
+  // -1 followed by an opaque tag-mismatch from ExecuTorch.
+  //
+  // Rejecting here is also what makes inputMemoryPlanned unambiguous downstream. The flag is 0 both
+  // for a genuinely borrowed input and for a non-tensor one (no TensorInfo exists, so nothing sets
+  // it), and forward() branches on it to decide whether to stage. With this check the second case
+  // cannot occur, so "planned == 0" means "borrowed tensor" everywhere below.
+  for (int i = 0; i < state_->meta.numInputs; ++i) {
+    if (state_->meta.inputScalarTypes[i] < 0) {
+      throw std::invalid_argument(
+          "EtRuntime: input " + std::to_string(i) + " of \"forward\" is not a tensor; this engine "
+          "supports only methods whose inputs are all tensors: " + ptePath);
+    }
+  }
+
   // One slot per input position; resize() would default-construct null unique_ptrs, so create each
   // slot explicitly. Slots for staged inputs are sized *here*, from the bound the .pte declares —
   // TensorInfo::nbytes() is available at load for planned and unplanned inputs alike, so "grow-only"
-  // degenerates to "allocate once" and staging_grow goes back to being the anomaly detector W8
-  // specified. Planned slots stay at capacity 0 (never staged, never allocated).
-  //
-  // The tensor-ness test matters: inputMemoryPlanned is 0 both for a genuinely borrowed input and
-  // for a non-tensor one (no TensorInfo exists), and only the former has a declared bound to size
-  // from. forward() still stages on the planned flag alone, so a non-tensor input would grow its
-  // slot on first use rather than being rejected — see F3 in docs/host-buffer-contract-wip.md.
+  // degenerates to "allocate once". Planned slots stay at capacity 0 (never staged, never
+  // allocated). Every input is a tensor by the check above, so every unplanned slot has a bound.
   state_->staging.reserve(static_cast<size_t>(state_->meta.numInputs));
   for (int i = 0; i < state_->meta.numInputs; ++i) {
     state_->staging.push_back(std::make_unique<StagingSlot>());
-    const bool staged =
-        state_->meta.inputMemoryPlanned[i] == 0 && state_->meta.inputScalarTypes[i] >= 0;
-    if (staged) {
+    if (state_->meta.inputMemoryPlanned[i] == 0) {
       state_->staging.back()->ensure(state_->meta.inputNbytes[i] + kStagingPadding);
     }
   }
@@ -122,9 +134,8 @@ ForwardResult EtRuntime::forward(std::span<const InputDesc> inputs) {
     // buffer would over-read it before ExecuTorch ever saw the input. Checked for every tensor
     // input, not just staged ones, so the diagnostic is the same on both paths. nbytes() is exact
     // for a static shape and an upper bound for a dynamic one, so `>` is the right comparison in
-    // both cases. Non-tensor inputs have no bound to check against (F3).
-    if (i < state_->meta.inputNbytes.size() && state_->meta.inputScalarTypes[i] >= 0 &&
-        actual > state_->meta.inputNbytes[i]) {
+    // both cases. Every declared input has a bound: the constructor rejects non-tensor inputs.
+    if (i < state_->meta.inputNbytes.size() && actual > state_->meta.inputNbytes[i]) {
       throw std::invalid_argument(
           "EtRuntime: input " + std::to_string(i) + " is " + std::to_string(actual) +
           " bytes but the model declares at most " + std::to_string(state_->meta.inputNbytes[i]));
@@ -142,11 +153,11 @@ ForwardResult EtRuntime::forward(std::span<const InputDesc> inputs) {
       const size_t needed = actual + kStagingPadding;
       void* dst = slot.data();
       if (needed > slot.capacity()) {
-        // Anomaly path. The slot was sized at load from the .pte's declared bound, so reaching here
-        // means this input exceeded it — a dynamic shape past its upper bound, or a caller shape
-        // that does not match the model. staging_grow fires only here: in steady state it never
-        // fires at all, and a fire is the signal W8 designed it to be rather than routine
-        // first-touch noise.
+        // Unreachable as the code stands, and deliberately kept. The slot was sized at load from
+        // this input's declared bound and the check above rejects anything past that bound, so
+        // `needed` cannot exceed `capacity()`. What remains is a regression guard on those two
+        // invariants: if slot sizing or the bound check ever stops agreeing, staging_grow fires and
+        // et_leak_harness's `grow == 0` assertion fails instead of the mismatch going unnoticed.
         const size_t old = slot.capacity();
         dst = slot.ensure(needed);
         ET_PROBE_STAGING_GROW(i, old, slot.capacity());

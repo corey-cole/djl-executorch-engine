@@ -230,6 +230,15 @@ TEST_CASE("forward: the declared-bound check applies to planned inputs too") {
   REQUIRE_THROWS_AS(rt.forward(inputs), std::invalid_argument);
 }
 
+TEST_CASE("load: a method with a non-tensor input is rejected") {
+  // prim_input.pte's input 1 is a prim double (MethodMeta reports "Tag: 3 input: 1 is not Tensor"),
+  // so input_tensor_meta(1) fails and the slot has no scalar type, no shape, and no declared byte
+  // bound. InputDesc cannot express a prim value, so the model is undrivable through this engine:
+  // reject at load rather than at first inference. This also keeps inputMemoryPlanned == 0 meaning
+  // exactly "borrowed tensor" for forward()'s staging branch.
+  REQUIRE_THROWS_AS([] { EtRuntime rt(PRIM_INPUT_PTE_PATH); }(), std::invalid_argument);
+}
+
 TEST_CASE("forward: an input at exactly its declared bound is accepted") {
   // Guards the off-by-one: the check is `>`, not `>=`.
   EtRuntime rt(ADD_UNPLANNED_PTE_PATH);

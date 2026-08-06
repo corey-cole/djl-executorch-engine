@@ -580,3 +580,74 @@ rejected outright.
   **0 failures, 0 errors** across unit, IT, and leak suites.
 - F1 reproducer re-run against the fixed core: clean `std::invalid_argument`,
   no ASan report.
+
+---
+
+## F3 fixed, 2026-08-05
+
+Non-tensor inputs are rejected at load. The conflation is gone: for `forward()`,
+`inputMemoryPlanned[i] == 0` now means "borrowed tensor" and nothing else.
+
+### Why rejection rather than a narrower branch
+
+The review framed F3 as "the staging branch should test tensor-ness as well as
+the planned flag." Looking at the code, that is treating a symptom. `forward()`
+has only `from_blob` — `InputDesc` is `{data, shape, scalarType}` and there is no
+way to express the traced prim value that `Method::set_input` demands for a
+non-tensor slot (`method.cpp:1258`, "Prims have to be the same as what was
+traced"). A method with a prim input is **undrivable through this engine** no
+matter how `forward()` branches. What actually happened before this change was a
+`from_blob` over `ScalarType(-1)` followed by an opaque tag mismatch from
+ExecuTorch, at first inference.
+
+So the constructor now scans for `inputScalarTypes[i] < 0` and throws
+`std::invalid_argument` naming the index. That states the engine's real
+capability boundary at the point the model is loaded.
+
+### A fixture exists now
+
+`native/spike/prim_input.pte` + `export_prim_input.py`. `torch.export` keeps
+`alpha` as a placeholder even though its traced value is specialized into the
+multiply, and `to_executorch` carries it through as a non-tensor input:
+
+```
+[method_meta.cpp:189] Tag: 3 input: 1 is not Tensor
+num_inputs 2
+0 TensorInfo(sizes=[4], dtype=Float, is_memory_planned=True, nbytes=16)
+```
+
+Confirmed the guard fires for the right reason and names the right slot:
+
+```
+LOAD FAILED: EtRuntime: input 1 of "forward" is not a tensor; this engine
+supports only methods whose inputs are all tensors: native/spike/prim_input.pte
+```
+
+Also confirmed no fixture in the repo regresses — `add.pte`, `add_unplanned.pte`,
+`clamp5`, `dtypes`, `lin129`, `lin129_planned`, `med_output`, and `lstm.pte` all
+declare tensor-only inputs, so F3 was entirely latent before this.
+
+### Simplifications this unlocked, and the probe's final state
+
+- The constructor's slot-sizing no longer needs its tensor-ness test, and F1's
+  bound check no longer needs its `inputScalarTypes[i] >= 0` guard: every
+  declared input now has a scalar type, a shape, and a byte bound.
+- `et_leak_harness`'s `numTensorInputs` / `numUnplanned` filters become provably
+  equivalent to unfiltered counts, so the expectation/behavior mismatch the
+  review flagged is now unrepresentable rather than merely untriggered.
+- **`staging_grow` is now unreachable, full stop.** F1 removed the tensor path;
+  F3 removed the non-tensor one. It is kept as a regression guard on the two
+  invariants that make it unreachable — slots sized from the declared bound, and
+  inputs rejected past that bound. If those ever stop agreeing, the probe fires
+  and `et_leak_harness`'s `grow == 0` fails instead of the mismatch going
+  unnoticed. The code comment says exactly this so nobody later "fixes" the dead
+  branch by deleting it.
+
+### Verification
+
+- `et_runtime_test`: **21 cases, 226 assertions, all pass** (new case: load
+  rejection over `prim_input.pte`).
+- Leak harness: `grow=0` on all four fixtures, counts unchanged.
+- Shim reconfigured (`-S native`, `JAVA_HOME=zulu-17`) and relinked; XNNPACK
+  post-link assertion passed.
+- `./gradlew test leakTest --rerun-tasks` → **73 tests, 0 failures, 0 errors**.
