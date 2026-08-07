@@ -30,7 +30,7 @@ dependencies {
 }
 
 tasks.test {
-    useJUnitPlatform { excludeTags("leak", "oom") }
+    useJUnitPlatform { excludeTags("leak", "oom", "intraop") }
     jvmArgs("-XX:+HeapDumpOnOutOfMemoryError")
     finalizedBy(tasks.jacocoTestReport)
 }
@@ -65,6 +65,19 @@ tasks.register<Test>("oomTest") {
     useJUnitPlatform { includeTags("oom") }
     jvmArgs("-Xmx128m")   // deliberately NO HeapDumpOnOutOfMemoryError: the OOM is the expected outcome
 }
+
+tasks.register<Test>("intraOpTest") {
+    description = "Intra-op threadpool configuration tests; forked JVM because the pool is process-global."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("intraop") }
+    jvmArgs("-Dai.djl.executorch.num_threads=2")
+}
+
+// intraOpTest runs under build/check (its forked JVM cannot share the pool with the test task)
+// but not under `test` itself, which excludes the tag.
+tasks.check { dependsOn(tasks.named("intraOpTest")) }
 
 tasks.jacocoTestReport {
     dependsOn(tasks.test)
