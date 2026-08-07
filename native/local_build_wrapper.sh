@@ -24,7 +24,18 @@ if [ ! -f "${REPO_ROOT}/amazon-corretto-linux-jdk.rpm" ]; then
     https://corretto.aws/downloads/latest/amazon-corretto-8-x64-linux-jdk.rpm
 fi
 
-# Must use manylinux_2_28 (glibc >= 2.28) so the shim links the fetched runtime at the 2.28 floor.
+# The toolchain image is a thin, NEVRA-pinned specialization of manylinux_2_28 (glibc >= 2.28, so
+# the shim links the fetched runtime at the 2.28 floor) that adds what the base does not ship:
+# systemtap-sdt-devel for <sys/sdt.h>, which native/core/et_probes.h needs for the W8 USDT probes,
+# and the matching libasan for QA. Built locally from docker/ so this wrapper stays self-contained
+# and matches CI, which builds the same Dockerfile from its layer cache. Rebuilds are cheap after
+# the first (Docker's own layer cache); set SKIP_IMAGE_BUILD=1 to reuse the existing tag as-is.
+ET_BUILD_IMAGE="${ET_BUILD_IMAGE:-djl-executorch-engine-build:linux-x86_64}"
+if [ -z "${SKIP_IMAGE_BUILD:-}" ]; then
+  docker build -t "${ET_BUILD_IMAGE}" \
+      -f "${REPO_ROOT}/docker/linux-x86_64.Dockerfile" "${REPO_ROOT}/docker"
+fi
+
 # Override the runtime variant with ET_RUNTIME_VARIANT (default logging). ITERS/WARMUP forward to
 # the bench/QA scripts when set (harmless for build.sh, which ignores them).
 docker run --rm \
@@ -35,5 +46,5 @@ docker run --rm \
     -e WARMUP \
     -v "${REPO_ROOT}":/workspace \
     -w /workspace \
-    quay.io/pypa/manylinux_2_28_x86_64:latest \
+    "${ET_BUILD_IMAGE}" \
     /bin/bash "/workspace/${TARGET_SCRIPT}"
