@@ -7,6 +7,7 @@
 
 #include <executorch/extension/module/module.h>
 #include <executorch/extension/tensor/tensor.h>
+#include <executorch/extension/threadpool/threadpool.h>
 #include <executorch/runtime/executor/method_meta.h>
 
 #include "dtype_size.h"
@@ -229,6 +230,18 @@ ForwardResult& ForwardResult::operator=(ForwardResult&&) noexcept = default;
 
 std::span<const OutputView> ForwardResult::outputs() const {
   return {state_->views.data(), state_->views.size()};
+}
+
+uint32_t setIntraOpThreads(uint32_t n) {
+  executorch::extension::threadpool::ThreadPool* pool =
+      executorch::extension::threadpool::get_threadpool();
+  pool->_unsafe_reset_threadpool(n);  // documented to always return true; no-ops for 0/unchanged
+  return static_cast<uint32_t>(pool->get_thread_count());
+}
+
+uint32_t intraOpThreads() {
+  return static_cast<uint32_t>(
+      executorch::extension::threadpool::get_threadpool()->get_thread_count());
 }
 
 }  // namespace measly::et

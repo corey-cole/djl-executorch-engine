@@ -44,6 +44,12 @@ docker run --rm \
     -e ET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT:-logging}" \
     -e ITERS \
     -e WARMUP \
+    -e MODEL \
+    -e THREADS \
+    -e MODES \
+    -e BUILD_ONLY \
+    -e REPS \
+    -e INTRAOP \
     -v "${REPO_ROOT}":/workspace \
     -w /workspace \
     "${ET_BUILD_IMAGE}" \

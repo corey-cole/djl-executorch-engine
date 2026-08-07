@@ -111,5 +111,14 @@ Shell-level tests for the build machinery live in `native/tests/` (e.g. `cmake_r
 ## Conventions worth knowing
 
 - `EtSymbolBlock.forward()` is **not thread-safe** on the same model — one `Model`/`Predictor` per thread, and never `close()` a model with a forward in flight.
+
+  > **Threading, and why more threads is usually wrong.** The rule above is about *safety*, not
+  > throughput. XNNPACK-delegated models already parallelize inside a single `forward()` on
+  > ExecuTorch's shared intra-op pool, and concurrent delegate calls serialize on a process-global
+  > workspace mutex — so N `Predictor`s on N threads is typically slower than one, not N× faster.
+  > Tune `ai.djl.executorch.num_threads` before adding caller threads. Measured on a 4-core/8-thread
+  > host with MobileNetV2: 1 thread 462 forwards/s, 4 threads 305, 8 threads 147 (peak RSS 33 MB →
+  > 224 MB). Ratios on larger hosts are unmeasured.
+- `ai.djl.executorch.num_threads` (JVM flag) or `EtEngine.setIntraOpThreads(n)` sizes ExecuTorch's intra-op (XNNPACK) threadpool. Process-global, write-once: applied and sealed at the first model load; the effective native count is `EtEngine.getIntraOpThreads()`.
 - The `native/spike/` directory holds throwaway spike/smoke files (`EtNative.java`, `cpp_smoke.cpp`, `add.pte`), not production code.
 - Design docs live in `docs/superpowers/specs/` and `docs/superpowers/plans/`; the top-level `djl-executorch-engine-design.md` is the overall design writeup.

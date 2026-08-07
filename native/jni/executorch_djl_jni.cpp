@@ -274,3 +274,13 @@ Java_org_measly_executorch_jni_EtNative_destroy(JNIEnv* env, jclass, jlong handl
     throwJava(env, "EtRuntime destroy failed", &e);
   }
 }
+
+extern "C" JNIEXPORT jint JNICALL
+Java_org_measly_executorch_jni_EtNative_setIntraOpThreads(JNIEnv* env, jclass, jint n) {
+  return static_cast<jint>(measly::et::setIntraOpThreads(static_cast<uint32_t>(n)));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_org_measly_executorch_jni_EtNative_intraOpThreads(JNIEnv* env, jclass) {
+  return static_cast<jint>(measly::et::intraOpThreads());
+}

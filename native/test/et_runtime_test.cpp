@@ -299,3 +299,20 @@ TEST_CASE("forward: unplanned inputs survive the caller buffer being freed (ASan
   ForwardResult r2 = rt.forward(inputs2);
   REQUIRE(*static_cast<const float*>(r2.outputs()[0].data) == 17.0f);
 }
+
+TEST_CASE("intraop: setIntraOpThreads resizes the shared pool and reports the applied count") {
+  const uint32_t before = intraOpThreads();
+  REQUIRE(setIntraOpThreads(1) == 1);
+  REQUIRE(intraOpThreads() == 1);
+  // The pool is process-global: restore so sibling tests run on the default pool.
+  setIntraOpThreads(before);
+  REQUIRE(intraOpThreads() == before);
+}
+
+TEST_CASE("intraop: upstream quirks -- 0 is silently ignored, same-count reset is a no-op") {
+  const uint32_t cur = intraOpThreads();
+  REQUIRE(setIntraOpThreads(0) == cur);   // upstream early-returns for 0: unchanged
+  REQUIRE(intraOpThreads() == cur);
+  REQUIRE(setIntraOpThreads(cur) == cur); // early-returns for the current count: unchanged
+  REQUIRE(intraOpThreads() == cur);
+}
