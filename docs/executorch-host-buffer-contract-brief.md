@@ -12,6 +12,25 @@ history.** Unlike the IREE brief, this one opens with W1 already complete: the
 audit was performed on 2026-08-04 and its answer is recorded below with
 evidence. What remains open is what to *do* about it.
 
+**Progress as of 2026-08-05.** W1, W2, and W3 are complete and on `main`. W4 (harness + fixtures + run
+recipe), W7 (staging), and W8 (probes) landed in code on 2026-08-05; W4's manual runs are pending
+and their evidence goes into §8. The unplanned-input fixture that W7 named as a prerequisite now
+exists in both its non-delegated (`add_unplanned.pte`) and delegated (`clamp5.pte`, `lin129.pte`,
+`lin129_planned.pte`) forms.
+
+| Item | State |
+|---|---|
+| W1 — audit | **complete** 2026-08-04 |
+| W2 — make the copy observable | **complete** — `is_memory_planned()` plumbed through to Java and asserted (#20) |
+| W3 — correct the documented contract | **complete** — live surfaces corrected (`20768a0`), one residual noted in §3/W3 |
+| W7 fixture prerequisite | **complete** — `add_unplanned.pte` (`7eed3b8`) plus delegated `clamp5.pte`/`lin129.pte`/`lin129_planned.pte` (`export_w4_models.py`); leak harness wired with exact-count staging assertions |
+| W4 — over-read confirmation | **harness complete, result pending** — `native/harness/et_overread_harness.cpp` covers both configurations and builds in the QA tree, never CI; deliverable 3 (dated evidence) is unmet and §8's log is empty, so the *question* W4 asks is still open |
+| W7 — grow-only per-slot staging | **complete** — `native/core/staging.h` + `forward()` integration, in-repo coverage (§3/W7) |
+| W8 — USDT probes and leak-test coverage | **complete** — `native/core/et_probes.h`, exact-count assertions in `et_leak_harness` + `build_qa.sh` |
+| W5 — establish the cost | **complete — run 2026-08-06, results in §8/W5.** Input A/B: no measurable difference (12.7 vs 13.0 ms/op, CIs overlap). Output: the W6 direct path is 24–87% *slower* than heap at ≥256 KB and OOM-kills without an external GC trigger |
+| W6 — direct-buffer outputs | **prototyped and rejected on the W5 numbers — not on this branch.** The prototype lives unmerged on `feature/w5-w6-direct-outputs` as the record; §8/W5 has the measurements and the two blocking defects (per-op `operator new`/`delete` of the full output; a free path with no backpressure). Reopening it means beating the heap path's `-gc false` numbers first |
+| W9 — shared aligned-buffer abstraction | open |
+
 ---
 
 ## 1. Context
@@ -30,16 +49,18 @@ profile, and it is the core of this brief.
 
 ### The original claim, and its correction
 
-`native/core/et_runtime.h:13` states:
+**Corrected 2026-08-04 by W3; recorded here as the finding, not as live text.**
+`native/core/et_runtime.h:13` used to state:
 
 ```cpp
 // Borrowed input: data is a host pointer the caller keeps valid across forward(). Zero-copy in.
 ```
 
-CLAUDE.md repeats it ("Zero-copy in (borrowed input pointers), single-copy
-out"), as do at least six design docs under `docs/superpowers/`. The claim is
+CLAUDE.md repeated it ("Zero-copy in (borrowed input pointers), single-copy
+out"), as did at least six design docs under `docs/superpowers/`. The claim is
 accurate about what *this engine* does and false about what *ExecuTorch* does
-with the pointer it is handed.
+with the pointer it is handed. Both of those surfaces now say the true thing —
+see W3.
 
 `EtRuntime::forward` (`native/core/et_runtime.cpp:70-76`) builds `from_blob`
 tensors over the caller's pointers and calls `module.forward(evalues)`. That
@@ -195,7 +216,22 @@ tests.
 is the ExecuTorch analogue of IREE's `WRAPPED`/`STAGED` signal, whose absence is
 why this went unnoticed for the engine's whole life.
 
-**Do this regardless of the decision gate.** Roughly an hour; no dependencies.
+**Status: COMPLETE (2026-08-05, PR #20 `3c26ad6`).** As shipped:
+
+- `RuntimeState`/`MethodMeta` carries `std::vector<uint8_t> inputMemoryPlanned`,
+  filled from `info->is_memory_planned()` in `EtRuntime::methodMeta()`
+  (`native/core/et_runtime.cpp:47,54`). Non-tensor inputs keep `0` — there is no
+  `TensorInfo` for them, so the flag is meaningless rather than false.
+- Marshalled across JNI as a `boolean[]` (`executorch_djl_jni.cpp:164`) into
+  `EtMethodMeta.inputMemoryPlanned` (`EtMethodMeta.java:13`).
+- Logged per input at model load: `EtModel.java:60` emits
+  `model {} input {} memoryPlanned={}`.
+- Asserted at all three layers: `native/test/et_runtime_test.cpp:34-51` (Catch2,
+  both directions), `EtMethodMetaTest` (both directions), and
+  `EtModelTest.java:76`.
+
+W7 can branch per input on this flag as designed; nothing further is needed from
+this item.
 
 ### W3 — Correct the documented contract
 
@@ -207,23 +243,77 @@ which is the export default.*
 *Answers:* nothing measurable. It stops the false claim from being built on
 again, which is how this became load-bearing in six documents.
 
-Independent of everything else. Do it with W2.
+**Status: COMPLETE (2026-08-04, `20768a0`).** Corrected in the three live
+surfaces — `native/core/et_runtime.h` (comment-only; `struct InputDesc`
+untouched), `CLAUDE.md`, and `docs/benchmarking.md` — each now stating the
+memory-plan branch explicitly and pointing here.
 
-### W4 — Over-read confirmation test
+**Residual, deliberately not fixed.** Five *tracked* dated docs under
+`docs/superpowers/` still carry "zero-copy in": the phase1 design, the phase2a
+design and its plan, the mobilenet-example benchmark design, and the
+pytorch-free preprocessing design. These are records of what was believed and
+decided on their dates, not live contract statements, so they were left intact
+rather than retro-edited. Anyone reading them for the input contract should be
+sent here instead. Flagging it so the omission reads as a call rather than a
+miss.
 
-**Demoted 2026-08-04 from "the decisive gate" to a confirmation test.** W7 now
-stages every unplanned input into a padded, engine-owned buffer, so the
-over-read cannot reach a caller's buffer on any microarchitecture regardless of
-what this experiment finds. W4 no longer decides whether anything ships; it
-establishes that W7's padding is *necessary* (rather than cargo-culted) and
-*sufficient*, and it produces the reproducer that keeps the question closed.
-
-Run it before W7 rather than after — a positive result is the justification for
-the padding constant, and the same harness re-run with staging enabled is W7's
-regression test.
+### W4 — Over-read confirmation, run manually
 
 Determine whether XNNPACK's documented over-read is reachable through a
 borrowed, exact-sized host buffer.
+
+**Demoted 2026-08-04 from "the decisive gate" to a confirmation test.** W7
+stages every unplanned input into a padded, engine-owned buffer, so the
+over-read cannot reach a caller's buffer on any microarchitecture regardless of
+what this experiment finds. W4 does not decide whether anything ships; it
+establishes that W7's padding is *necessary* rather than cargo-culted, and it
+produces a reproducer that keeps the question closed.
+
+#### Revised 2026-08-05: this is a manual step, not a repo test
+
+**It cannot be a regular test, because the hardware that would fail it is not
+the hardware we run tests on.** Every route below needs a microarchitecture that
+selects an `XNN_OOB_READS`-annotated kernel for the *first op touching the graph
+input*. This dev box (Tiger Lake) selects `avx512f_broadcast` for f32, which is
+masked and architecturally safe, and the qs8 paths that do over-read on AVX-512
+touch XNNPACK-internal int8 buffers rather than ours (§ the disproven sub-route
+below). So reaching an annotated kernel means either **CPUID masking under
+`qemu-x86_64`** or **real AMD Zen 1–3 hardware**. Neither belongs in
+`./gradlew test` or the Catch2 suite.
+
+What that implies, concretely:
+
+- **The harness source still lands in-repo** — a small standalone binary under
+  `native/harness/`, alongside `et_leak_harness`, buildable by the existing QA
+  path with no JDK. What does *not* land is an assertion that runs
+  unconditionally. Committing it is what makes the result re-derivable later
+  instead of a paragraph someone has to take on faith.
+- **The run is manual and its output is evidence**, recorded back into this
+  brief: the date, the exact command, the model, `N`/`K`, **the kernel XNNPACK
+  actually selected** (not the one predicted), and the fault or its absence. A
+  result without the selected-kernel line is not usable — see the negative-result
+  caveat below.
+- **Prefer real Zen hardware to emulation if a Zen instance is available.**
+  Route B on native Zen is a stronger result and sidesteps the open question
+  qemu introduces: whether XNNPACK's cpuinfo-based uarch detection resolves to
+  `xnn_uarch_zen` under qemu-user at all. Until that is confirmed, a negative
+  from qemu carries no information.
+
+**Consequence for W7 — the important part.** An earlier draft said "the same
+harness re-run with staging enabled is W7's regression test." **That no longer
+holds.** If W4 is manual, so is its re-run, and W7 would then ship with no
+in-repo guard on the property it exists to provide. W7's coverage must come from
+mechanisms that run anywhere, on any uarch:
+
+- a direct assertion that each staging slot is 64-byte aligned and over-allocated
+  by the padding constant (a unit test on the allocator, no XNNPACK involved);
+- W8's `staging_input` / `staging_grow` probes, which cover the
+  realloc-per-call failure mode.
+
+Those are what police the invariant day to day. W4's job shrinks to **justifying
+the constant once, with evidence** — and the manual re-run under staging is a
+nice-to-have confirmation, not the regression test. Run W4 before W7 so the
+justification exists before the code does.
 
 **Revised 2026-08-04 after reading the XNNPACK sources.** The original framing of
 this item ("run it under ASan") was wrong and would have produced a false
@@ -254,19 +344,22 @@ exact-sized user buffer creates.
 
 **Open question, and it may make this a live upstream bug.** "Mostly" is doing
 work in that sentence. `Module` allocates each planned buffer at *exactly*
-`meta.memory_planned_buffer_size(i)` with no slack
-(`extension/module/module.cpp:375-382`), so a tensor that memory planning places
-**last in the arena** is over-read past the end of the malloc'd block — today,
-on stock ExecuTorch, with no borrowing involved. It would rarely fault (malloc
-leaves slack and metadata after the block) and ASan cannot see it
-(`XNN_OOB_READS`), which is consistent with nobody having reported it.
+`meta.memory_planned_buffer_size(i)` with no slack — re-verified 2026-08-05 at
+`v1.3.1`: `module.cpp:336` is `planned_buffers.emplace_back(size)`, a
+`std::vector<uint8_t>` sized exactly, and `XNNExecutor.cpp:97` is
+`externals_[i].data = tensor->mutable_data_ptr<float>()`, raw and unpadded. So a
+tensor that memory planning places **last in the arena** is over-read past the
+end of a heap allocation — today, on stock ExecuTorch, with no borrowing
+involved. It would rarely fault (malloc leaves slack and metadata after the
+block) and ASan cannot see it (`XNN_OOB_READS`), which is consistent with nobody
+having reported it.
 
-UNVERIFIED: whether the planner ever actually places an XNNPACK external input
-at the arena end — it packs by lifetime, so it is plausible but not
-established. Worth settling, because it changes this from "a hazard we would
-introduce" to "a defect we found," with a corresponding change in what we owe
-upstream. Cheap to test: the same guard-page harness, pointed at a
-memory-planned model, with the arena allocator swapped for a guarded one.
+UNVERIFIED, and this is the gate on the upstream report below: whether the
+planner ever actually places an XNNPACK external input at the arena end — it
+packs by lifetime, so it is plausible but not established. Settling it changes
+this from "a hazard we would introduce" to "a defect we found." Cheap to test:
+the same guard-page harness, pointed at a memory-planned model, with the arena
+allocator swapped for a guarded one — that is configuration (b) below.
 
 **Mechanism and shape rule.** The tail path is ISA-dependent. AVX
 (`src/xnnpack/simd/f32-avx-base.h:172`) uses `_mm256_maskload_ps` and is
@@ -359,17 +452,202 @@ buffer, not ours. Getting an int8 *graph input* would require hand-building a
 graph whose placeholder is already quantized; not worth it now that Route B has
 a native f32 path.
 
-*Answers:* whether W7's padding is necessary and sufficient, and — with the
-staging path enabled — supplies its regression test. Given the annotations,
-expect positive; the useful output is the *conditions*, not the yes/no. A
-negative from Route A alone is weak evidence: it proves the kernels that model
-selected did not over-read on that ISA, not that none will. Record it as such
-rather than as a clearance. **Note that a negative no longer licenses skipping
-the padding** — W7 pads because the contract says to, and because the uarch
-table below shows the dev box is the unrepresentative case.
+*Answers:* two things, from one harness in two configurations (below) — whether
+W7's padding is necessary, once, by evidence rather than on an ongoing basis;
+and whether the arena-end over-read is a live defect in stock ExecuTorch, which
+is a report we owe upstream rather than anything this repo consumes. Given the
+annotations, expect positive on the first; the useful output is the
+*conditions*, not the yes/no.
 
-Not ⚠️-tagged: the ASan rebuild is not part of this item any more, and the
-guard-page harness itself is tiny.
+A negative from Route A alone is weak evidence: it proves the kernels that model
+selected did not over-read on that ISA, not that none will. Record it as such
+rather than as a clearance, and record the selected kernel so the claim is
+checkable. **A negative does not license skipping the padding** — W7 pads
+because XNNPACK's contract says to, and because the uarch table above shows the
+dev box is the unrepresentative case, not the representative one.
+
+#### Two harness configurations, one set of machinery
+
+The guard page, the shape rule, and the forced-uarch requirement are identical
+in both. Only the setup differs, and **they answer different questions** — (a)
+is about us, (b) is about upstream. Build for both from the start; retrofitting
+(b) later means re-deriving the allocator plumbing.
+
+| | (a) borrowed input | (b) arena end |
+|---|---|---|
+| Model | unplanned (`alloc_graph_input=False`), XNNPACK-delegated | stock export defaults, memory-planned, XNNPACK-delegated |
+| Buffer under test | our exact-sized host buffer, borrowed via `share_tensor_data` | ExecuTorch's own planned arena |
+| Guard placement | caller's buffer abuts `PROT_NONE` page | arena allocator swapped for a guarded one; last planned buffer abuts the page |
+| Proves | W7's padding is necessary | **an upstream defect in stock ExecuTorch** |
+| Blocked on | nothing | the UNVERIFIED placement question above |
+
+Configuration (b) is reachable because ExecuTorch's memory manager is pluggable:
+supply a `HierarchicalAllocator` over `mmap`'d spans instead of `Module`'s
+`std::vector<uint8_t>` arena, sized exactly, each followed by a guard page. If
+the planner never puts an XNNPACK external input last, (b) reports nothing and
+Claim 2 below evaporates — that is a real outcome, not a harness failure, and
+should be recorded as one.
+
+#### If it faults: the upstream report
+
+A fault in configuration (b) is reportable against ExecuTorch. Keep the two
+claims separate when filing, because they are not equally strong.
+
+**Claim 1 — the borrow path has an undocumented padding requirement.**
+Configuration (a). We use public API (`from_blob` → `set_input`, exported
+`alloc_graph_input=False`), ExecuTorch takes our exact-sized pointer through
+`share_tensor_data` with no alignment or padding check, and `prepare_args` hands
+it to XNNPACK unpadded. Real, but upstream has a defensible reply: *the borrow
+path implies the caller owns the padding.* Expect a documentation fix. File it,
+do not lead with it.
+
+**Claim 2 — stock ExecuTorch over-reads its own arena.** Configuration (b). No
+borrowing, stock export defaults, stock `Module`, stock allocator; the user does
+nothing unusual. `planned_buffers.emplace_back(size)` sizes the arena exactly and
+`XNNExecutor.cpp:97` hands XNNPACK the raw pointer, so an external input placed
+last is an out-of-bounds read of ExecuTorch's own heap allocation. **This is the
+report** — there is no user-error escape hatch in it.
+
+Anticipated pushback on Claim 2, and the answers:
+
+- *"Your custom allocator faulted; ours doesn't."* True and irrelevant — stock
+  `malloc` slack absorbing an OOB read does not make it defined. The guard page
+  is an instrument, not the defect.
+- *"ASan is clean."* ASan is blinded by construction:
+  `XNN_OOB_READS` expands to `__attribute__((no_sanitize("address")))` plus
+  `XNN_NO_INLINE_SANITIZER` (`src/xnnpack/common.h:288-321`). Absence of a
+  sanitizer report is not evidence here, and that is precisely why this has gone
+  unreported.
+- *"XNNPACK's problem."* No — XNNPACK documents `XNN_EXTRA_BYTES` and honors it
+  in its own harness (`bench/subgraph/benchmark.cc:91` mallocs
+  `size + XNN_EXTRA_BYTES` for the identical role). The violation is
+  ExecuTorch's, in `backends/xnnpack/runtime/XNNExecutor.cpp`, and that is where
+  the fix belongs.
+
+**Precondition: re-verify against ExecuTorch `main` before filing.** Everything
+above is checked against `v1.3.1`, which is our pin, not upstream's tip.
+Maintainers will ask, and a report against a released tag that is already fixed
+on main wastes the exchange. A fix on main is also useful to us — it dates the
+pin bump that would remove Claim 2 from this repo's exposure.
+
+#### Deliverables
+
+1. The guard-page harness committed under `native/harness/`, supporting **both**
+   configurations above, not wired into any default test target.
+2. A run recipe in this brief: the qemu invocation (or the Zen instance type),
+   the model and its `N`/`K`, and how to read the result.
+3. A dated evidence block appended to §8 recording each run: command, selected
+   kernel, outcome. One block per configuration/route actually executed.
+4. If (b) faults: a settled answer on the placement question, an
+   ExecuTorch-`main` re-verification, and an upstream issue carrying the
+   reproducer.
+
+#### Run recipe (implemented 2026-08-05)
+
+Build (QA tree, no JDK; the harness is a plain `et_runtime` consumer):
+
+```bash
+cmake --build native/asan --target et_overread_harness
+```
+
+Fixtures: `native/spike/clamp5.pte` (Route A), `lin129.pte` (Route B),
+`lin129_planned.pte` (config (b)) — exported via
+`cd native/spike && PATH=$HOME/workspace/executorch/.venv/bin:$PATH uv run export_w4_models.py`
+(flatc must be on `PATH` for delegated exports; see §8). All three verified
+through the pinned v1.3.1 runtime: `clamp5`/`lin129` report
+`is_memory_planned() == False`, `lin129_planned` `True`, all single
+`executorch_call_delegate`.
+
+Run on the repo root as CWD. Each qemu run needs
+`ASAN_OPTIONS=detect_leaks=0` (LSan's ptrace scan fatally errors under
+qemu-user — verified) plus `handle_segv=0` so the guard-page fault surfaces as
+the raw `$? == 139` SIGSEGV instead of ASan's DEADLYSIGNAL handler swallowing
+it; and a fresh gdb port per run.
+
+- Route A (f32, forced SSE): `ASAN_OPTIONS=detect_leaks=0:handle_segv=0
+  qemu-x86_64 -cpu Nehalem ./native/asan/et_overread_harness borrowed
+  native/spike/clamp5.pte` → **expect SIGSEGV (139)**: Nehalem → sse2 →
+  `xnn_f32_vclamp_ukernel__sse2_u8`, whose tail load is `xnn_load_tail_f32`
+  (`f32-sse2-base.h:195`, `XNN_OOB_READS`, full `_mm_loadu_ps`) reading 12
+  bytes past the 20-byte buffer (`N % 4 == 1`). Verified end-to-end 2026-08-05
+  in the implementer's smoke: the run faults on the input 0 guard page.
+- Route B (plain f32 Linear, AMD Zen): `ASAN_OPTIONS=detect_leaks=0:handle_segv=0
+  qemu-x86_64 -cpu EPYC ./native/asan/et_overread_harness borrowed
+  native/spike/lin129.pte` → **expect SIGSEGV (139)**. **`-cpu EPYC` (Naples,
+  Zen 1), NOT `-cpu EPYC-Rome`** — under EPYC-Rome cpuinfo reports
+  `xnn_uarch_zen2` (0x20010A), which misses the gemm-config
+  `case xnn_uarch_zen:`/`dhyana:` branch (`gemm-config.c:933-973`) and selects
+  the safe default kernels; a negative from EPYC-Rome is void. Under `-cpu
+  EPYC` cpuinfo reports `zen` (0x200109) and gdb confirms
+  `xnn_f32_gemm_minmax_ukernel_1x16s4__fma3_broadcast` (the annotated
+  `XNN_OOB_READS` kernel) executes — K=129 (`K % 4 == 1`) over-reads the
+  activation (borrowed input) by 12 bytes.
+- Config (b): `ASAN_OPTIONS=detect_leaks=0:handle_segv=0 qemu-x86_64 -cpu EPYC
+  ./native/asan/et_overread_harness arena native/spike/lin129_planned.pte` →
+  placement line first (input last in its buffer: yes/no), then fault-or-clean.
+  If "yes" + SIGSEGV → upstream report track: re-verify against ExecuTorch
+  `main` (`~/workspace/executorch`, tag v1.3.1 is not upstream's tip) before
+  filing Claim 2.
+
+  **Qualifying a negative — this is one fixture, not a survey.** If the run
+  reports "no" or exits clean, the finding is *"`lin129_planned.pte`'s planner
+  did not place its XNNPACK external input last in a single 848-byte arena
+  buffer."* It is **not** "the planner never does." Record it in that form and
+  do not file — but do not write it up as a clearance either; the brief applies
+  the same rule to Route A negatives and the reasoning is identical.
+
+  Settling the general question is cheaper by reading than by collecting
+  fixtures: memory planning packs by lifetime and graph inputs have the earliest
+  start, which predicts they are placed *first* and would make Claim 2
+  structurally unreachable. That argument, confirmed against
+  `exir/passes/memory_planning_pass.py`, closes the question in a way no number
+  of `.pte`s can. Do that before adding a second fixture. If it holds, record it
+  as the answer and retire config (b); if it does not, the fixture that breaks
+  it is the one worth building.
+- Kernel observation per run (the evidence block is unusable without the
+  selected-kernel line): gdb under qemu — terminal 1:
+  `ASAN_OPTIONS=detect_leaks=0:handle_segv=0 qemu-x86_64 -g 12345 -cpu EPYC
+  ./native/asan/et_overread_harness borrowed native/spike/lin129.pte`;
+  terminal 2: `gdb -batch -ex 'target remote :12345' -ex 'break
+  xnn_f32_gemm_minmax_ukernel_1x16s4__fma3_broadcast' -ex continue -ex 'bt 4'
+  ./native/asan/et_overread_harness` (Route A: break
+  `xnn_f32_vclamp_ukernel__sse2_u8`). gdb-under-qemu is verified working
+  (breakpoints fire, backtraces resolve). On real Zen hardware instead:
+  `perf record -F 999 -- ./native/asan/et_overread_harness borrowed
+  native/spike/lin129.pte && perf report --stdio | grep ukernel` — the top
+  symbol is the selected kernel (ukernel symbols are global in the linked dist
+  lib). The user's `perf_users` group wrapper (`/usr/bin/perf`,
+  root:perf_users) covers `perf_event_paranoid=4`.
+- **Sufficiency arm — run this, it is one command.** Every route above proves
+  the padding is *necessary*; none exercises the engine's own path, because
+  `et_overread_harness borrowed` deliberately bypasses `EtRuntime::forward` (W7
+  staging would pad the slot and absorb the over-read, making every route report
+  a meaningless negative). So the same uarch that faults on the raw path should
+  be shown **clean** through the real one:
+
+  ```bash
+  ASAN_OPTIONS=detect_leaks=0 qemu-x86_64 -cpu EPYC \
+    ./native/asan/et_leak_harness native/spike/lin129.pte 1 2
+  ```
+
+  Same fixture, same annotated `1x16s4__fma3_broadcast` kernel, but through
+  `EtRuntime::forward` and its padded slot. Expect exit 0 and
+  `grow=0 staged_input=2 total_input=2`. Verified to run natively during the
+  2026-08-05 review; the qemu leg is what remains. Pair it with the Route B run
+  in the same sitting — *faults raw / clean staged, on identical hardware and
+  fixture* is the whole claim, and either half alone is weak.
+
+  This is still a manual confirmation, not a regression gate: W7's in-repo
+  coverage is the alignment and padding-size assertions, the stage-vs-
+  pass-through case, the ASan lifetime case, and `grow == 0` (§3/W7). Those run
+  on any microarchitecture; this one cannot.
+
+Run evidence goes into §8 using the existing W4 evidence template. A negative
+from any route does not license dropping the staging padding (§3/W4).
+
+Not ⚠️-tagged (§7): the ASan rebuild is not part of this item any more — ASan
+cannot observe the over-read — and the guard-page harness is a small standalone
+binary.
 
 ### W5 — Establish the cost ⚠️
 
@@ -379,6 +657,16 @@ Measure, against kernel time:
   `alloc_graph_input` both ways through the existing `example/src/jmh` harness;
 - the heap `byte[]` output copy, including its GC cost, at output sizes well
   past MobileNet's 4 KB.
+
+**What the input A/B can and cannot measure (established 2026-08-06).** It is
+*not* a copy-vs-no-copy comparison. `et_runtime.cpp:169-192` copies the input
+once on **both** paths: planned inputs are memcpy'd by ExecuTorch's
+`copy_tensor_data` into its arena, unplanned inputs are memcpy'd by W7 into the
+staging slot. The A/B delta is therefore the *export mode's* whole-graph effect
+(arena layout and planner output), with the two copies cancelling. To price the
+copy itself, use the `staging_input` USDT probe or the native timing harness —
+not JMH. The arm is still worth running, because "does `alloc_graph_input=False`
+cost anything end to end?" is the question a user actually has.
 
 *Answers:* whether any of this is defensible to users. The IREE spike's own
 numbers predict the input answer — copies were ~0.5% of a 61.6 ms MobileNet
@@ -390,6 +678,94 @@ finding. The output/GC arm is the one with genuine uncertainty.
 harness edit and the run recipe, not the run.** Tagged ⚠️ — see §7; a
 large-tensor arm here would reproduce the IREE W2 memory profile exactly.
 
+#### Run recipe (implemented 2026-08-06)
+
+Harness edits live on `feature/w5-w6-direct-outputs`: the `exportMode` A/B in
+`MobilenetBenchmark` and the `AddOutputBenchmark` sweep (models from
+`tools/scripts/export_w5_add_models.py`, task `:example:exportW5Models`).
+Two sessions, because the W6 arm swaps the shim: the heap baseline runs at the
+W5-tip commit (pre-W6) against the saved pre-W6 shim `/tmp/et-pre-w6.so` (a file
+path, per `LibUtils.loadLibrary`); the W6 comparison runs at the branch tip with
+the rebuilt, jar-bundled shim.
+
+Both sessions use the §7 control and a jar built with
+`./gradlew :example:jmhJar --no-configuration-cache --rerun-tasks`
+(`--no-configuration-cache` is required by the JMH plugin — see
+`example/README.md`).
+
+**S1 — input A/B + output baseline (heap path), at the W5-tip commit:**
+
+```bash
+git worktree add /tmp/et-w5-baseline <W5-tip-SHA>
+cd /tmp/et-w5-baseline
+./gradlew :example:exportModels --no-configuration-cache --rerun-tasks   # uv; flatc fallback if needed
+./gradlew :example:exportW5Models --no-configuration-cache --rerun-tasks
+./gradlew :example:jmhJar --no-configuration-cache --rerun-tasks
+
+# input A/B: same MobileNet, planned vs unplanned export (the invisible input copy)
+# ET_NATIVE (not ET_HYBRID): the fat jar's META-INF/services keeps only the ExecuTorch
+# provider (jmhJar duplicatesStrategy=EXCLUDE — see docs/iree-lessons-learned §3), so a
+# PyTorch-backed arm cannot load from java -jar. The A/B delta is the export mode alone;
+# ET_NATIVE also keeps the fork LibTorch-free.
+EXECUTORCH_LIBRARY_PATH=/tmp/et-pre-w6.so systemd-run --user --scope -p MemoryMax=4G taskset -c 0-3 \
+  timeout 1800 bash -c 'java -jar example/build/libs/example-jmh.jar -f 3 -wi 5 -w 1s -i 5 -r 1s -gc true \
+  -jvmArgs "-Xmx1536M -Dexample.models.dir=<abs>/example/build/models -Dai.djl.pytorch.num_interop_threads=1" \
+  -p variant=ET_NATIVE -p exportMode=planned,unplanned MobilenetBenchmark.steadyState'
+
+# output baseline: heap byte[] marshalling + its GC cost, four sizes.
+# Run TWICE, -gc true and -gc false; see the note below. /usr/bin/time -v for peak RSS.
+EXECUTORCH_LIBRARY_PATH=/tmp/et-pre-w6.so systemd-run --user --scope -p MemoryMax=4G taskset -c 0-3 \
+  timeout 1800 bash -c '/usr/bin/time -v java -jar example/build/libs/example-jmh.jar \
+  -f 3 -wi 5 -w 1s -i 5 -r 1s -gc true -prof gc \
+  -jvmArgs "-Xmx1536M -Dexample.models.dir=<abs>/example/build/models" \
+  AddOutputBenchmark.steadyState'
+```
+
+`-gc true` + `-Xmx1536M` is the config proven on this host by the IREE spike
+(findings §3) — per-iteration GC keeps the W6 arm's Cleaner draining; `-prof gc`
+reports the per-op allocation rate and GC time.
+
+Four corrections to the original recipe, all made after the 2026-08-06 runs:
+
+- **`-f 3`, not `-f 1`.** With one fork JMH's `±` is within-fork only and
+  understates run-to-run spread. Three forks also expose thermal drift on this
+  laptop part (turbo on, `powersave` governor); the 2026-08-06 runs showed none.
+- **`-wi 5 -w 1s`, not `-w 250ms`.** At ~13 ms/op, 250 ms windows give ~11 ops
+  per iteration — too few for C2 to finish the DJL/translator path.
+- **Run the output sweep at both `-gc true` and `-gc false`.** `-gc true` moves
+  collection *out of* the measured window, so its ms/op is marshalling-only. The
+  `-gc false` pass is the number a user actually pays; on 2026-08-06 it was
+  13–24% higher on the heap path. Both belong in the log.
+- **Absolute `example.models.dir`, shared between S1 and S2.** The artifacts are
+  export-script outputs, not build outputs of either commit, so pointing both
+  sessions at one directory makes the two sessions byte-identical in fixtures
+  and removes a re-export from the S1 setup.
+
+One host-specific note worth not "fixing" later: `taskset -c 0-3` is correct on
+this box because its SMT siblings are 0/4, 1/5, 2/6, 3/7 — so 0-3 is four
+distinct physical cores. On a machine with a different sibling layout the same
+mask would put two threads on one core. Check
+`/sys/devices/system/cpu/cpu*/topology/thread_siblings_list` before reusing it.
+
+The export tasks must
+run from the repo root; if a delegated export fails with
+`FileNotFoundError: 'flatc'`, re-run with
+`PATH=$HOME/workspace/executorch/.venv/bin:$PATH` (brief §8 flatc caveat).
+
+**S2 — W6 comparison (direct outputs), at the branch tip after rebuilding the shim:**
+
+```bash
+cmake --build native/build -j"$(nproc)"    # native/build is the shipping-shim cache (ET_BUILD_QA/OFF, BENCH/OFF, logging)
+cp native/build/libexecutorch_djl.so src/main/resources/native/linux-x86_64/
+./gradlew :example:jmhJar --no-configuration-cache --rerun-tasks
+# output comparison: SAME AddOutputBenchmark command as S1, no EXECUTORCH_LIBRARY_PATH
+# (the jar now bundles the W6 shim)
+```
+
+If a cmake reconfigure is needed (stale cache), set `JAVA_HOME` to the Zulu 17
+used for the JVM tests first (`CMakeLists.txt` reads `$ENV{JAVA_HOME}` at
+configure). The W6 direct arm's numbers go into the same §8/W5 log blocks.
+
 ### W6 — Prototype: direct-buffer outputs
 
 Replace copy 3's `NewByteArray` + `ByteBuffer.wrap` with a JNI-allocated block
@@ -398,6 +774,28 @@ stays a copy — `OutputView.data` points into ExecuTorch's arena and is invalid
 after the next `forward()`, so the copy is mandatory. Only its *destination*
 changes: off-heap instead of on-heap, and direct, which also removes the
 model-chaining re-copy at `EtSymbolBlock.java:56`.
+
+**Status: prototyped, measured, and rejected — deliberately NOT on this branch.**
+The prototype was built 2026-08-06 (W6-1..W6-4) and lives unmerged on
+`feature/w5-w6-direct-outputs`: copy 3's destination becomes a JNI-allocated
+block exposed via `NewDirectByteBuffer` (`native/jni/et_output_buffer.h`,
+`executorch_djl_jni.cpp`), freed by a `java.lang.ref.Cleaner` registered in
+`EtOutputBuffers`, with the native alive-counter (`EtNative.aliveOutputBuffers`)
+replacing the heap-pressure leak signal and `EtNativeOomTest` pinning the
+heap-independent contract under `-Xmx128m`.
+
+W5 then measured it and it lost: 24–87% *slower* than the heap path at every
+size, and it OOM-kills without an external GC trigger. It does deliver the
+intended ~33,000x cut in allocation rate at 64 MB, which is the only argument
+still standing for it. §8/W5 has the numbers, the two blocking defects, and the
+two candidate fixes.
+
+**If you reopen this**, the kill criterion is already set: a reworked direct path
+must beat the heap path's `-gc false` numbers (1.923 ms/op at 4 MB, 29.291 at
+64 MB), *and* bound its own native memory without depending on a GC. Removing
+the mmap churn alone is known not to be sufficient — see the
+`MALLOC_MMAP_THRESHOLD_` experiment in §8/W5.
+
 
 IREE's W4 prototype ports here nearly verbatim, including its two hard-won
 rules: register **only the address primitive** with the Cleaner (capturing the
@@ -469,6 +867,22 @@ good:
   from W2. `is_memory_planned()` is per-input, so mixed models fall out
   naturally — stage only the unplanned slots.
 
+**How W7 is actually covered — W4 does not do it.** W4 is a manual,
+uarch-dependent run (§3/W4), so nothing in it can guard this code on an ordinary
+build. The in-repo coverage W7 must ship with, all of which runs on any
+microarchitecture:
+
+| Property | Guard |
+|---|---|
+| Slot is 64-byte aligned | unit assertion on the allocator, no XNNPACK involved |
+| Slot is over-allocated by the padding constant | same |
+| Staged only for unplanned inputs, per slot | Catch2 case over `add_unplanned.pte` vs `add.pte` |
+| Allocates once, not per call | W8 `staging_grow` exact-count assertion |
+| Borrowed pointer outlives a freed Java buffer safely | ASan case: free after `forward()`, run a second `forward()` |
+
+The manual W4 re-run with staging enabled is a confirmation, not a regression
+test, and must not be counted as one.
+
 **Be honest that this costs.** Today the unplanned path is genuinely zero-copy
 (one copy at `EtNDManager.create`, then ExecuTorch borrows the direct buffer).
 Staging makes it two. That is a real regression on that path — safety bought
@@ -503,15 +917,35 @@ but it lives in `xnnpack.h`, which is delegate-internal and not on our include
 path. Hardcode 128 (the maximum) with a comment citing the source rather than
 taking a dependency; the waste is per-slot, not per-call.
 
-**Prerequisite: there is no unplanned test fixture, so this path would ship
-untested.** Every `.pte` in the repo is `memory_planned=True`, and
-`EtNDManager.create` always returns a direct buffer — so under the matrix above,
-the entire existing suite takes the pass-through row and never stages. Add a
-fixture exported with
+**Prerequisite — partially satisfied 2026-08-05 (`7eed3b8`).** The original
+statement of this item was "there is no unplanned test fixture, so this path
+would ship untested": every `.pte` in the repo was `memory_planned=True`, and
+`EtNDManager.create` always returns a direct buffer, so under the matrix above
+the entire suite took the pass-through row and never staged.
+
+Now landed: `native/spike/add_unplanned.pte` — the same add model as `add.pte`,
+exported with
 `ExecutorchBackendConfig(memory_planning_pass=MemoryPlanningPass(alloc_graph_input=False))`
-and point both the native leak harness and a JVM test at it. Confirmed working
-on v1.3.1, including through an XNNPACK-delegated partition. This lands *with*
-W7, not after it.
+via `native/spike/export_add_unplanned.py` (PEP 723 uv header, pinned
+`executorch==1.3.1`). It reports `memory_planned=False` on both inputs and is
+consumed by `et_runtime_test.cpp:43` and
+`EtMethodMetaTest.readsUnplannedAddModelMetadata`, the latter gated on
+`TestSupport.assumeUnplannedModelAvailable()`.
+
+Two gaps remain, and both still land *with* W7:
+
+- **The native leak harness is not pointed at it.** `et_leak_harness.cpp` runs
+  `add.pte` only, so W8's exact-count staging assertions have nothing to count.
+- **No delegated variant.** `add_unplanned.pte` is plain portable-op add — it
+  never reaches XNNPACK, so it exercises `share_tensor_data` but not the
+  over-read surface W4 is about. An XNNPACK-partitioned unplanned export is
+  confirmed to work on v1.3.1 (remember `flatc` on `PATH`, §8) and is what W4's
+  Route A/B models need.
+
+**Both gaps closed 2026-08-05 with W7/W8:** the leak harness now runs
+`add_unplanned.pte` with exact-count staging assertions (grow/staged/total,
+`build_qa.sh`), and the delegated fixtures `clamp5.pte` / `lin129.pte` /
+`lin129_planned.pte` landed via `native/spike/export_w4_models.py`.
 
 *Answers:* whether the unplanned-input case can be made safe without asking
 users to change anything about their models. Unlike the old W7, this ships
@@ -539,8 +973,37 @@ degenerates to "allocate once." So:
 
 | Probe | Fires | Job |
 |---|---|---|
-| `staging_grow(slot, old_bytes, new_bytes)` | once per slot, ideally never after | anomaly detector — a fire means an input exceeded its declared bound |
+| `staging_grow(slot, old_bytes, new_bytes)` | **never** — see below | tripwire on the invariants that make it unreachable |
 | `staging_input(slot, nbytes, planned, staged)` | per input, per forward | the actual observability |
+
+**Revised 2026-08-05, after implementation.** `staging_grow` ended up stricter
+than this table originally described, and the difference matters to anyone
+reading the probe's output.
+
+It first shipped firing once per slot per load — routine first-touch, because
+slots were sized lazily from the caller's shape rather than at load from
+`TensorInfo::nbytes()` as this section specifies. That made a genuine overflow
+indistinguishable from normal operation, and `et_leak_harness` asserted the
+first-touch count, so it was measuring the wrong steady state. Sizing at load
+(commit `934cf38`) fixed that and restored the intended anomaly semantics.
+
+Two later changes then made the probe **unreachable**:
+
+- rejecting any input past its declared bound before the staging copy
+  (`0f64c70`) removed the tensor path — `actual` can no longer exceed the bound
+  a slot was sized from;
+- rejecting methods with non-tensor inputs at load (`94c8174`) removed the
+  other — a slot with no declared bound can no longer exist.
+
+So the probe is now a **tripwire, not a detector**: it fires only if slot sizing
+and the bound check stop agreeing with each other. `et_leak_harness`'s
+assertion is correspondingly `grow == 0` for any number of loads and forwards,
+which is strictly stronger than the per-load count it replaced — it catches a
+realloc-per-forward slip *and* a regression to sizing from the caller's shape.
+The dead branch is deliberate and commented as such in `et_runtime.cpp`; do not
+delete it as unreachable code.
+
+`staging_input` is unaffected and remains the per-call observability.
 
 `staging_input` is the complement to W2, not a duplicate: W2 logs the mode once
 at load because per-forward logging would be unusable noise, and USDT is exactly
@@ -555,16 +1018,27 @@ symptom is throughput, which none of them measure. Every current assertion is
 aggregate and negative (LSan at exit, or OOM under a cap); none can express
 "this allocated once."
 
-- **`native/harness/et_leak_harness.cpp`** — 1000 loads × 4 forwards over
-  `add.pte` (2 inputs) should fire `staging_grow` **exactly 2000 times**; a
-  realloc-per-forward bug gives 8000. An equality assertion, not a bound. Also
-  add an inverted variant — **1 load × 10,000 forwards** — and assert exactly
-  `numTensorInputs` fires total; the current shape does not isolate steady
-  state. This is the no-JVM binary with a stable build-output path, so it is
-  where the probes should be developed (§7's attach caveats do not apply).
+- **`native/harness/et_leak_harness.cpp`** — **as built (2026-08-05), the
+  assertion is `grow == 0`**, for every fixture and every loads × forwards
+  shape. The original plan here (1000 loads × 4 forwards should fire
+  `staging_grow` exactly 2000 times, a realloc-per-forward bug gives 8000) was
+  written before sizing-at-load; it encoded first-touch allocation as expected
+  behavior. The zero-count form supersedes it and is strictly stronger: it fails
+  on the realloc-per-forward bug *and* on any regression to sizing from the
+  caller's shape, which the 2000-count form would have accepted. The inverted
+  variant (**1 load × 10,000 forwards**) is still worth running and is wired in
+  `build_qa.sh` — it isolates steady state, where the per-load count could
+  otherwise hide a per-forward leak. Equality assertions throughout, not bounds.
+  This is the no-JVM binary with a stable build-output path, so it is where the
+  probes were developed (§7's attach caveats do not apply).
 - **`LeakStressTest.inferencePathUnderPressure`** — already the right shape
-  (one model, 20,000 predicts). Blocked on W7's fixture prerequisite, not on
-  the probe: with `add.pte` it never stages.
+  (one model, 20,000 predicts). The unplanned variant landed as a separate test
+  (`inferencePathUnderPressureUnplanned`) once the fixture existed. Be clear
+  about what it does *not* buy: staging memory is native and counts against
+  neither `-Xmx256m` nor `-XX:MaxDirectMemorySize=64m`, and slots are sized once
+  at load, so this test cannot observe a staging leak. It guards the JNI/NDArray
+  path over a staged model, and the native harness's `grow == 0` is what covers
+  staging itself.
 - **`LeakStressTest.directBufferLifecycleUnderPressure`** — native-free
   (`NDManager.create` only, no forward). The probes add nothing; recorded so
   nobody instruments it hunting a signal that cannot be there.
@@ -655,35 +1129,66 @@ handles whichever mode the artifact is in, and no user changes anything. What
 survives is subtler and still real — the engine takes materially different code
 paths (stage vs. pass-through) based on a `.pte` property that is invisible in
 the filename, the DJL API, and every log line today. A user debugging a
-performance difference between two models has no way to see it. W2 is the
-mitigation and is not optional: report the mode at load, and the variance
-becomes explicable instead of spooky.
+performance difference between two models had no way to see it. W2 was the
+mitigation and was not optional. **Mitigated as of 2026-08-05:** `EtModel`
+logs `model {} input {} memoryPlanned={}` per input at load, so the variance is
+now explicable instead of spooky. What remains owed is the README line telling
+users the log exists and what it means (§6).
 
 ---
 
 ## 5. Dependencies and sequencing
 
 ```
-W1 (audit, COMPLETE) ──> W2 (observe) ──> W3 (docs)      [do regardless]
+W1 (audit, COMPLETE) ──> W2 (observe, COMPLETE) ──> W3 (docs, COMPLETE)
                      │
-                     ├─> W2 ──> W7 (staging when unplanned)  [safety; ships]
-                     │            ↑        + unplanned fixture
-                     │          W4 (over-read confirmation) ──┘  [justifies padding,
-                     │                                            becomes W7's test]
+                     │   [MANUAL, off-CI]
+                     │   W4 (over-read confirmation) ..evidence only..┐
+                     │      <-- NEXT; qemu or Zen hw                  ¦
+                     │                                                v
+                     ├─> W7 (staging when unplanned)  [safety; ships regardless]
+                     │      + unplanned fixture (partial: non-delegated only)
+                     │      + own in-repo guards: alignment/padding units,
+                     │        stage-vs-passthrough Catch2, ASan lifetime case
+                     │      + W8 staging_grow exact-count  <-- required, not optional
                      ├─> W6 (direct-buffer outputs) ─────┐
                      │      + replacement leak signal    │
                      ├─> W8 (probes) ────────────────────┤
                      └─> W5 (measure) ───────────────────┴──> scope gate ──> W9
 ```
 
-- **W1 is done.** Its answer is what makes the rest non-trivial: the copy is
-  real, invisible, and mis-documented.
-- **W2 and W3 are unconditional.** W2 is now a hard dependency of W7, not just
-  good hygiene — W7 branches per input on exactly the flag W2 plumbs through.
-- **W4 no longer gates anything.** It runs *before* W7 so a positive result
-  justifies the padding constant, and the same harness re-run with staging on
-  becomes W7's regression test. A negative does not license dropping the
-  padding (§3/W4).
+Dotted line = evidence, not a build dependency. W4 informs W7's padding constant
+and never runs in the same environment as W7's tests.
+
+- **W1, W2, and W3 are done** (2026-08-04 / 2026-08-05). W1's answer is what
+  makes the rest non-trivial: the copy is real, invisible, and was
+  mis-documented. W2 discharges W7's hard dependency — W7 branches per input on
+  exactly the flag W2 plumbs through, and that flag now reaches
+  `EtMethodMeta.inputMemoryPlanned` with tests on both directions.
+- **W4 is the next open item and it is a manual step, not a repo test.** The
+  annotated kernels are only selected on hardware we do not test on, so it runs
+  under `qemu-x86_64` CPUID masking or on real AMD Zen 1–3. The harness lands in
+  `native/harness/`; the *run* is a deliberate act whose output is dated
+  evidence in §8 (§3/W4).
+- **W4 carries a second, outward-facing track.** Configuration (b) — guarded
+  arena, memory-planned model, no borrowing — probes an over-read in *stock*
+  ExecuTorch and, if it faults, is an upstream defect report rather than
+  anything this repo consumes. It is gated on the UNVERIFIED planner-placement
+  question and on re-verifying against ExecuTorch `main`. It blocks nothing
+  here: W7 ships either way.
+- **W4 gates nothing and tests nothing on an ongoing basis.** It justifies the
+  padding constant once. Correcting an earlier draft: the same harness re-run
+  with staging on is **not** W7's regression test, because a manual run cannot
+  guard code. A negative also does not license dropping the padding (§3/W4).
+- **W7 therefore carries its own coverage.** Alignment and padding-size unit
+  assertions, a stage-vs-pass-through Catch2 case over `add_unplanned.pte`
+  against `add.pte`, the ASan lifetime case, and W8's `staging_grow` exact-count
+  assertion. These run on any microarchitecture. Without them W7 is unguarded
+  no matter what W4 reported.
+- **The delegated fixture is a W4 need, not a W7 need.** `add_unplanned.pte` is
+  portable-op add and never reaches XNNPACK, which is fine for W7's staging
+  logic and useless for W4's over-read routes; those need an
+  XNNPACK-partitioned unplanned export (§3/W7).
 - **W7 ships on safety grounds, not on a measurement.** It is the only way to
   satisfy XNNPACK's padding contract for an unplanned input, and we do not get
   to decline the borrow. Its cost (one memcpy on that path) is accepted, not
@@ -696,14 +1201,18 @@ W1 (audit, COMPLETE) ──> W2 (observe) ──> W3 (docs)      [do regardless]
 - **Scope gate** after W5/W6: this is now a question of how much to ship, not
   whether. W7 is in regardless; W6 and the planned-path staging are the
   discretionary parts, and the measurement decides them.
-- **W8 (probes) is not on anyone's critical path, but two items are weaker
-  without it.** W6 must not ship without *some* replacement leak signal, and
-  W7's realloc-per-call failure mode is invisible to every existing gate. Build
-  the probes against the native harness first, where none of the attach
-  caveats apply.
+- **W8 (probes) moved onto the critical path** once W4 stopped being a test.
+  W7's realloc-per-call failure mode is invisible to every existing gate, and
+  `staging_grow` is now the only thing that catches it — so at minimum that
+  probe ships with W7. W6 separately must not ship without *some* replacement
+  leak signal. Build the probes against the native harness first, where none of
+  the attach caveats apply.
 - **Two test artifacts are prerequisites, not follow-ups:** the unplanned
   `.pte` fixture (W7) and W6's replacement leak signal. Both ship in the same
-  change as the work they cover, or that work is untested.
+  change as the work they cover, or that work is untested. The first is now
+  **half-done** — `add_unplanned.pte` exists and is asserted from both the
+  Catch2 and JUnit suites, but the leak harness still runs `add.pte` only and
+  there is no delegated variant.
 - **W9 is last** and is a confirmation of an existing verdict, not an open
   question. Note W7 weakens it further: staging lives in the native core with
   no JNI or `Cleaner` surface, so the overlap with IREE's aligned-allocator
@@ -716,11 +1225,22 @@ W1 (audit, COMPLETE) ──> W2 (observe) ──> W3 (docs)      [do regardless]
 - A determination on each of §2's five questions, with pointers. Question 1 is
   already answered above and should be carried forward, not re-derived.
 - A hard result on the XNNPACK over-read (W4), stated as positive/negative with
-  the negative explicitly qualified as model-specific.
+  the negative explicitly qualified as model-specific — recorded as **dated
+  evidence from a manual run** (command, selected kernel, outcome), plus the
+  committed-but-not-CI-wired harness that produced it. Not a test target.
+- A determination on the arena-end question (W4 configuration (b)): either a
+  settled "the planner does not place an XNNPACK external input last, so the
+  concern is closed," or a fault, a `main` re-verification, and an **upstream
+  ExecuTorch issue** carrying the reproducer. This is an output of the work that
+  leaves this repository — the only one — and it is not a prerequisite for
+  anything here.
 - Measured numbers for the invisible input copy and the heap output copy,
   retained regardless of the decision.
-- W7 landed: staging for unplanned inputs, with the ASan lifetime case and the
-  W4 harness as its regression tests. This is not gated on a measurement.
+- W7 landed: staging for unplanned inputs, carrying its **own** in-repo
+  regression tests — alignment and padding-size assertions, a
+  stage-vs-pass-through case, the ASan lifetime case, and `staging_grow`'s
+  exact-count assertion. Explicitly **not** the W4 harness, which cannot run in
+  CI. This is not gated on a measurement.
 - A go / go-with-constraints / no-go on the **discretionary** parts — the
   direct-buffer output change (W6) and staging on the planned-path non-direct
   input — decided separately and on the W5 numbers.
@@ -783,7 +1303,243 @@ Two project-specific notes:
 
 ---
 
-## 8. Sources
+## 8. Sources and manual-run evidence
+
+### W4 evidence log
+
+W4 is a manual, off-CI run (§3/W4), so its results live here rather than in a
+test report. One block per executed route; a block without a
+**selected kernel** line is not a usable result.
+
+```
+(empty — W4 has not been run)
+
+Template:
+  date:            YYYY-MM-DD
+  configuration:   (a) borrowed input  |  (b) arena end  |  (c) staged, engine path
+  route:           A (forced SSE, qemu) | B (Zen uarch, qemu) | B (native Zen hw)
+  environment:     qemu-x86_64 -cpu <model>  |  <cloud instance type>
+  model:           <path>, N=<n> / K=<k>, alloc_graph_input=<True|False>
+  selected kernel: <what XNNPACK actually chose, however observed>
+  uarch detected:  <xnn_uarch_* — required for route B, a qemu negative is void without it>
+  arena placement: <(b) only: was an XNNPACK external input last in the arena?>
+  outcome:         SIGSEGV on guard page | clean run | harness error
+  reading:         positive / negative-and-model-specific / inconclusive
+  upstream:        <(b) only: filed / not-filed + why; main re-verified y/n>
+  pairs with:      <(c) only: the (a) run it is the clean half of — same uarch,
+                    same fixture, or the pair proves nothing>
+```
+
+### W5 evidence log
+
+W5's runs are manual, off-CI, user-run sessions (§3/W5). One block per arm: the
+input A/B arm, the output heap baseline arm, and the output W6 direct arm. A
+block without the `-prof gc` lines on the output arm, or without both A/B arms,
+is not a usable result.
+
+```
+(executed 2026-08-06 — blocks below the template)
+
+Template:
+  date:            YYYY-MM-DD
+  arm:             input A/B | output heap baseline | output W6 direct
+  commit/branch:   <sha> on <branch>  (A/B and output baseline: the W5 tip; output W6: the branch tip)
+  models + sizes:  mobilenet_v2.pte vs mobilenet_v2_unplanned.pte
+                   | add_4kb (N=1024) .. add_64mb (N=16777216)
+  ms/op ± err:     <JMH output, per arm>
+  -prof gc:        <allocation rate + GC time/op>  (output arm only)
+  CPU/OS/glibc:    <lscpu model name / uname -r / ldd --version | head -1>
+  reading:         <what the numbers mean for the W6 decision — see §3/W5>
+```
+
+#### Harness validation record (2026-08-06 — smoke runs, NOT evidence)
+
+The recipe's commands were validated in shape before the user-run sessions:
+`git worktree add … c1ea5dd` (then removed), both export tasks (all six
+artifacts probe-verified: planned/unplanned flags, `(1, N)` f32 outputs),
+`jmhJar`, the S2 shim rebuild + stage (`cmake --build native/build -j$(nproc)`
++ copy), and the `EXECUTORCH_LIBRARY_PATH` mechanism (`LibUtils` →
+`System.load(override)`; `/tmp/et-pre-w6.so` present, 12,156,592 bytes). Each
+arm below executes and prints a score from the fat jar with the recipe's
+`-p`/`-jvmArgs` shape, and the logs show the expected artifact load lines
+(e.g. `mobilenet_v2 input 0 memoryPlanned=true` vs `mobilenet_v2_unplanned
+input 0 memoryPlanned=false`).
+
+The scores are JMH smokes (`-f 1 -wi 0 -i 1 -w 1ms -r 1ms`: no warmup, 1 ms
+windows, no `-gc true`, no `-prof gc`) and MUST NOT be cited as measurements —
+they only prove the arms run. The full §7 `systemd-run` invocations with
+`-gc true`/`-prof gc` and real iteration counts were not run; those are the
+S1/S2 user sessions.
+
+| arm | shim | smoke score |
+|---|---|---|
+| AddOutputBenchmark add_4kb | pre-W6 (heap `byte[]`; jar-bundled copy of the saved shim) | 0.060 ms/op |
+| AddOutputBenchmark add_4mb | pre-W6 (heap `byte[]`) | 2.927 ms/op |
+| AddOutputBenchmark add_4kb | W6 (direct, rebuilt shim) | 0.064 ms/op |
+| MobilenetBenchmark steadyState planned (ET_NATIVE) | pre-W6 (heap `byte[]`) | 22.422 ms/op |
+| MobilenetBenchmark steadyState unplanned (ET_NATIVE) | pre-W6 (heap `byte[]`) | 15.134 ms/op |
+
+**Superseded 2026-08-06 by the real runs below.** Every smoke score was wrong by
+a wide margin, and the MobileNet pair was wrong in a way that would have driven
+a false conclusion: the smoke showed unplanned 33% *faster* (22.4 vs 15.1),
+which is physically impossible for a 600 KB memcpy against a ~13 ms kernel. The
+measured delta is 2.4%, inside the error bars. Retained as a worked example of
+why a shape-validation smoke must never be read as a result.
+
+#### W5 results (2026-08-06 — measurements)
+
+Common to all blocks:
+
+```
+  environment:     11th Gen Intel Core i7-1185G7 (4 physical cores, SMT on,
+                   turbo enabled, powersave governor) / Linux 7.0.0-28-generic
+                   / glibc 2.39 / Zulu OpenJDK 17.0.19
+  control:         systemd-run --user --scope -p MemoryMax=4G, taskset -c 0-3
+                   (four distinct physical cores on this host), timeout 1800
+  JMH config:      -f 3 -wi 5 -w 1s -i 5 -r 1s   (15 measured iterations/arm)
+  fixtures:        one shared example/build/models for both sessions
+                   mobilenet_v2.pte     sha256 e406d020…d962f
+                   mobilenet_v2_unplanned.pte  sha256 88bf1fb6…7c4a2
+  note:            runs executed by the agent at the user's explicit request,
+                   as an exception to the §7 "benchmarks are run by the user"
+                   practice.
+```
+
+```
+  date:            2026-08-06
+  arm:             input A/B
+  commit/branch:   c1ea5dd on feature/w5-w6-direct-outputs (W5 tip), shim /tmp/et-pre-w6.so
+  models + sizes:  mobilenet_v2.pte vs mobilenet_v2_unplanned.pte (600 KB input)
+  ms/op ± err:     planned    12.733 ± 1.151 ms/op  (min 9.073, max 13.830, sd 1.077)
+                   unplanned  13.046 ± 0.426 ms/op  (min 12.482, max 13.736, sd 0.399)
+  reading:         NO MEASURABLE DIFFERENCE. Delta 0.31 ms (2.4%) with overlapping
+                   CIs. The planned arm's wider error is one outlier — fork 1's
+                   first measured iteration at 9.073 ms, faster than every other
+                   iteration in the run, i.e. a boost window, not the arm. Drop it
+                   and both arms sit at ~13.0 ms with a ~0.5% delta.
+                   No thermal drift: all 30 iterations lie in 12.3–13.8 ms with no
+                   trend across forks, so the §7 control holds on this host.
+                   Consistent with the analysis above — both paths memcpy the input
+                   exactly once, so ~0 was the predicted answer and is the observed one.
+```
+
+```
+  date:            2026-08-06
+  arm:             output heap baseline
+  commit/branch:   c1ea5dd (W5 tip), shim /tmp/et-pre-w6.so
+  models + sizes:  add_4kb (N=1024) .. add_64mb (N=16777216)
+  ms/op ± err:     size      -gc true          -gc false
+                   4 KB      0.010 ± 0.001     0.012 ± 0.001
+                   256 KB    0.117 ± 0.004     0.145 ± 0.005
+                   4 MB      1.700 ± 0.058     1.923 ± 0.133
+                   64 MB     25.130 ± 0.832    29.291 ± 1.149
+  -prof gc:        gc.alloc.rate.norm = output bytes + ~1.8 KB, at every size
+                   (5,880 / 263,928 / 4,196,267 / 67,110,853 B/op) — i.e. exactly
+                   one heap allocation of the full output per op, as designed.
+                   gc.alloc.rate 0.49–2.54 GB/sec.
+  peak RSS:        1.94 GB (-gc true) / 0.58 GB (-gc false), whole run
+  reading:         Effective marshalling throughput ~2.3 GB/s at 64 MB
+                   (64 MB / 29.291 ms). Fixed per-call floor is 0.010 ms.
+                   -gc true understates the true cost by 13–24% because it moves
+                   collection out of the measured window; -gc false is the honest
+                   number.
+```
+
+```
+  date:            2026-08-06
+  arm:             output W6 direct
+  commit/branch:   907fee5 on feature/w5-w6-direct-outputs (tip), jar-bundled W6 shim
+  models + sizes:  add_4kb .. add_64mb
+  ms/op ± err:     size      -gc true          vs heap -gc true   -gc false
+                   4 KB      0.013 ± 0.001     +30%               0.015
+                   256 KB    0.145 ± 0.014     +24%               ~0.38 (unstable, 0.16–0.51)
+                   4 MB      2.862 ± 0.106     +68%               6.5–6.7, then OOM-killed
+                   64 MB     46.986 ± 1.088    +87%               not reached
+  -prof gc:        gc.alloc.rate.norm FLAT at 1,848–2,065 B/op across all four
+                   sizes — the output no longer touches the heap at all.
+                   gc.count ≈ 0 at 4 MB and 64 MB (vs 445–550 on the heap path).
+                   At 64 MB that is 67 MB/op → 2 KB/op, a ~33,000x reduction.
+  peak RSS:        2.29 GB (-gc true), the highest of any arm
+  reading:         W6 AS WRITTEN LOSES ON BOTH COUNTS IT WAS MEANT TO WIN.
+                   (1) Slower at every size, and the gap widens with size: 1.43 GB/s
+                   effective at 64 MB against the heap path's 2.29 GB/s.
+                   (2) No backpressure. See the two defect blocks below.
+```
+
+Both defect blocks below cite W6 files (`native/jni/et_output_buffer.h`,
+`EtNDArray.java`'s Cleaner wiring) that exist **only** on the unmerged record
+branch `feature/w5-w6-direct-outputs` at `907fee5` — not on this branch, and not
+on `main`. Neither defect affects the shipped heap `byte[]` output path.
+
+**Defect 1 — per-op `mmap`/`munmap` of the whole output.**
+`native/jni/et_output_buffer.h` allocates each output with `::operator new` and
+frees it with `::operator delete`. Above glibc's 128 KB mmap threshold that is a
+fresh `mmap` + kernel page-zeroing + `munmap` on every single `forward()`, where
+the JVM's `byte[]` comes from an already-resident, warm heap region. The
+crossover in the data sits right at that threshold. Confirmed by re-running the
+direct arm with `MALLOC_MMAP_THRESHOLD_=1073741824`: 4 MB improved 2.862 →
+2.388 ms/op (−17%), while 64 MB was unchanged (46.986 → 47.531) — exactly what
+the hypothesis predicts, because glibc caps that tunable at
+`DEFAULT_MMAP_THRESHOLD_MAX` = 32 MB, so 64 MB still goes to `mmap` regardless.
+The env var is a diagnostic, not a fix; only in-process reuse helps at 64 MB.
+Note the 4 MB case is still slower than heap (2.388 vs 1.700) with mmap churn
+removed, so mmap churn is a *confirmed contributor*, not the whole gap.
+
+**Defect 2 — the free path has no backpressure, and OOM-kills.**
+`EtNDArray.close()` (`EtNDArray.java:64`) only nulls its reference; the native
+block is freed by the `EtOutputBuffers` Cleaner, which needs a GC to observe the
+`ByteBuffer` as unreachable. But the direct path allocates ~2 KB/op on the heap,
+so nothing *causes* a GC — the mechanism that releases the memory is starved by
+the very change that saves the allocations. With `-gc false` at 4 MB/op the
+measured JMH fork went **1,043 MB → 4,190 MB RSS in five seconds** (sampled from
+`/proc/<pid>/status`) and was killed at the `MemoryMax=4G` cap; with
+`-Xmx1536M`, ~2.6 GB of that 4.19 GB was JNI-allocated output blocks. This is
+the IREE brief's §7 20.7 GB OOM reproduced in miniature, and it is why the
+`-gc true` numbers above exist at all. The heap path cannot fail this way: its
+`byte[]` counts against `-Xmx`, so it self-limits.
+
+**Decision input for W6.** Do not ship as written. The prototype does deliver
+its stated benefit — the ~33,000x drop in allocation rate at 64 MB is real and
+matters for a small-heap latency-sensitive service — but that benefit is
+currently unrealizable, because the only thing that frees the memory is the GC
+the change eliminates. Two candidate fixes, both design decisions:
+
+1. **Pool the output blocks** per (method, output index), grow-only, exactly as
+   `StagingSlot` already does for inputs. Removes the `mmap` churn *and* bounds
+   native memory by construction. Costs a contract change — an output buffer
+   would be valid only until the next `forward()` — which mirrors the contract
+   ExecuTorch's own arena already imposes, and which the input path has already
+   accepted.
+2. **Free eagerly in `EtNDArray.close()`**, demoting the Cleaner to a backstop.
+   Restores deterministic release and would have prevented the OOM kill outright.
+   Does not address Defect 1.
+
+**Replication of the heap baseline (2026-08-06), and a caveat it closes.** The
+S1 arms were run against a saved `/tmp/et-pre-w6.so`, which on later inspection
+turned out to be pre-W6 (correct) but *also* pre-F1 — it lacks the "declares at
+most" bound check, so the heap baseline and the W6 direct arm ran on different
+shim vintages. The heap sweep was therefore re-run against a shim built from
+this branch, which carries all of F1–F5 and none of W6:
+
+```
+  size      -gc true                     -gc false
+            saved shim  branch shim      saved shim  branch shim
+  4 KB      0.010       0.012            0.012       0.014
+  256 KB    0.117       0.117            0.145       0.145
+  4 MB      1.700       1.713            1.923       1.871
+  64 MB     25.130      25.277           29.291      28.253
+```
+
+Every pair agrees inside its error bar, which is expected — F1–F5 add only a few
+scalar checks per input, on a two-input add model, against 0.01–29 ms of work.
+The confound is measured and immaterial rather than merely argued, and the W6
+conclusion is unaffected. **Do not reuse a saved shim file for a future run**:
+build the baseline shim from the commit under test, as the replication did.
+
+Raw JMH logs for all eight runs are in the session scratchpad and are not
+committed; the numbers above are the record.
+
+### Upstream sources
 
 All upstream citations verified 2026-08-04 against `~/workspace/executorch` at
 tag `v1.3.1` — the exact runtime version pinned in

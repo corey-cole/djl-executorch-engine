@@ -38,6 +38,10 @@ struct MethodMeta {
   // 1 = memory-planned: ExecuTorch copies this input into its arena at set_input; 0 = borrowed
   // pointer. Non-tensor inputs are 0 (no TensorInfo exists).
   std::vector<uint8_t> inputMemoryPlanned;
+  // Declared byte count per input, from TensorInfo::nbytes() at load. Exact for a static shape,
+  // an upper bound for a dynamic one; 0 for a non-tensor input. Staging slots are sized from this
+  // at construction, so a slot only ever grows when an input exceeds its declared bound.
+  std::vector<size_t> inputNbytes;
 };
 
 struct ForwardState;  // pimpl

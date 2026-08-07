@@ -15,12 +15,14 @@ jobs:
         include:
           - platform: linux-x86_64
             runner: ubuntu-latest
-            image: quay.io/pypa/manylinux_2_28_x86_64
+            image: djl-executorch-engine-build:linux-x86_64
             corretto-jdk-url: https://corretto.aws/downloads/latest/amazon-corretto-8-x64-linux-jdk.rpm
-          # Commenting out while we wait for our upstream EtRuntimePin.cmake to support aarch64
+          # Commenting out while we wait for our upstream EtRuntimePin.cmake to support aarch64.
+          # docker/linux-aarch64.Dockerfile and the warm-build-image.yml row already exist, so
+          # enabling this is a matrix change only.
           #- platform: linux-aarch64
           #  runner: ubuntu-24.04-arm
-          #  image: quay.io/pypa/manylinux_2_28_aarch64
+          #  image: djl-executorch-engine-build:linux-aarch64
           # corretto-jdk-url: https://corretto.aws/downloads/latest/amazon-corretto-8-aarch64-linux-jdk.rpm
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -45,6 +47,22 @@ jobs:
           curl -fL -o runtime.tgz "${url}"
           gh attestation verify runtime.tgz --repo measly-java-learning/executorch-runtime-dist
           rm -f runtime.tgz
+
+      # The toolchain image: manylinux_2_28 at a dated tag plus the packages the base does not ship
+      # (systemtap-sdt-devel for the W8 USDT probes, the matching libasan for QA), pinned to exact
+      # NEVRAs. Built here rather than pulled from a registry -- warm-build-image.yml keeps the
+      # layers in the GHA cache on `main`, so this is normally a cache hit and never a dnf
+      # round-trip. `load: true` puts the image in the local daemon for the docker run steps below.
+      - uses: docker/setup-buildx-action@v4.2.0
+      - name: Build the pinned toolchain image
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: docker
+          file: "docker/${{ matrix.platform }}.Dockerfile"
+          tags: ${{ matrix.image }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       # This is very similar to how `local_build_wrapper.sh` executes build
       # which enables testing outside of GHA

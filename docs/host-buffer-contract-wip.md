@@ -1,0 +1,780 @@
+# ExecuTorch host-buffer contract: W4 + W7 + W8 implementation record
+
+Date: 2026-08-05. Plain record of what was requested, what was delivered, and
+how the delivered work deviates from the approved plan
+(`local://et-overread-staging-plan.md`). The manual W4 instructions the user
+still needs to run are appended at the end.
+
+## Outcome requested
+
+The user approved the plan titled "W4 + W7 + W8: XNNPACK over-read harness,
+unplanned-input staging, USDT probes" and asked for it to be executed step by
+step, with each step verified before the next. In substance, three work items
+against the ExecuTorch host-buffer contract (`docs/executorch-host-buffer-contract-brief.md`):
+
+- **W7** — grow-only, 64-byte-aligned, 128-byte-padded per-slot staging in
+  `EtRuntime::forward` for inputs whose `is_memory_planned()` is false, so
+  XNNPACK's documented over-read (`XNN_EXTRA_BYTES`) lands in engine-owned
+  slack instead of a caller's exact-sized buffer.
+- **W8** — two USDT probes (`staging_grow`, `staging_input`) plus exact-count
+  leak-harness assertions, so a reallocate-every-call staging bug fails loudly.
+- **W4** — a committed-but-not-CI-wired guard-page over-read harness (borrowed
+  and arena configurations), the delegated unplanned/planned fixtures it needs,
+  and a manual run recipe producing dated evidence.
+
+## Summary of work done
+
+All work committed on top of `a1a8ff1` in five commits:
+`104ecbe` (W7+W8 core), `4d50fa2` (W4 fixtures), `6872adb` (W4 harness),
+`5cea904` (brief), `e026b21` (Java test).
+
+1. **`native/core/dtype_size.h`** — moved out of `native/harness/` via
+   `git mv`, content unchanged. The `et_runtime` target PUBLIC-includes
+   `native/core`, so the existing `"dtype_size.h"` quote-includes in both
+   harnesses still resolve; no CMake or include edits were needed.
+
+2. **`native/core/staging.h`** — `kStagingPadding = 128` (the maximum of
+   `XNN_EXTRA_BYTES` across x86/ARM/Hexagon, hardcoded with a comment because
+   `xnnpack.h` is delegate-internal) and `StagingSlot`, a grow-only slot whose
+   `ensure()` rounds capacity up to a 64-byte multiple and preserves the first
+   `min(old, new)` bytes on growth. Allocation is `_aligned_malloc`/`_aligned_free`
+   on Windows and `std::aligned_alloc(64, size)`/`std::free` elsewhere.
+
+3. **`native/core/et_probes.h`** — one header, no new `.cpp`. USDT probes via
+   `DTRACE_PROBE*` (provider `measly`, no semaphore, matching the dist's
+   `etnp::lstm` probes so one set of bpftrace/perf tooling covers both) plus an
+   in-process dispatch (`probe_dispatch` → one shared `inline` atomic handler
+   that `et_probe_set_handler`/`et_probe_clear_handler` also use). Untraced
+   cost is a single relaxed atomic load per input.
+
+4. **`native/core/et_runtime.cpp`** — `RuntimeState` now owns `MethodMeta meta`
+   and `std::vector<std::unique_ptr<StagingSlot>> staging`. The old
+   `methodMeta()` body became a file-static `buildMethodMeta(Module&)`, called
+   once in the constructor; `methodMeta()` returns the stored copy. In
+   `forward()`, each input's byte count is computed (`dtypeSize` × shape
+   product; empty shape = 1) and the input is either passed through unchanged
+   (planned; fires `staging_input(…, planned=1, staged=0)`) or copied into its
+   slot with `ensure(actual + kStagingPadding)` (unplanned; fires
+   `staging_grow` on allocation/growth and `staging_input(…, planned=0,
+   staged=1)`). The borrowed pointer ExecuTorch retains now always points into
+   engine-owned memory that outlives the `Method`.
+
+5. **`native/test/et_runtime_test.cpp`** — seven new Catch2 cases: four
+   `StagingSlot` units (aligned + padded at `kStagingPadding`; the
+   `100 + kStagingPadding` slack row; no realloc when capacity suffices; grow
+   preserves the first 64 bytes), a stage-vs-pass-through pair using an RAII
+   probe-counting guard (unplanned: `grow == 2`, `staged == 2`; planned:
+   `grow == 0`, `staged == 0`), and the ASan lifetime case (heap-allocated
+   inputs freed after the first forward, second forward with stack inputs).
+
+6. **`native/harness/et_leak_harness.cpp`** — registers a counting probe
+   handler at start, clears it at exit, reads `forwardsPerLoad` from argv[3]
+   (default 4, so existing invocations are unchanged), and asserts exact counts
+   after the loop: `grow == numUnplanned × outerIters`,
+   `stagedInput == numUnplanned × outerIters × forwardsPerLoad`,
+   `totalInput == numTensorInputs × outerIters × forwardsPerLoad`. Mismatch →
+   `STAGING ASSERT FAIL` on stderr, exit 1. The planned run doubles as a pin
+   guard: a future ExecuTorch that borrows planned inputs instead of copying
+   them starts staging and the run fails loudly.
+
+7. **`native/build_qa.sh`** — after the existing `add.pte` run, two new
+   invocations: `add_unplanned.pte ${ITERS} 4` (asserts `grow == 2×ITERS`) and
+   `add_unplanned.pte 1 10000` (inverted: asserts `grow == 2`, isolating steady
+   state). `set -euo pipefail` propagates any assertion failure.
+
+8. **`native/spike/export_w4_models.py`** — PEP 723 uv script (torch 2.12.1,
+   executorch 1.3.1, pytorch-cpu index; same `XnnpackPartitioner` +
+   `MemoryPlanningPass` pattern as `export_add_unplanned.py`). Exports
+   `clamp5.pte` (clamp over 5 floats, `alloc_graph_input=False`, Route A
+   N % 4 == 1), `lin129.pte` (`Linear(129, 64)`, `alloc_graph_input=False`,
+   Route B K % 4 == 1), and `lin129_planned.pte` (same Linear, default
+   memory-planned config, config (b)). All three verified: single
+   `executorch_call_delegate` node, `clamp5`/`lin129` report
+   `is_memory_planned() == False` / `lin129_planned` `True`, and each loads and
+   forwards through the pinned v1.3.1 runtime.
+
+9. **`native/harness/et_overread_harness.cpp`** — standalone JNI-free binary,
+   `<borrowed|arena> <pte>`, built only in the QA tree, never executed in CI.
+   Prints the detected uarch + ISA flags first (cpuinfo; required for the
+   evidence block). `GuardedRegion` mmaps `size + 2×page`, places the data
+   pointer so `data + size` lands exactly on a page boundary, and
+   `mprotect(PROT_NONE)`s everything after it. `borrowed` mode puts input 0 in
+   a `GuardedRegion` sized exactly `nbytes` and runs one forward; `arena` mode
+   (config b) replaces the memory-planned arena with a `HierarchicalAllocator`
+   over guarded spans sized exactly `memory_planned_buffer_size(i)`, prints the
+   per-buffer sizes and whether input 0 is placed last in its buffer, then
+   forwards. Outcome contract: exit 0 = clean, SIGSEGV (139) = over-read
+   faulted. CMake target added inside `if(ET_BUILD_QA)` in
+   `native/CMakeLists.txt`.
+
+10. **`docs/executorch-host-buffer-contract-brief.md`** — §1 status table
+    updated (W4 "complete (manual runs pending — see §3/W4)", W7 complete, W8
+    complete, fixture-prerequisite row updated), §3/W7's "two gaps" note
+    closed, and the full run recipe added to §3/W4's Deliverables.
+
+11. **`src/test/java/org/measly/executorch/LeakStressTest.java`** —
+    `inferencePathUnderPressureUnplanned()`, a copy of
+    `inferencePathUnderPressure` with `optModelName("add_unplanned")` and a
+    leading `assumeUnplannedModelAvailable()`: 20,000 predicts through the
+    staging path under `-Xmx256m -XX:MaxDirectMemorySize=64m`. Native staging
+    memory is not counted against either cap, so the assertion is the same
+    "does not OOM/crash" as the planned variant.
+
+### Verification evidence
+
+- `bash native/build_qa.sh` (final run): **15 test cases, 115 assertions, all
+  pass**. Leak harness exact counts: `add.pte` → `grow=0 … total_input=8000`;
+  `add_unplanned.pte 1000 4` → `grow=2000 staged_input=8000`;
+  `add_unplanned.pte 1 10000` → `grow=2 staged_input=20000`. All three
+  expected values matched exactly (a `>`/`>=` slip in `ensure` would have made
+  the second `grow=8000` and failed).
+- Shim rebuilt with the staging core (`cmake -B native/build -G Ninja
+  -DET_INSTALL=/tmp/et-runtime-v1.3.1-logging/root`, JAVA_HOME zulu-17 — the
+  container-only `native/build.sh` cannot run on this host). XNNPACK
+  post-link registration assertion passed.
+- `EXECUTORCH_LIBRARY_PATH=<abs path to native/build/libexecutorch_djl.so>
+  ./gradlew test` → BUILD SUCCESSFUL; `./gradlew leakTest` → all 3 leak cases
+  ran, 0 skipped, 0 failures (including the new unplanned variant). Note:
+  `System.load` requires an **absolute** path; a relative
+  `EXECUTORCH_LIBRARY_PATH` fails 3 tests with `UnsatisfiedLinkError`.
+- `readelf -n native/asan/et_leak_harness`: `.note.stapsdt` shows provider
+  `measly`, names `staging_grow` / `staging_input`, `Semaphore: 0x0`.
+- Native smoke (Tiger Lake): `et_overread_harness borrowed lin129.pte` →
+  `uarch_id=0x0010020d`, `nbytes=516`, `planned=0`, exit 0 (safe avx512f
+  kernel); `arena lin129_planned.pte` → 1 planned buffer of 848 B,
+  `input placed last in its buffer: no`, exit 0.
+- qemu Route A reproduction (implementer smoke, stronger than the required
+  launch check): `ASAN_OPTIONS=detect_leaks=0:handle_segv=0 qemu-x86_64 -cpu
+  Nehalem ./native/asan/et_overread_harness borrowed native/spike/clamp5.pte`
+  → `uarch_id=0x00100205` (SSE-only), qemu **exit 139, "uncaught target
+  signal 11 (Segmentation fault)"** — the SSE2 clamp tail load over-read the
+  20-byte buffer onto the guard page.
+
+## Deviations from the plan
+
+1. **The harness's borrowed mode bypasses `EtRuntime::forward`.** The plan's
+   step 13 text said `EtRuntime rt(pte); … rt.forward(…)`. With W7 shipped in
+   the same tree, that would copy the guarded buffer into the padded slot and
+   the over-read would land in the slot's slack — the fault would be
+   unreachable and every route would report a meaningless negative. The harness
+   instead uses the raw path (`Module` + `from_blob` → `set_input`
+   `share_tensor_data`), which is exactly what the brief's config table names
+   ("our exact-sized host buffer, borrowed via share_tensor_data"; "caller's
+   buffer abuts PROT_NONE page") and what the plan's own expected-SIGSEGV
+   outcomes require. Documented in the harness header and the run recipe.
+
+2. **`ET_PROBE_STAGING_INPUT` as written did not compile.** The plan's macro
+   passed six arguments to the five-parameter `probe_dispatch` (a trailing
+   `0`). The trailing `0` was kept in the `DTRACE_PROBE5` call (the SDT macro
+   needs five data args) and dropped from the in-process dispatch call.
+
+3. **`state_->staging` is populated with explicit `make_unique`.** The plan's
+   `staging.resize(numInputs)` on a `vector<unique_ptr<StagingSlot>>`
+   default-constructs **null** pointers, so `*state_->staging[i]` would have
+   been a null dereference on the first unplanned forward. The constructor
+   reserves and pushes a fresh slot per input position instead.
+
+4. **The run recipe adds `handle_segv=0` to `ASAN_OPTIONS`.** Without it, ASan
+   catches the guard-page SIGSEGV and reports `DEADLYSIGNAL` instead of the
+   outcome contract's raw `$? == 139`. Both behaviors were observed; the recipe
+   documents the option so the evidence block shows the documented signal.
+
+5. **Harness input tensors need an explicit keepalive.** In exec_aten mode an
+   `EValue`'s `Tensor` is a raw `TensorImpl*` into the `Storage` owned by the
+   aliasing `shared_ptr` created by `from_blob` — the EValue holds no
+   refcount. The first harness draft returned only the `EValue` vector and the
+   storage died before `forward()` (use-after-free, caught by the QA ASan run
+   in `TensorImpl::internal_resize_contiguous`). The harness now carries a
+   `HostTensors { keepalive, evalues }` pair, honoring the same lifetime rule
+   `EtRuntime::forward` already obeys (its `tensors` vector outlives
+   `module.forward()`).
+
+Minor, behavioral no-ops: the plan's prose said "6 new Catch2 cases" but the
+stage-vs-pass-through coverage was written as two `TEST_CASE`s (one per model),
+so seven landed; and the shim for the Gradle runs was built with a direct CMake
+configure against the pinned tarball because `native/build.sh` is
+container-only (root-owned `/opt/corretto`, `/workspace` paths).
+
+## Manual W4 instructions (user-executed)
+
+Build the harness (QA tree, no JDK):
+
+```bash
+cmake --build native/asan --target et_overread_harness
+```
+
+Fixtures are already committed under `native/spike/`: `clamp5.pte` (Route A),
+`lin129.pte` (Route B), `lin129_planned.pte` (config b). Run from the repo
+root. Every qemu run needs `ASAN_OPTIONS=detect_leaks=0:handle_segv=0` (LSan's
+ptrace scan fatally errors under qemu-user; `handle_segv=0` surfaces the fault
+as the raw 139) and a fresh gdb port per run.
+
+- **Route A** (f32, forced SSE):
+  `ASAN_OPTIONS=detect_leaks=0:handle_segv=0 qemu-x86_64 -cpu Nehalem
+  ./native/asan/et_overread_harness borrowed native/spike/clamp5.pte` →
+  **expect SIGSEGV (139)**: Nehalem → sse2 →
+  `xnn_f32_vclamp_ukernel__sse2_u8`, whose tail load is `xnn_load_tail_f32`
+  (`f32-sse2-base.h:195`, `XNN_OOB_READS`, full `_mm_loadu_ps`) reading 12
+  bytes past the 20-byte buffer (`N % 4 == 1`). Already reproduced in the
+  implementer smoke (see verification above); record it as the dated evidence.
+- **Route B** (plain f32 Linear, AMD Zen):
+  `ASAN_OPTIONS=detect_leaks=0:handle_segv=0 qemu-x86_64 -cpu EPYC
+  ./native/asan/et_overread_harness borrowed native/spike/lin129.pte` →
+  **expect SIGSEGV (139)**. **`-cpu EPYC` (Naples, Zen 1), NOT `-cpu
+  EPYC-Rome`** — under EPYC-Rome cpuinfo reports `xnn_uarch_zen2` (0x20010A),
+  which misses the gemm-config `case xnn_uarch_zen:`/`dhyana:` branch
+  (`gemm-config.c:933-973`) and selects the safe default kernels; a negative
+  from EPYC-Rome is void. Under `-cpu EPYC` cpuinfo reports `zen` (0x200109)
+  and gdb confirms `xnn_f32_gemm_minmax_ukernel_1x16s4__fma3_broadcast` (the
+  annotated `XNN_OOB_READS` kernel) executes — K=129 (`K % 4 == 1`) over-reads
+  the activation (borrowed input) by 12 bytes.
+- **Config (b)** (stock ExecuTorch arena):
+  `ASAN_OPTIONS=detect_leaks=0:handle_segv=0 qemu-x86_64 -cpu EPYC
+  ./native/asan/et_overread_harness arena native/spike/lin129_planned.pte` →
+  placement line first (input last in its buffer: yes/no), then fault-or-clean.
+  If "yes" + SIGSEGV → re-verify against ExecuTorch `main`
+  (`~/workspace/executorch`, tag v1.3.1 is not upstream's tip) before filing
+  Claim 2 (§3/W4 of the brief). **If "no" or clean, record the fixture-specific
+  form** — "`lin129_planned.pte`'s planner did not place its external input last
+  in a single 848-byte buffer" — not the general "the planner never does", and
+  do NOT file. Settle the general question by reading
+  `exir/passes/memory_planning_pass.py` (lifetime packing predicts graph inputs
+  are placed *first*, which would make Claim 2 structurally unreachable) rather
+  than by collecting fixtures. See F5.
+- **Kernel observation** per run (the evidence block is unusable without the
+  selected-kernel line): gdb under qemu — terminal 1:
+  `ASAN_OPTIONS=detect_leaks=0:handle_segv=0 qemu-x86_64 -g 12345 -cpu EPYC
+  ./native/asan/et_overread_harness borrowed native/spike/lin129.pte`;
+  terminal 2: `gdb -batch -ex 'target remote :12345' -ex 'break
+  xnn_f32_gemm_minmax_ukernel_1x16s4__fma3_broadcast' -ex continue -ex 'bt 4'
+  ./native/asan/et_overread_harness` (Route A: break
+  `xnn_f32_vclamp_ukernel__sse2_u8`). On real Zen hardware instead:
+  `perf record -F 999 -- ./native/asan/et_overread_harness borrowed
+  native/spike/lin129.pte && perf report --stdio | grep ukernel` — the top
+  symbol is the selected kernel (ukernel symbols are global in the linked dist
+  lib). The user's `perf_users` group wrapper (`/usr/bin/perf`,
+  root:perf_users) covers `perf_event_paranoid=4`.
+- **Sufficiency arm (config (c)) — run this, it is one command.** Every route
+  above proves the padding is *necessary*; none touches the engine's own path,
+  because `borrowed` mode deliberately bypasses `EtRuntime::forward`. Show the
+  same uarch clean through the real path:
+
+  ```bash
+  ASAN_OPTIONS=detect_leaks=0 qemu-x86_64 -cpu EPYC \
+    ./native/asan/et_leak_harness native/spike/lin129.pte 1 2
+  ```
+
+  Same fixture, same annotated `1x16s4__fma3_broadcast` kernel, but through the
+  padded slot. Expect exit 0 and `grow=0 staged_input=2 total_input=2` (verified
+  to run natively 2026-08-05; the qemu leg is what remains). **Run it in the
+  same sitting as Route B** — "faults raw / clean staged, identical hardware and
+  fixture" is the claim, and either half alone is weak. Still a manual
+  confirmation, never a regression gate: W7's in-repo coverage is the alignment
+  and padding-size assertions, the stage-vs-pass-through case, the ASan lifetime
+  case, and `grow == 0`.
+
+Record each run as a dated evidence block in the brief's §8 (W4 evidence log),
+using the existing template: date, exact command, model, N/K, the kernel
+XNNPACK actually selected, and the fault or its absence. A negative from any
+route does not license dropping the staging padding (§3/W4 of the brief).
+
+---
+
+## Independent review, 2026-08-05
+
+Review of the five commits above against the requirements in
+`docs/executorch-host-buffer-contract-brief.md`. Read the code rather than this
+record; built a reproducer; re-ran the harnesses. **Nothing below is fixed as of
+this writing.**
+
+### Verified as claimed
+
+Re-derived independently, not taken from the verification section above:
+
+- USDT probes present in both the QA harness and the **shipped shim**
+  (`native/build/libexecutorch_djl.so`), provider `measly`, names
+  `staging_grow` / `staging_input`, `Semaphore: 0x0` — matching the dist's
+  `etnp::lstm` convention as required.
+- Leak-harness exact counts reproduce: `add_unplanned.pte 50 4` →
+  `grow=100 staged=400 total=400`; `add_unplanned.pte 1 1000` →
+  `grow=2 staged=2000 total=2000`; `add.pte 20` → `grow=0 staged=0 total=160`.
+- `GuardedRegion`'s page arithmetic is correct, including the interaction with
+  mmap's own rounding of `map_len_`: for both `size % page == 0` and `!= 0`,
+  `PAGE_ALIGN(guard_start + guard_len)` lands exactly on the end of the rounded
+  mapping, so the `mprotect` cannot ENOMEM off the end.
+- Config (b)'s plumbing is sound: `load_method(name, HierarchicalAllocator*)` is
+  the correct v1.3.1 API (`module.h:281`), and `Module::execute` reuses an
+  already-loaded method, so the subsequent `mm.forward()` does run against the
+  guarded arena rather than silently re-planning.
+- The Java dtype surface does bound `dtypeSize`'s input today: `EtDataTypes`
+  fails fast outside the 7 supported codes, and `EtSymbolBlock` rejects a
+  dtype/meta mismatch before the JNI call.
+
+### F1 — W7 replaced a validated copy with an unvalidated one (confirmed)
+
+**`native/core/et_runtime.cpp:117`.** The staging memcpy's length `actual` is
+computed entirely from the **caller-supplied shape**. It is checked against
+neither the source buffer's extent nor the model's declared shape — even though
+`MethodMeta.inputShapes` already carries the latter, populated at load.
+
+Before W7 this input never reached a copy. `Method::set_input`
+(`method.cpp:1199-1255`) validates `scalar_type` and calls `resize_tensor`
+*before* dispatching to `copy_tensor_data` / `share_tensor_data`, so a bad shape
+returned a clean error. W7's memcpy now runs before `module.forward()` is
+entered at all.
+
+Reproducer — two inputs on `add_unplanned.pte`, input 0 declaring shape `{64}`
+over a 1-element heap allocation, built against the ASan QA tree:
+
+```cpp
+EtRuntime rt("native/spike/add_unplanned.pte");
+auto* a = new float[1]{2.0f};
+auto* b = new float[1]{3.0f};
+std::vector<InputDesc> inputs = {{a, {64}, 6}, {b, {1}, 6}};  // shape lies
+rt.forward(inputs);
+```
+
+```
+==1292117==ERROR: AddressSanitizer: heap-buffer-overflow
+READ of size 256 at 0x5020000000f4 thread T0
+    #0 memcpy
+    #1 measly::et::EtRuntime::forward(...) native/core/et_runtime.cpp:117
+    #2 main probe_shape.cpp:15
+allocated by thread T0 here:
+    #0 operator new[](unsigned long)
+    #1 main probe_shape.cpp:11
+```
+
+The identical call against `add.pte` (planned → pass-through) yields
+`threw: EtRuntime: forward() failed`. Same lie, clean error on one path and a
+256-byte over-read on the other — and the over-read is on the path W7 exists to
+make safe.
+
+**Reachability.** Not through `EtSymbolBlock` / `Predictor`: shape and buffer
+both derive from one `EtNDArray`, so they cannot diverge. It *is* reachable
+through the public `EtNative.forward` with a hand-built `EtTensor` (public
+class, public final fields, public constructor), and through direct C++
+`EtRuntime` consumers — a consumer class CLAUDE.md names explicitly ("linked by
+the shim, the Catch2 unit tests, and the leak harness alike"). So: not a live
+DJL exploit, but the JNIEnv-free core's API contract is now weaker than it was
+before this change.
+
+### F2 — Unlisted deviation: slots are sized lazily, not at load
+
+The brief's W8 is explicit that `TensorInfo::nbytes()` is available at load for
+planned *and* unplanned inputs, so "the slots can be sized once in
+`methodMeta()` and never resized — 'grow-only' degenerates to 'allocate once'."
+The implementation instead sizes each slot at first `forward()` from the
+caller's shape. `buildMethodMeta` reads `info->sizes()` but never captures a
+byte count.
+
+**This is not among the five deviations recorded above**, and it has two
+consequences beyond being the proximate cause of F1:
+
+- **It inverts `staging_grow`'s designed role.** The brief specifies an
+  *anomaly detector*: "fires once per slot, ideally never after — a fire means
+  an input exceeded its declared bound." As built it fires once per slot per
+  load as normal operation, and `et_leak_harness` now *asserts* that it does
+  (`grow == numUnplanned × outerIters`). A genuine dynamic-shape overflow is
+  indistinguishable from routine first touch. Sizing at load restores the
+  intended semantics and makes the steady-state assertion the stronger
+  `grow == 0`.
+- With slots sized from declared metadata, the caller's shape becomes something
+  to validate against a known bound rather than something to trust — which is
+  exactly what F1 needs.
+
+### F3 — Non-tensor inputs are classified as unplanned and staged
+
+`inputMemoryPlanned[i] == 0` conflates "borrowed tensor" with "no `TensorInfo`
+exists". The brief's W2 section calls the flag "meaningless rather than false"
+for non-tensor inputs; W7 now branches on it as though it were false, staging
+such an input at `dtypeSize(-1)` → the `default: return 4` fallback.
+
+There is also a live inconsistency between the core and its own gate:
+`et_leak_harness` computes `numUnplanned` only over inputs with
+`inputScalarTypes[i] >= 0`, while `forward()` stages regardless of tensor-ness.
+On a model with a non-tensor input the exact-count assertion fails spuriously.
+No fixture exercises this, so it is latent.
+
+### F4 — Nothing demonstrates the padding is *sufficient*
+
+Deviation 1 (borrowed mode bypasses `EtRuntime::forward`) is correct and
+necessary — concur with the reasoning. But the consequence is that every W4
+route proves *necessity* and none proves *sufficiency*: no run exercises the
+engine path under a hostile uarch. The manual instructions gesture at this
+("means running the real engine path") without giving a command.
+
+One is already viable and was verified to run natively during this review:
+
+```bash
+qemu-x86_64 -cpu EPYC ./native/asan/et_leak_harness native/spike/lin129.pte 1 2
+```
+
+Natively that reports `grow=1 staged_input=2 total_input=2`. Under `-cpu EPYC`
+it drives the annotated `1x16s4__fma3_broadcast` kernel through the staging
+path, and should be **clean** where `borrowed lin129.pte` faults. That is the
+sufficiency arm for the cost of one line in the recipe.
+
+### F5 — Config (b)'s negative is over-generalized
+
+The manual instructions say: if "no" or clean → *"record 'the planner does not
+place an XNNPACK external input last' and close the concern; do NOT file."*
+That is n=1 — one fixture, one planned buffer of 848 B — written up as a general
+claim about the planner. It is the same unqualified negative the brief forbids
+for Route A ("record it as such rather than as a clearance").
+
+Cheaper and stronger than more fixtures: the planner packs by lifetime and graph
+inputs have the earliest start, so they should structurally tend to be placed
+*first*. Establishing that from `exir/passes/memory_planning_pass.py` would
+settle "ever" in a way no number of fixtures can.
+
+### Minor
+
+- **`dtypeSize`'s `default: return 4` is now load-bearing for a memcpy length.**
+  Bounded today by `EtDataTypes`' fail-fast over 7 codes, but `dtype_size.h`
+  still documents itself as sizing harness buffers. Adding FLOAT16 (code 5) to
+  `EtDataTypes` later would silently make the staging memcpy read 2× the
+  buffer. Worth a hard reject on unknown codes now that it is in the production
+  path.
+- **`StagingSlot::ensure` ignores allocation failure** — `memcpy(fresh, …)` with
+  `fresh == nullptr`. The comment says "never fails except via allocation
+  failure"; it does not fail, it segfaults.
+- **`ET_PROBE_*` macros lack `do { … } while (0)`** — they expand to two
+  statements, so `if (cond) ET_PROBE_STAGING_GROW(...);` would run the dispatch
+  unconditionally. Every current call site is braced, so this is latent.
+- `ensure()` preserving the old bytes on growth is dead work in the forward path
+  (immediately overwritten by the staging memcpy). Harmless.
+- The brief's status table marks W4 **complete** with "manual runs pending"
+  while deliverable 3 (dated evidence) is unmet and §8's log is empty. It is
+  annotated, so it is honest — "harness complete, result pending" would read
+  truer.
+
+### Suggested fix order
+
+1. **F2** — size slots at load from `inputShapes` / `nbytes`. This closes F1 as
+   a side effect, restores `staging_grow`'s anomaly semantics, and flips the
+   harness assertion to the stronger steady-state `grow == 0`.
+2. **F1** — reject (or clamp) a caller shape exceeding the declared bound, with
+   a regression test built from the reproducer above.
+3. **F3** — branch on tensor-ness as well as the planned flag, and align the
+   harness's expected-count formula with whatever `forward()` does.
+4. **F4 / F5** — two additions to the manual recipe: the sufficiency command,
+   and qualifying the config (b) negative as fixture-specific.
+
+---
+
+## F2 fixed, 2026-08-05
+
+Slots are now sized at load from the model's declared bound, and `staging_grow`
+is back to being an anomaly detector. Uncommitted; `F1`, `F3`, `F4`, `F5` remain
+open.
+
+**Correction to the review above.** It claimed sizing at load "closes F1 as a
+side effect." **That is wrong** — verified by re-running the F1 reproducer
+against the fixed core:
+
+```
+READ of size 256 at 0x502000000114
+    #1 measly::et::EtRuntime::forward(...) native/core/et_runtime.cpp:138
+```
+
+F2 makes the declared bound *available* at the copy site; the memcpy still
+takes its length from the caller's shape. Closing F1 is the separate explicit
+check, now a three-line follow-up rather than a design change.
+
+### Changes
+
+- **`et_runtime.h`** — `MethodMeta` gains `std::vector<size_t> inputNbytes`,
+  the declared byte count per input (0 for non-tensor). Exact for a static
+  shape, an upper bound for a dynamic one.
+- **`et_runtime.cpp`** — `buildMethodMeta` captures `info->nbytes()`. The
+  constructor sizes each staged slot to `inputNbytes[i] + kStagingPadding`,
+  gated on `inputMemoryPlanned[i] == 0 && inputScalarTypes[i] >= 0`. The
+  tensor-ness half of that condition is deliberate and commented: only a real
+  tensor has a bound to size from, and `forward()` still branches on the
+  planned flag alone, so a non-tensor input grows on first use instead of being
+  rejected — F3, unchanged by this commit.
+- **`et_runtime.cpp` / `forward()`** — the staging branch now uses `slot.data()`
+  directly and only calls `ensure()` + fires `staging_grow` when
+  `actual + kStagingPadding > slot.capacity()`.
+- **`staging.h`** — `ensure()` throws `std::bad_alloc` on allocation failure
+  instead of memcpy'ing through null. In scope because load-time sizing makes
+  the allocation eager and potentially large; this was a "minor" in the review.
+- **`et_leak_harness.cpp`** — `expectGrow` is now the constant `0`, for any
+  number of loads or forwards. Strictly stronger than the old
+  `numUnplanned × outerIters`: it catches both a realloc-per-forward slip and a
+  regression to sizing from the caller's shape.
+- **`build_qa.sh`** — comments updated to the new expectation.
+- **`et_runtime_test.cpp`** — the stage-vs-pass-through case now asserts
+  `grow == 0`; three new cases: declared byte counts captured at load, 100
+  forwards with `grow == 0` and `staged == 200`, and the anomaly path firing
+  `staging_grow` exactly once.
+
+### A nuance the anomaly test exposed
+
+The probe's threshold is the declared bound **plus the padding**, not the
+declared bound. A 1-float slot holds `4 + 128` rounded to 192 bytes, so an input
+must exceed 192 — not 4 — before `staging_grow` fires. The first draft of the
+anomaly test used 16 floats (`64 + 128 = 192`) and failed with `0 == 1`; it uses
+64 floats now. This is correct behavior (the slot genuinely has the room) but it
+means the probe cannot detect a *small* overrun of the declared bound. If that
+matters later, compare against `inputNbytes[i]` explicitly rather than against
+capacity — which is the same check F1 needs.
+
+### Verification
+
+- `et_runtime_test`: **18 cases, 222 assertions, all pass**.
+- Leak harness, all `grow=0 (expected 0)`:
+  `add_unplanned.pte 50 4` → `staged=400 total=400`;
+  `add_unplanned.pte 1 1000` → `staged=2000 total=2000`;
+  `add.pte 20` → `staged=0 total=160`;
+  `lin129.pte 1 2` → `staged=2 total=2`.
+- Shim relinked; XNNPACK post-link assertion passed (2653 `xnn_*` text symbols).
+- `./gradlew test --rerun-tasks` → BUILD SUCCESSFUL;
+  `./gradlew leakTest --rerun-tasks` → `tests="3" skipped="0" failures="0"`.
+
+---
+
+## F1 fixed, 2026-08-05
+
+`forward()` now rejects any tensor input whose byte count exceeds the bound the
+`.pte` declares, before the staging memcpy. The reproducer that produced the
+256-byte over-read now yields:
+
+```
+threw: EtRuntime: input 0 is 256 bytes but the model declares at most 4
+```
+
+### Changes
+
+- **`et_runtime.cpp` / `forward()`** — one guard, placed before the staging
+  branch: if `actual > inputNbytes[i]` for a tensor input, throw
+  `std::invalid_argument` naming both sizes. `nbytes()` is exact for a static
+  shape and an upper bound for a dynamic one, so `>` is correct in both cases.
+  The JNI maps any `std::exception` from `forward()` to a Java
+  `RuntimeException` carrying `what()`, so the diagnostic reaches DJL callers
+  intact with no JNI change.
+- **`et_runtime_test.cpp`** — the old anomaly case is replaced (see below) by
+  three: rejection before the copy on the unplanned path (asserting
+  `grow == 0` *and* `staged == 0`, i.e. rejected before both `ensure()` and the
+  memcpy), the same rejection on the planned path, and an at-the-bound case
+  guarding the `>` vs `>=` off-by-one.
+
+### Applied to planned inputs too, deliberately
+
+ExecuTorch validates planned inputs on its own (`resize_tensor` runs before
+`copy_tensor_data`), so the guard is redundant there for safety. It is applied
+anyway so the *diagnostic* does not depend on which memory-plan mode the
+artifact happens to be in — otherwise the same caller error produces
+`EtRuntime: input 0 is 256 bytes but the model declares at most 4` on one model
+and an opaque `ExecuTorch forward() failed` on another, which is the hazard
+§4 of the brief names ("the engine's behavior varies by an artifact property
+nobody inspects"). No existing test asserted the opaque form.
+
+### This makes `staging_grow` unreachable for tensor inputs
+
+Worth stating plainly, because it changes what the probe is for. With the bound
+check in place, `actual` can never exceed `inputNbytes[i]`, so
+`actual + kStagingPadding` can never exceed a slot sized at
+`inputNbytes[i] + kStagingPadding`. The growth path is now dead code for any
+tensor input.
+
+It is kept, and it still has exactly one live trigger: a **non-tensor** input,
+which has no declared bound, is not sized at load, and is not covered by the
+guard — F3. So `staging_grow` has become a precise detector for the F3 hole
+rather than a general anomaly signal. The leak harness's `grow == 0` assertion
+holds either way and is now a statement about F3 not being hit.
+
+The F2 note above described the probe's threshold as "declared bound plus
+padding"; after F1 that slack is unreachable from the caller, so the earlier
+caveat about small overruns being invisible no longer applies — they are
+rejected outright.
+
+### Verification
+
+- `et_runtime_test`: **20 cases, 225 assertions, all pass**.
+- Leak harness unchanged and still exact: `grow=0` on all four fixtures.
+- Shim relinked; XNNPACK post-link assertion passed.
+- `./gradlew test leakTest --rerun-tasks` → BUILD SUCCESSFUL; 23 test classes,
+  **0 failures, 0 errors** across unit, IT, and leak suites.
+- F1 reproducer re-run against the fixed core: clean `std::invalid_argument`,
+  no ASan report.
+
+---
+
+## F3 fixed, 2026-08-05
+
+Non-tensor inputs are rejected at load. The conflation is gone: for `forward()`,
+`inputMemoryPlanned[i] == 0` now means "borrowed tensor" and nothing else.
+
+### Why rejection rather than a narrower branch
+
+The review framed F3 as "the staging branch should test tensor-ness as well as
+the planned flag." Looking at the code, that is treating a symptom. `forward()`
+has only `from_blob` — `InputDesc` is `{data, shape, scalarType}` and there is no
+way to express the traced prim value that `Method::set_input` demands for a
+non-tensor slot (`method.cpp:1258`, "Prims have to be the same as what was
+traced"). A method with a prim input is **undrivable through this engine** no
+matter how `forward()` branches. What actually happened before this change was a
+`from_blob` over `ScalarType(-1)` followed by an opaque tag mismatch from
+ExecuTorch, at first inference.
+
+So the constructor now scans for `inputScalarTypes[i] < 0` and throws
+`std::invalid_argument` naming the index. That states the engine's real
+capability boundary at the point the model is loaded.
+
+### A fixture exists now
+
+`native/spike/prim_input.pte` + `export_prim_input.py`. `torch.export` keeps
+`alpha` as a placeholder even though its traced value is specialized into the
+multiply, and `to_executorch` carries it through as a non-tensor input:
+
+```
+[method_meta.cpp:189] Tag: 3 input: 1 is not Tensor
+num_inputs 2
+0 TensorInfo(sizes=[4], dtype=Float, is_memory_planned=True, nbytes=16)
+```
+
+Confirmed the guard fires for the right reason and names the right slot:
+
+```
+LOAD FAILED: EtRuntime: input 1 of "forward" is not a tensor; this engine
+supports only methods whose inputs are all tensors: native/spike/prim_input.pte
+```
+
+Also confirmed no fixture in the repo regresses — `add.pte`, `add_unplanned.pte`,
+`clamp5`, `dtypes`, `lin129`, `lin129_planned`, `med_output`, and `lstm.pte` all
+declare tensor-only inputs, so F3 was entirely latent before this.
+
+### Simplifications this unlocked, and the probe's final state
+
+- The constructor's slot-sizing no longer needs its tensor-ness test, and F1's
+  bound check no longer needs its `inputScalarTypes[i] >= 0` guard: every
+  declared input now has a scalar type, a shape, and a byte bound.
+- `et_leak_harness`'s `numTensorInputs` / `numUnplanned` filters become provably
+  equivalent to unfiltered counts, so the expectation/behavior mismatch the
+  review flagged is now unrepresentable rather than merely untriggered.
+- **`staging_grow` is now unreachable, full stop.** F1 removed the tensor path;
+  F3 removed the non-tensor one. It is kept as a regression guard on the two
+  invariants that make it unreachable — slots sized from the declared bound, and
+  inputs rejected past that bound. If those ever stop agreeing, the probe fires
+  and `et_leak_harness`'s `grow == 0` fails instead of the mismatch going
+  unnoticed. The code comment says exactly this so nobody later "fixes" the dead
+  branch by deleting it.
+
+### Verification
+
+- `et_runtime_test`: **21 cases, 226 assertions, all pass** (new case: load
+  rejection over `prim_input.pte`).
+- Leak harness: `grow=0` on all four fixtures, counts unchanged.
+- Shim reconfigured (`-S native`, `JAVA_HOME=zulu-17`) and relinked; XNNPACK
+  post-link assertion passed.
+- `./gradlew test leakTest --rerun-tasks` → **73 tests, 0 failures, 0 errors**.
+
+---
+
+## F4, F5, and the W8 table, 2026-08-05
+
+Documentation only; no code. All five review findings are now closed.
+
+**Brief §3/W8 probe table corrected.** It described `staging_grow` as firing
+"once per slot, ideally never after". Neither half survived implementation: it
+first shipped firing once per slot *per load* (the F2 bug), and after F1 and F3
+it fires **never** — the tensor path is gone because inputs past their declared
+bound are rejected, and the non-tensor path is gone because such models are
+rejected at load. The table now says "never / tripwire on the invariants that
+make it unreachable", with a dated paragraph tracing how it got there and an
+instruction not to delete the dead branch. The stale
+"`staging_grow` exactly 2000 times" leak-harness bullet is superseded by
+`grow == 0`, with a note on why the zero form is strictly stronger — it fails on
+a realloc-per-forward slip *and* on a regression to caller-shape sizing, which
+the 2000-count form would have accepted. Also corrected the
+`inferencePathUnderPressure` bullet to state what the unplanned variant does
+*not* buy: native staging memory counts against neither JVM cap and slots are
+sized once, so that test cannot observe a staging leak.
+
+**F4 — sufficiency arm added** to both the brief's run recipe and the manual
+instructions above, as configuration **(c)**:
+`qemu-x86_64 -cpu EPYC ./native/asan/et_leak_harness native/spike/lin129.pte 1 2`.
+Same fixture and same annotated kernel as Route B, but through
+`EtRuntime::forward` and its padded slot; expect exit 0 and `grow=0`. The
+recipe requires it be run in the same sitting as Route B, because "faults raw /
+clean staged, identical hardware and fixture" is the claim and either half alone
+is weak. §8's evidence template gains a `(c)` configuration and a `pairs with:`
+field so a (c) block without its (a) counterpart reads as incomplete.
+
+**F5 — the config (b) negative is now qualified** in both copies. A "no" result
+records as *"`lin129_planned.pte`'s planner did not place its external input
+last in a single 848-byte buffer"*, not as "the planner never does" — the same
+rule the brief already applies to Route A negatives. Added the cheaper route to
+the general answer: read `exir/passes/memory_planning_pass.py`, since lifetime
+packing predicts graph inputs are placed *first*, which would make Claim 2
+structurally unreachable. Do that before building a second fixture; if it holds,
+retire config (b) rather than collecting more `.pte`s.
+
+### Review status
+
+| Finding | State |
+|---|---|
+| F1 — unvalidated staging memcpy | fixed, `0f64c70` |
+| F2 — slots sized lazily | fixed, `934cf38` |
+| F3 — non-tensor inputs staged | fixed, `94c8174` |
+| F4 — no sufficiency run | recipe added (run still owed) |
+| F5 — over-generalized (b) negative | qualified in both copies |
+| Minor: `ensure()` null on OOM | fixed with F2 |
+| Minor: `dtypeSize` default:4 load-bearing | fixed, `2026-08-05` (see below) |
+| Minor: probe macros lack `do/while(0)` | fixed |
+| Minor: `ensure()` preserves dead bytes | fixed |
+| Minor: W4 status reads "complete" | fixed |
+
+---
+
+## Minors fixed, 2026-08-05
+
+**`dtypeSize` catch-all removed, and the hole behind it closed.** The default
+arm returned 4 for any unknown ScalarType. Harmless while it only sized harness
+scratch buffers; it became a memcpy length when staging landed, where guessing 4
+for a 2-byte FLOAT16 reads twice the source. Three changes, because the catch-all
+was a symptom:
+
+- `dtypeSize` returns **0** for unsupported codes, documented as "callers must
+  treat as unsupported, never as a size."
+- `EtRuntime`'s constructor rejects a model declaring any input dtype that sizes
+  to 0, alongside the F3 non-tensor check. Matches `EtDataTypes` on the Java
+  side, which already refuses those codes in both directions.
+- `forward()` rejects an input whose `scalarType` differs from the model's.
+  This was the actual reachable hole: `actual` is
+  `dtypeSize(caller's code) x shape product`, so a caller claiming FLOAT64 over
+  a FLOAT32 model computed twice the real bytes. ExecuTorch checks this too
+  (`method.cpp:1203`) but only inside `module.forward()`, after the staging
+  copy. `EtSymbolBlock` performs the same check in Java; the core now owns it
+  for every consumer.
+
+Together these make `dtypeSize`'s zero arm unreachable from the harnesses, which
+only ever pass metadata from a successfully loaded model.
+
+**Probe macros wrapped in `do/while(0)`.** Both expand to two statements; an
+unbraced `if (cond) ET_PROBE_...;` would have fired the dispatch unconditionally
+— a spurious probe fire, not a compile error, so it would have been invisible.
+
+**`ensure()` no longer preserves contents across growth.** The only caller
+overwrites the whole slot immediately after, so the copy was always discarded.
+The contract is now explicit ("contents are NOT preserved"), and the test asserts
+what must actually hold: growth yields a larger, still-64-byte-aligned buffer
+that is writable to the full requested extent (ASan checks the write).
+
+**W4 status wording.** `complete (manual runs pending)` → `harness complete,
+result pending`, with the reason stated: deliverable 3 is unmet, §8's log is
+empty, and the question W4 asks is therefore still open.
+
+### Verification
+
+- `et_runtime_test`: **23 cases, 170 assertions, all pass**. Assertion count
+  fell from 226 because the preservation test's 64-iteration `REQUIRE` loop
+  became plain writes; three cases were added (dtype mismatch, `dtypeSize`
+  table, plus the reworked growth case).
+- Leak harness `grow=0` on five fixtures, now including `dtypes.pte`
+  (INT64 + FLOAT32) to exercise a non-f32 dtype through the checks:
+  `staged=0 total=40`.
+- Shim relinked; XNNPACK post-link assertion passed.
+- `./gradlew test leakTest --rerun-tasks` → **73 tests, 0 failures, 0 errors**.
