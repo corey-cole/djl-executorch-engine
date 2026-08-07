@@ -76,5 +76,19 @@ class EtRuntime {
   std::unique_ptr<RuntimeState> state_;
 };
 
+// Intra-op (XNNPACK) thread pool size, backed by ExecuTorch's process-global
+// extension::threadpool singleton. The pool sizes itself to the performance-core count by
+// default and nothing reads an env var (verified for v1.3.1: no getenv in extension/threadpool,
+// the vendored pthreadpool, XNNPACK init, or cpuinfo), so this is the ONLY control surface.
+//
+// setIntraOpThreads returns the count in effect AFTER the attempt. Upstream's
+// _unsafe_reset_threadpool always returns true (it early-returns for n == 0 and for
+// n == get_thread_count()), so a bool status would be meaningless -- callers compare instead.
+//
+// Must be called before the first EtRuntime is constructed: delegate init during load submits
+// work to the pool, and the reset must not race in-flight work.
+uint32_t setIntraOpThreads(uint32_t n);
+uint32_t intraOpThreads();
+
 }  // namespace measly::et
 #endif  // MEASLY_ET_RUNTIME_H

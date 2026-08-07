@@ -122,6 +122,9 @@ target_link_libraries(et_runtime PUBLIC
   extension_tensor
   xnnpack_backend
   portable_ops_lib
+  # Explicit, not transitive through xnnpack_backend: the core now calls
+  # get_threadpool()/_unsafe_reset_threadpool itself (spec §5).
+  extension_threadpool
 )
 
 # --- JNI shell shared library (loaded BY the JVM: JNI headers only, never libjvm/libjawt) ---
@@ -195,10 +198,7 @@ if(ET_BUILD_BENCH)
   # harness does not. See the file header for the knobs and the expected signature.
   find_package(Threads REQUIRED)
   add_executable(et_scaling_harness ${CMAKE_CURRENT_SOURCE_DIR}/harness/et_scaling_harness.cpp)
-  # extension_threadpool is named explicitly (not relied on transitively through xnnpack_backend)
-  # because the harness itself calls get_threadpool()/_unsafe_reset_threadpool to control intra-op
-  # parallelism -- without that control the app-thread scaling numbers are unreadable.
-  target_link_libraries(et_scaling_harness PRIVATE et_runtime extension_threadpool Threads::Threads)
+  target_link_libraries(et_scaling_harness PRIVATE et_runtime Threads::Threads)
 endif()
 
 # --- Native QA targets (Catch2 units + ASan/LSan leak harness). OFF for the shipping build. ---

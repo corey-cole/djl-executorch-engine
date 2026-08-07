@@ -52,7 +52,6 @@
 
 #include <sys/resource.h>
 
-#include <executorch/extension/threadpool/threadpool.h>
 #include <executorch/runtime/backend/interface.h>
 #include <executorch/runtime/backend/options.h>
 #include <executorch/runtime/platform/runtime.h>
@@ -182,17 +181,10 @@ int main(int argc, char** argv) {
     executorch::runtime::runtime_init();
     if (!apply_backend_options(sharing_mode, weight_cache)) return 5;
 
-    // Resize the shared intra-op pool before anything runs on it. _unsafe_reset_threadpool is
-    // "unsafe" only in the sense that it must not race with in-flight work -- nothing has been
-    // submitted yet at this point.
-    if (intraop > 0 &&
-        !executorch::extension::threadpool::get_threadpool()->_unsafe_reset_threadpool(
-            static_cast<uint32_t>(intraop))) {
-      std::fprintf(stderr, "et_scaling: failed to resize intra-op pool to %d\n", intraop);
-      return 6;
-    }
-    const size_t intraop_actual =
-        executorch::extension::threadpool::get_threadpool()->get_thread_count();
+    // Resize the shared intra-op pool before anything runs on it, through the same core function
+    // the engine ships (spec §5) -- measly::et::setIntraOpThreads cannot fail, so no status check.
+    const uint32_t intraop_actual =
+        intraop > 0 ? setIntraOpThreads(static_cast<uint32_t>(intraop)) : intraOpThreads();
 
     // --- sequential loads, outside the timed region ---
     auto t_load = clock_type::now();
@@ -296,7 +288,7 @@ int main(int argc, char** argv) {
 
     const double parallelism = wall_ms > 0 ? cpu_s / (wall_ms / 1000.0) : 0.0;
 
-    std::printf("et_scaling: model=%s threads=%d intraop=%zu iters=%d warmup=%d sharing=%s "
+    std::printf("et_scaling: model=%s threads=%d intraop=%u iters=%d warmup=%d sharing=%s "
                 "weight_cache=%s load_ms=%.3f wall_ms=%.3f forwards_per_sec=%.1f "
                 "per_thread_mean_ms=%.4f worst_max_ms=%.4f cpu_s=%.3f parallelism=%.2f "
                 "peak_rss_kb=%ld sink=%u\n",
