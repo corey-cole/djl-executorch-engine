@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A DJL ([Deep Java Library](https://djl.ai/)) engine plugin that runs ExecuTorch (`.pte`) models. DJL 0.36.0 only supports the deprecated TorchScript export API; this engine adds ExecuTorch as a *separate* DJL engine so PyTorch models exported via the newer ExecuTorch backend can run under DJL, and to allow gradual migration off TorchScript. CPU-only, limited NDArray support. Group/coordinates: `org.measly:djl-executorch-engine`.
 
-Supported platforms: `linux-x86_64` and `windows-x86_64` (both ship the `logging` runtime variant). `bare`/`devtools` runtime variants are Linux-only benchmarking builds.
+Supported platforms: `linux-x86_64`, `linux-aarch64` and `windows-x86_64` (all ship the `logging` runtime variant). `bare`/`devtools` runtime variants are Linux-only benchmarking builds.
 
 ## Two-layer architecture
 

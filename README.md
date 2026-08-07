@@ -9,7 +9,7 @@ As a separate engine, it also allows for slow migration from TorchScript/PyTorch
 
 ## Building and testing
 
-> **Status:** desktop **linux-x86_64** and **windows-x86_64**, and a work in progress. These steps
+> **Status:** desktop **linux-x86_64**, **linux-aarch64** and **windows-x86_64**, and a work in progress. These steps
 > build what exists today — the ExecuTorch runtime, our JNI shim, and the JVM + native test suites.
 > The Docker prerequisite below applies to the Linux build only; Windows builds with MSVC 2022 and
 > no container.
@@ -19,6 +19,7 @@ As a separate engine, it also allows for slow migration from TorchScript/PyTorch
 | Platform | Artifact | Runtime variant | QA |
 |---|---|---|---|
 | `linux-x86_64` | `libexecutorch_djl.so` | `logging` | Catch2 + ASan/LSan leak harness |
+| `linux-aarch64` | `libexecutorch_djl.so` | `logging` | Catch2 + ASan/LSan leak harness |
 | `windows-x86_64` | `executorch_djl.dll` | `logging` | Catch2 (MSVC has no LeakSanitizer) |
 
 The native library ships in a per-platform classifier jar (`<artifact>-<platform>.jar`) and is extracted
@@ -40,7 +41,7 @@ dependencies {
 }
 ```
 
-Swap `linux-x86_64` for `windows-x86_64` (or add both) as needed. Maven consumers add the
+Swap `linux-x86_64` for `linux-aarch64` or `windows-x86_64` (or add several) as needed. Maven consumers add the
 classifier form alongside the main (classifier-less) dependency:
 
 ```xml
@@ -52,6 +53,8 @@ classifier form alongside the main (classifier-less) dependency:
     <scope>runtime</scope>
 </dependency>
 ```
+
+Arm64 hosts use the `linux-aarch64` classifier (and capability) instead.
 
 Windows is built with MSVC 2022 against the `logging` runtime variant; `bare` and `devtools` are
 Linux-only benchmarking builds (see `native/build_variants.sh`).

@@ -2,9 +2,9 @@
 # filename encodes the platform token so the image tag, its Dockerfile, and the artifact platform
 # stay one name. Same layout as measly-java-learning/iree-runtime-dist's docker/.
 #
-# This image is built and cache-warmed even though the aarch64 row in native-build-job.yml is still
-# commented out (EtRuntimePin.cmake carries no aarch64 runtime yet). Keeping the image in lockstep
-# with x86_64 means enabling that row later is a one-line matrix change, not an image bring-up.
+# This image is what the live `linux-aarch64` matrix row in native-build-job.yml builds inside: it
+# runs on the ubuntu-24.04-arm runner, so the shim and its QA are compiled and sanitizer-tested on
+# native aarch64 hardware.
 #
 # Pinned to a dated tag, not `latest` -- see linux-x86_64.Dockerfile for why that pin exists.
 FROM quay.io/pypa/manylinux_2_28_aarch64:2026.06.04-1

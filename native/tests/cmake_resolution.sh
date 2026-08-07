@@ -59,6 +59,13 @@ grep -q 'executorch-runtime-1.3.1-logging-windows-x86_64.tar.gz' <<<"${out}" || 
 out="$(probe)"
 grep -q 'row=linux-x86_64' <<<"${out}" || fail "linux row must equal linux platform"
 
+# linux-aarch64 is a live platform: the logging row must resolve under the aarch64 identity.
+out="$(probe -DET_PLATFORM=linux-aarch64)"
+grep -q 'platform=linux-aarch64'                                  <<<"${out}" || fail "aarch64 platform not echoed"
+grep -q 'row=linux-aarch64'                                       <<<"${out}" || fail "aarch64 row must equal aarch64 platform"
+grep -q 'stem=executorch-runtime-1.3.1-logging-linux-aarch64'     <<<"${out}" || fail "aarch64 stem wrong"
+grep -q 'executorch-runtime-1.3.1-logging-linux-aarch64.tar.gz'   <<<"${out}" || fail "aarch64 url wrong"
+
 # The default on this (Linux) host must be unaffected by ET_PLATFORM existing.
 out="$(probe)"
 grep -q 'platform=linux-x86_64'                                  <<<"${out}" || fail "default platform not linux-x86_64"
