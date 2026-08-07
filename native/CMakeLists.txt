@@ -188,6 +188,17 @@ endif()
 if(ET_BUILD_BENCH)
   add_executable(et_timing_harness ${CMAKE_CURRENT_SOURCE_DIR}/harness/et_timing_harness.cpp)
   target_link_libraries(et_timing_harness PRIVATE et_runtime)
+
+  # Thread-scaling harness: measures whether concurrent forward() on independent EtRuntime
+  # instances actually scales, or serializes on the XNNPACK shared-workspace mutex. Needs an
+  # explicit Threads dependency (std::thread/std::barrier) that the single-threaded timing
+  # harness does not. See the file header for the knobs and the expected signature.
+  find_package(Threads REQUIRED)
+  add_executable(et_scaling_harness ${CMAKE_CURRENT_SOURCE_DIR}/harness/et_scaling_harness.cpp)
+  # extension_threadpool is named explicitly (not relied on transitively through xnnpack_backend)
+  # because the harness itself calls get_threadpool()/_unsafe_reset_threadpool to control intra-op
+  # parallelism -- without that control the app-thread scaling numbers are unreadable.
+  target_link_libraries(et_scaling_harness PRIVATE et_runtime extension_threadpool Threads::Threads)
 endif()
 
 # --- Native QA targets (Catch2 units + ASan/LSan leak harness). OFF for the shipping build. ---
