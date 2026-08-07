@@ -45,6 +45,10 @@ public class EtModel extends BaseModel {
         if (modelFile == null) {
             throw new FileNotFoundException(".pte file not found in: " + modelPath);
         }
+        // First load seals the process-global intra-op thread pool (applies pending/property value,
+        // logs the outcome); later loads are no-ops. Must precede loadModule: delegate init during
+        // load submits work to the pool.
+        EtEngine.sealIntraOpThreads();
         // Not unit-tested below this point: loadModule/methodMeta/destroy require the native library
         // (integration-tested via EtModelTest#loadAndForwardAddModel).
         long handle = EtNative.loadModule(modelFile.toString());
