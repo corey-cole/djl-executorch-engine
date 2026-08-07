@@ -19,10 +19,9 @@ permissions:
   contents: read
 
 env:
-  # Single source of truth for the linux build platforms. The aarch64 row is warmed even though
-  # native-build-job.yml's aarch64 matrix row is still commented out (EtRuntimePin.cmake carries no
-  # aarch64 runtime yet) -- keeping the image ready means enabling that row is a matrix change, not
-  # an image bring-up.
+  # Single source of truth for the linux build platforms. The aarch64 matrix row in
+  # native-build-job.yml is live and runs on ubuntu-24.04-arm; warming its image here is what keeps
+  # that job's image build a cache hit instead of a dnf round-trip.
   PLATFORMS: >-
     [
         {"platform":"linux-x86_64","container":"djl-executorch-engine-build:linux-x86_64","runner":"ubuntu-latest"},

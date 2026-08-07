@@ -54,10 +54,12 @@ set(ET_INSTALL "" CACHE PATH "Explicit ExecuTorch install prefix (escape hatch);
 # of that platform present. See native/tests/cmake_resolution.sh.
 if(WIN32)
   set(_ET_PLATFORM_DEFAULT "windows-x86_64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+  set(_ET_PLATFORM_DEFAULT "linux-aarch64")
 else()
   set(_ET_PLATFORM_DEFAULT "linux-x86_64")
 endif()
-set(ET_PLATFORM "${_ET_PLATFORM_DEFAULT}" CACHE STRING "Platform identity: windows-x86_64 | linux-x86_64")
+set(ET_PLATFORM "${_ET_PLATFORM_DEFAULT}" CACHE STRING "Platform identity: windows-x86_64 | linux-x86_64 | linux-aarch64")
 
 # Derive the row default from ET_PLATFORM, NOT from WIN32: the host-test seam sets ET_PLATFORM on a
 # Linux box, and deriving from WIN32 there would resolve a Linux row under a Windows identity.

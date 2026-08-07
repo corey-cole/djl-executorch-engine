@@ -35,8 +35,14 @@ grep -q 'executorch-libs-windows-x86_64' "${WFJOB}" || fail "windows artifact na
 # stay green even if the windows QA step were deleted.
 awk '/^  build-executorch-shim-windows:/{f=1} f' "${WFJOB}" | grep -q 'build_qa.sh' \
   || fail "windows QA step missing (build_qa.sh not invoked in the windows job)"
-# The aarch64 rows exist in the pin but are out of scope: the matrix entry must stay commented out.
-grep -qE '^\s*- platform: linux-aarch64' "${WFJOB}" && fail "linux-aarch64 is out of scope for this PR"
+# linux-aarch64 is an active matrix row: arm runner, its own image tag, and the aarch64 Corretto RPM.
+grep -qE '^\s*- platform: linux-aarch64' "${WFJOB}" || fail "linux-aarch64 matrix row missing"
+awk '/platform: linux-aarch64/{f=1} f' "${WFJOB}" \
+  | grep -q 'runner: ubuntu-24.04-arm' \
+  || fail "aarch64 row must run on ubuntu-24.04-arm"
+awk '/platform: linux-aarch64/{f=1} f' "${WFJOB}" \
+  | grep -q 'amazon-corretto-8-aarch64-linux-jdk.rpm' \
+  || fail "aarch64 row must use the aarch64 Corretto RPM"
 
 # The Windows provenance gate must attest the row the build actually links (-static, /MT). The /MD row
 # is still in the pin file, so a pattern without the suffix keeps matching and keeps PASSING while

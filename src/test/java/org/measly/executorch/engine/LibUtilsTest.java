@@ -25,6 +25,20 @@ class LibUtilsTest {
     }
 
     @Test
+    void platformResolvesLinuxAarch64() {
+        String os = System.getProperty("os.name");
+        String arch = System.getProperty("os.arch");
+        try {
+            System.setProperty("os.name", "Linux");
+            System.setProperty("os.arch", "aarch64");
+            assertEquals("linux-aarch64", LibUtils.platform());
+        } finally {
+            System.setProperty("os.name", os);
+            System.setProperty("os.arch", arch);
+        }
+    }
+
+    @Test
     void platformRejectsUnsupportedArch() {
         String arch = System.getProperty("os.arch");
         try {
@@ -66,6 +80,7 @@ class LibUtilsTest {
     @Test
     void libNameIsPlatformSpecific() {
         assertEquals("libexecutorch_djl.so", LibUtils.libName("linux-x86_64"));
+        assertEquals("libexecutorch_djl.so", LibUtils.libName("linux-aarch64"));
         assertEquals("executorch_djl.dll", LibUtils.libName("windows-x86_64"));
     }
 

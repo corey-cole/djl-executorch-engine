@@ -5,7 +5,8 @@
 # `windows-x86_64` is /MD (dynamic CRT, for CPython extensions) and `windows-x86_64-static` is /MT.
 # This engine resolves the -static row so the shipped DLL needs no VC++ redistributable; the /MD row is
 # kept because native/tests/cmake_resolution.sh asserts the row is a real choice, not a hardcode.
-# The linux-aarch64 rows are currently INERT: no build resolves them yet (see native-build-job.yml).
+# All three Linux variant rows are live for linux-x86_64 (default) and linux-aarch64 (arm runners);
+# shipping resolves the `logging` row for the host platform.
 # Bump procedure: replace this whole file with the EtRuntimePin.cmake asset from the next
 # `v<etver>-<pkgrev>` Repo A release, then re-apply this comment block. The SHA256 change is the
 # supply-chain review gate.

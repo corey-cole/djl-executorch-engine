@@ -53,14 +53,18 @@ public final class LibUtils {
         String os = System.getProperty("os.name").toLowerCase();
         String arch = System.getProperty("os.arch").toLowerCase();
         boolean x64 = arch.equals("amd64") || arch.equals("x86_64");
+        boolean arm64 = arch.equals("aarch64") || arch.equals("arm64");
         if (os.contains("linux") && x64) {
             return "linux-x86_64";
+        }
+        if (os.contains("linux") && arm64) {
+            return "linux-aarch64";
         }
         if (os.contains("windows") && x64) {
             return "windows-x86_64";
         }
         throw new UnsupportedOperationException(
-                "ExecuTorch engine supports only linux-x86_64 and windows-x86_64, got: " + os + "/" + arch);
+                "ExecuTorch engine supports only linux-x86_64, linux-aarch64 and windows-x86_64, got: " + os + "/" + arch);
     }
 
     /** MSVC emits no `lib` prefix and a .dll suffix. Keep in sync with nativeLibName in build.gradle.kts. */

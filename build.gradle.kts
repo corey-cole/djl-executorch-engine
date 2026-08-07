@@ -75,7 +75,7 @@ tasks.jacocoTestReport {
     }
 }
 
-val nativePlatforms = listOf("linux-x86_64", "windows-x86_64")
+val nativePlatforms = listOf("linux-x86_64", "linux-aarch64", "windows-x86_64")
 
 // MSVC emits no `lib` prefix and a .dll suffix. Keep in sync with LibUtils.libName.
 fun nativeLibName(platform: String): String =
@@ -115,6 +115,7 @@ val nativeJarTasks = nativePlatforms.map { platform ->
 // variants match the standard JVM attribute set and an attribute-less consumer hits ambiguity.
 val nativeVariants = nativePlatforms.map { platform ->
     val osFamily = platform.substringBefore("-") // linux / windows
+    val arch = platform.substringAfter("-") // x86_64 / aarch64
     configurations.consumable("nativeRuntimeElements-${platform}") {
         attributes {
             attribute(Category.CATEGORY_ATTRIBUTE, objects.named(Category.LIBRARY))
@@ -124,7 +125,7 @@ val nativeVariants = nativePlatforms.map { platform ->
             attribute(OperatingSystemFamily.OPERATING_SYSTEM_ATTRIBUTE, objects.named(osFamily))
             attribute(
                 MachineArchitecture.ARCHITECTURE_ATTRIBUTE,
-                objects.named(MachineArchitecture.X86_64)
+                objects.named(if (arch == "aarch64") MachineArchitecture.ARM64 else MachineArchitecture.X86_64)
             )
         }
         outgoing {

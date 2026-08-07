@@ -17,13 +17,10 @@ jobs:
             runner: ubuntu-latest
             image: djl-executorch-engine-build:linux-x86_64
             corretto-jdk-url: https://corretto.aws/downloads/latest/amazon-corretto-8-x64-linux-jdk.rpm
-          # Commenting out while we wait for our upstream EtRuntimePin.cmake to support aarch64.
-          # docker/linux-aarch64.Dockerfile and the warm-build-image.yml row already exist, so
-          # enabling this is a matrix change only.
-          #- platform: linux-aarch64
-          #  runner: ubuntu-24.04-arm
-          #  image: djl-executorch-engine-build:linux-aarch64
-          # corretto-jdk-url: https://corretto.aws/downloads/latest/amazon-corretto-8-aarch64-linux-jdk.rpm
+          - platform: linux-aarch64
+            runner: ubuntu-24.04-arm
+            image: djl-executorch-engine-build:linux-aarch64
+            corretto-jdk-url: https://corretto.aws/downloads/latest/amazon-corretto-8-aarch64-linux-jdk.rpm
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read

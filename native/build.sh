@@ -34,7 +34,8 @@ if [ -n "${PRINT_BUILD_CONFIG:-}" ]; then
 fi
 
 # This script expects:
-# 1. To be running inside quay.io/pypa/manylinux_2_28_x86_64 (glibc-2.28 floor for the shipped .so)
+# 1. To be running inside the platform's manylinux_2_28 image (quay.io/pypa/manylinux_2_28_x86_64
+#    or manylinux_2_28_aarch64; glibc-2.28 floor for the shipped .so)
 # 2. The Corretto RPM downloaded to /workspace
 # The runtime tarball is fetched by CMake during the shim configure (also inside the container,
 # so the fetched runtime is linked on glibc 2.28).
@@ -109,7 +110,11 @@ cmake --build "${NATIVE_BUILD_DIR}" -j"${JOBS}"
 if [ "${ET_HOST_OS}" = "windows" ]; then
   OUT_PLATFORM="windows-x86_64"; OUT_LIB="executorch_djl.dll"
 else
-  OUT_PLATFORM="linux-x86_64";   OUT_LIB="libexecutorch_djl.so"
+  case "$(uname -m)" in
+    aarch64|arm64) OUT_PLATFORM="linux-aarch64" ;;
+    *)             OUT_PLATFORM="linux-x86_64"  ;;
+  esac
+  OUT_LIB="libexecutorch_djl.so"
 fi
 
 if [ "${STAGE_SO}" = "1" ]; then
