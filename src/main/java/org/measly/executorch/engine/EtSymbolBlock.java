@@ -19,6 +19,14 @@ import org.measly.executorch.jni.EtTensor;
  * <p>Not safe for concurrent {@code forward()} calls on the same model: the underlying
  * ExecuTorch {@code Module} may not support concurrent execution. Use one {@code Model} /
  * {@code Predictor} per thread, and do not close the model while a forward call is in flight.
+ *
+ * <p><b>Threading, and why more threads is usually wrong.</b> The rule above is about
+ * <i>safety</i>, not throughput. XNNPACK-delegated models already parallelize inside a single
+ * {@code forward()} on ExecuTorch's shared intra-op pool, and concurrent delegate calls serialize
+ * on a process-global workspace mutex — so N {@code Predictor}s on N threads is typically slower
+ * than one, not N× faster. Tune {@code ai.djl.executorch.num_threads} before adding caller
+ * threads. Measured on a 4-core/8-thread host with MobileNetV2: 1 thread 462 forwards/s, 4
+ * threads 305, 8 threads 147 (peak RSS 33 MB → 224 MB). Ratios on larger hosts are unmeasured.
  */
 public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable {
 
