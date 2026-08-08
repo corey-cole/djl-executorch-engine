@@ -112,13 +112,22 @@ Shell-level tests for the build machinery live in `native/tests/` (e.g. `cmake_r
 
 - `EtSymbolBlock.forward()` is **not thread-safe** on the same model — one `Model`/`Predictor` per thread, and never `close()` a model with a forward in flight.
 
-  > **Threading, and why more threads is usually wrong.** The rule above is about *safety*, not
-  > throughput. XNNPACK-delegated models already parallelize inside a single `forward()` on
-  > ExecuTorch's shared intra-op pool, and concurrent delegate calls serialize on a process-global
-  > workspace mutex — so N `Predictor`s on N threads is typically slower than one, not N× faster.
-  > Tune `ai.djl.executorch.num_threads` before adding caller threads. Measured on a 4-core/8-thread
+  > **Threading, and why more threads is usually wrong _under the default sharing mode_.** The rule
+  > above is about *safety*, not throughput. XNNPACK-delegated models already parallelize inside a
+  > single `forward()` on ExecuTorch's shared intra-op pool, and under the shipped `global`
+  > workspace sharing mode concurrent delegate calls serialize on one process-global workspace
+  > mutex — so N `Predictor`s on N threads is typically slower than one, not N× faster. Tune
+  > `ai.djl.executorch.num_threads` before adding caller threads. Measured on a 4-core/8-thread
   > host with MobileNetV2: 1 thread 462 forwards/s, 4 threads 305, 8 threads 147 (peak RSS 33 MB →
   > 224 MB). Ratios on larger hosts are unmeasured.
+  >
+  > **Those figures are conditional on that mutex.** With `workspaceSharingMode=disabled` the model
+  > gets a private workspace and caller threads scale — achieved parallelism at 1 intra-op thread
+  > was 1.12/1.12/1.12/1.17 at 1/2/4/8 caller threads under `global`, versus 1.12/2.23/4.35/7.13
+  > under `disabled`.
 - `ai.djl.executorch.num_threads` (JVM flag) or `EtEngine.setIntraOpThreads(n)` sizes ExecuTorch's intra-op (XNNPACK) threadpool. Process-global, write-once: applied and sealed at the first model load; the effective native count is `EtEngine.getIntraOpThreads()`.
+- `Criteria.optOption("workspaceSharingMode", "disabled"|"per_model"|"global")` picks the XNNPACK workspace sharing mode **per model**; `ai.djl.executorch.workspace_sharing_mode` (JVM flag) is the default for models that don't specify. Unlike `num_threads` this is neither process-global nor write-once — ExecuTorch resolves it per delegate at load, so modes compose and load order is irrelevant. An unrecognized *option* fails the load; an unrecognized *property* warns and is ignored. Absent both, no spec is sent and the runtime default (`global` for our pin) applies. See `docs/superpowers/specs/2026-08-08-workspace-sharing-mode-design.md`.
+- `weight_cache_enabled` is deliberately **not** exposed. `XnnpackBackend::execute()` holds a second process-global mutex (`weights_cache_mutex_`) for the whole delegate call whenever a model uses the cache, which would undo everything `workspaceSharingMode=disabled` buys. It is off in our pin (`EXECUTORCH_XNNPACK_ENABLE_WEIGHT_CACHE=OFF`), which is what makes the `disabled` numbers above real — treat a pin bump that flips it as a performance regression. To enable it anyway no rebuild is needed: the macro guards only the *default*, and `XNNWeightsCache` is compiled into the shipped `libxnnpack_backend.a`. Set `weight_cache_enabled` (a **bool**) in the same `LoadBackendOptionsMap` built in `native/core/et_runtime.cpp`, and keep those models off the hot path.
+- `EtRuntime`'s constructor calls `Module::load_forward()` unconditionally so the workspace sharing mode (and any XNNPACK delegate) is resolved at construction, not deferred to the first `forward()`. This applies to every XNNPACK-delegated model, not only ones that set the new option: model loading is slower and the first inference is faster, an invalid sharing mode now fails at load rather than at first predict, and in `native/harness/et_timing_harness.cpp` this shifts measured cost from `cold_ms` into `load_ms` (steady-state throughput is unaffected since warmup is discarded there).
 - The `native/spike/` directory holds throwaway spike/smoke files (`EtNative.java`, `cpp_smoke.cpp`, `add.pte`), not production code.
 - Design docs live in `docs/superpowers/specs/` and `docs/superpowers/plans/`; the top-level `djl-executorch-engine-design.md` is the overall design writeup.
