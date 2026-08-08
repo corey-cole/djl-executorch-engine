@@ -2286,3 +2286,208 @@ Tasks 3, 4, and 6. `TestSupport.stressModelDir()` / `.stressGoldenPath()` /
 `StressTranslator.buildInput(float,int,int,float)` is defined in Task 3 and mirrored in the Python
 `build_input(v)` from Task 1 and the C++ `buildWorkload(meta, v)` from Task 7 — all three use
 `(float) i * ramp + v` in float32.
+
+---
+
+# Appendix A: Post-implementation review findings
+
+Date: 2026-08-08
+Reviewer: independent pass over `feat/threading-workspace-stress-test` at `89ff449`, after the plan
+above was fully executed.
+
+**Scope note.** Three items were excluded from review by the author as known and accepted, and are
+not repeated here: `et_timing_harness` not reading `ET_INTRAOP_THREADS` (the authoritative figure
+comes from `et_scaling_harness` at `threads=1`, and the export script's comment was corrected so
+maintainers do not repeat the plan's mistake); the `verify()` sample-first reorder (the plan's own
+test contradicted the plan's implementation); and `stressGate` saturating all cores (nothing here
+runs in CI).
+
+What was verified rather than assumed: the untagged suite runs and passes (`StressGoldenTest` 12
+tests, `SweepConfigTest` 6, zero failures), no `*IT` class executes under `./gradlew :test`, no
+JUnit parallel-execution config exists (so the static counters in `PerThreadContext` are safe), and
+findings A1 and A2 were reproduced empirically.
+
+## A1 — `SweepRunner` can hang forever when a worker fails before the coordinator reaches the barrier
+
+**Severity: high (unbounded hang, no timeout to break it).**
+**Files:** `src/test/java/org/measly/executorch/stress/SweepRunner.java:54, 83, 93`
+
+The coordinator is itself a barrier party (`new CyclicBarrier(cell.threads() + 1)`, line 54) and
+awaits with **no timeout** (line 93). A worker that throws during `open()` or warmup calls
+`start.reset()` (line 83). `CyclicBarrier.reset()` breaks the *current* generation and opens a fresh
+one — so if the reset lands before the coordinator arrives, there is no waiter to break, and the
+coordinator then parks on a new generation that can never trip.
+
+Reproduced standalone:
+
+```java
+CyclicBarrier start = new CyclicBarrier(2);
+Thread w = new Thread(() -> start.reset());   // worker fails at open(), resets
+w.start();
+w.join();                                     // guarantee the reset happened first
+start.await(5, TimeUnit.SECONDS);             // -> TimeoutException
+```
+
+Output: `CONFIRMED: coordinator blocked (would hang forever without a timeout)`.
+
+`StressGateIT` is **not** affected, and the contrast is the fix. Its barrier is
+`new CyclicBarrier(THREADS)` (`StressGateIT.java:57`) — the coordinator is not a party, so it never
+waits on the barrier at all — and it bounds recovery with `w.join(60_000)` plus an `isAlive()`
+assertion. `SweepRunner` has the same `join(60_000)`, but control never reaches it.
+
+This was **introduced by the fix** in commit `89ff449` ("guard sweep/gate barrier against
+late-arriver stranding"), which added the `reset()` without giving the coordinator a bounded wait.
+
+The trigger window is narrow but real: `PerThreadContext.open()` calls `StressGolden.load()` first,
+so a malformed or unreadable golden file throws on pure file I/O long before any model load, and at
+`threads=1` the coordinator does nothing between `worker.start()` and `await()`. Neither
+`stressSweepCore` nor `stressSweepBaseline` sets a test timeout, so the failure mode is a hung
+Gradle task rather than a red test.
+
+**Suggested fix:** give the coordinator a bounded wait and fold the timeout into the existing
+diagnostic branch:
+
+```java
+try {
+    start.await(60, TimeUnit.SECONDS);
+} catch (BrokenBarrierException | TimeoutException e) {
+    // A worker failed before reaching the barrier (broken), or reset it before we arrived
+    // (timeout). Either way, surface the real failure rather than the barrier mechanics.
+    if (!failures.isEmpty()) {
+        AssertionError err = new AssertionError("cell " + cell.label() + " failed during load/warmup");
+        failures.forEach(err::addSuppressed);
+        throw err;
+    }
+    throw e;
+}
+```
+
+## A2 — `peak_rss_kb` is a process high-water mark reported as a per-cell figure
+
+**Severity: medium (already-published measurements invite a wrong conclusion).**
+**Files:** `src/test/java/org/measly/executorch/stress/SweepRunner.java:139, 189`;
+`docs/superpowers/specs/2026-08-08-threading-workspace-stress-test-design.md` §10
+
+`peakRssKb()` reads `VmHWM` from `/proc/self/status`. That value is the peak since process start,
+is monotonic, and is never reset — but all eight core cells share one JVM. Every row therefore
+reports the maximum over itself *and every preceding cell*, not its own peak.
+
+The committed §10 table shows the artifact directly:
+
+```
+596308, 596308, 651500, 700376, 730548, 730548, 778680, 778680
+```
+
+Never decreasing, and identical for consecutive cells because the earlier one already set the mark.
+`4/global` and `4/disabled` both reading `730548` is the column failing to distinguish them — not a
+finding about the modes.
+
+This matters more than a mislabel. `CLAUDE.md` already cites peak RSS for MobileNetV2 (33 MB →
+224 MB) as a genuine per-configuration cost of `disabled` giving each delegate its own arena, so a
+reader will apply the same reading here and conclude the two modes have identical memory cost. The
+spec's own §6.2 lists "peak RSS" as a per-cell metric.
+
+**Suggested fix**, cheapest first:
+1. Relabel the column `peak_rss_kb_cumulative` and add a sentence to §10 saying it is a running
+   high-water mark across cells in that JVM.
+2. Or sample `VmRSS` (current, not peak) at the end of each cell, which is per-cell by construction
+   though it misses transients.
+3. Or reset the mark between cells with `echo 5 > /proc/self/clear_refs` (Linux ≥ 2.6.22), which
+   makes the existing column mean what it claims.
+
+## A3 — The sweep report appends with no run marker and no truncation
+
+**Severity: medium (silently mixes runs in the artifact meant to be cited as evidence).**
+**File:** `src/test/java/org/measly/executorch/stress/SweepRunner.java:196-204`
+
+`report()` opens with `StandardOpenOption.APPEND` and writes the header only when the file does not
+exist. Append is correct — the two sweep arms are separate JVMs and must both land in one file — but
+nothing distinguishes one invocation from the next. Two `stressSweep` runs without an intervening
+`./gradlew clean` produce 18 rows with no timestamp and no run id.
+
+Task 6 Step 3 of the plan worked around this with a manual `rm -f build/reports/stress/sweep.tsv`;
+nothing in the shipped Gradle task does.
+
+**Suggested fix:** prepend a `run_id` column (an ISO-8601 timestamp captured once per JVM, or a
+value passed down from the `stressSweep` lifecycle task so both arms share it). Truncating instead
+would be wrong — it would discard the baseline arm's row or the core arm's, depending on order.
+
+## A4 — The native harness hardcodes the input ramp the JVM side reads from the goldens
+
+**Severity: low (self-consistent today; a drift hazard by construction).**
+**File:** `native/harness/et_stress_harness.cpp:58`
+
+`constexpr float kRamp = 1e-5f;` duplicates a value that the JVM arm obtains from
+`stress_golden.json` via `StressGolden.Config.ramp`. If `RAMP` is ever retuned in
+`export_stress_model.py`, the native arm silently drives different input values — and therefore
+possibly different buckets — than the JVM arm and the goldens describe.
+
+It will not produce a false failure, because the native arm compares only against its own reference
+captured in the same process (oracle layer 2, by design — §4.3). But it is precisely the
+model/companion-data drift the rest of this design works hard to make impossible, reintroduced in
+the one arm that does not read the companion file.
+
+**Suggested fix:** either accept it with a comment stating explicitly that the native arm is
+self-referential and the ramp only needs to be *a* deterministic fill, or pass the ramp as a fourth
+argv so `build_qa.sh` supplies it from one place.
+
+## A5 — `export_stress_model.py` names a constant that does not exist
+
+**Severity: low (misleading comment).**
+**File:** `tools/scripts/export_stress_model.py:72`
+
+```python
+RAMP = 1e-5          # input ramp step; MUST match StressTranslator.RAMP exactly
+```
+
+`StressTranslator` has no `RAMP` constant. The ramp is a constructor parameter fed from
+`StressGolden.Config.ramp`, i.e. it flows through the golden file — which is the better design,
+since it cannot drift. The comment describes a coupling that does not exist and points a maintainer
+at the wrong place to keep in sync.
+
+**Suggested fix:** `# input ramp step; travels to Java in stress_golden.json (config.ramp) — do not
+hardcode it on the Java side.`
+
+## A6 — Vestigial list initialisation in `StressSweepBaselineIT`
+
+**Severity: cosmetic.**
+**File:** `src/test/java/org/measly/executorch/stress/StressSweepBaselineIT.java`
+
+```java
+List<SweepRunner.Result> results = List.of();
+results = new java.util.ArrayList<>(results);
+```
+
+Carried over verbatim from the plan (which was itself clumsy here). `List<SweepRunner.Result>
+results = new ArrayList<>();` with the import alongside the others.
+
+## A7 — The intra-op fork assertion fires after the whole sweep
+
+**Severity: low (wastes a run rather than producing a wrong result).**
+**File:** `src/test/java/org/measly/executorch/stress/StressSweepIT.java`
+
+`assertEquals(1, EtEngine.getIntraOpThreads(), ...)` runs *after* all eight cells. If the
+`-Dai.djl.executorch.num_threads=1` fork flag were ever dropped from `stressSweepCore`, the test
+would spend ~80 seconds collecting numbers that measure something else before saying so. The
+assertion cannot move above the loop as written — the pool count is only meaningful once a model has
+been loaded — but it can move to immediately after the *first* cell, which is the earliest point it
+is both meaningful and cheap.
+
+## What the review confirmed as sound
+
+Recorded so a later reader does not re-litigate it:
+
+- Tag exclusion works: `./gradlew :test` runs `StressGoldenTest` and `SweepConfigTest` and no
+  `*IT` class. Verified by running it, not by reading `build.gradle.kts`.
+- The native harness arrives at its barrier on **every** path including load failure
+  (`et_stress_harness.cpp`), so it has no analogue of A1.
+- `StressGolden.load()` validates structure thoroughly — missing keys, non-numeric values,
+  non-positive stride, empty case list, and a sample count that disagrees with `batch*hidden/stride`
+  — and every message names the file and the regeneration command.
+- `PerThreadContext.close()` closes predictor-then-model in reverse acquisition order, and
+  `open()` closes the model if `newPredictor()` throws, so neither path leaks a native handle.
+- The static open/closed counters are safe: no `junit-platform.properties` exists and no parallel
+  execution is configured, so no two stress classes run concurrently in one JVM.
+- The §10 results genuinely corroborate the existing MobileNetV2 finding in `CLAUDE.md` on an
+  independent model — `global` flat near 1 (1.121/1.146/1.149/1.154), `disabled` climbing
+  (1.029/2.012/3.983/6.666) — which is the load-bearing claim of the whole exercise.
