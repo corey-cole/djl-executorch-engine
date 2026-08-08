@@ -172,8 +172,10 @@ def main() -> None:
         )
 
     # Coarse cost signal only. The Python runtime is a different build with different overheads --
-    # the authoritative number for tuning against the 300-500us target comes from
-    # native/harness/et_timing_harness (see the plan, Task 8).
+    # the authoritative one-intra-op-thread figure for tuning against the 300-500us target comes
+    # from  ET_INTRAOP_THREADS=1 ./native/bench/et_scaling_harness <pte> 1 2000 200
+    # (per_thread_mean_ms at threads=1 IS the per-forward cost at one intra-op thread;
+    # et_timing_harness does NOT read ET_INTRAOP_THREADS and measures at the default pool).
     warm = [build_input(0.5), build_input(0.5)]
     for _ in range(50):
         method.execute(warm)
