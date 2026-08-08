@@ -16,6 +16,26 @@ using namespace measly::et;
 #define ADD_PTE_PATH "add.pte"
 #endif
 
+// Intra-op pool tests run FIRST, before ANY EtRuntime construction: Catch2 runs in registration
+// order, and the reset guard (issue #26) refuses a reset once a runtime has been constructed --
+// including by a throwing ctor, so even "load: missing path throws" below would trip it.
+TEST_CASE("intraop: setIntraOpThreads resizes the shared pool and reports the applied count") {
+  const uint32_t before = intraOpThreads();
+  REQUIRE(setIntraOpThreads(1) == 1);
+  REQUIRE(intraOpThreads() == 1);
+  // The pool is process-global: restore so sibling tests run on the default pool.
+  setIntraOpThreads(before);
+  REQUIRE(intraOpThreads() == before);
+}
+
+TEST_CASE("intraop: upstream quirks -- 0 is silently ignored, same-count reset is a no-op") {
+  const uint32_t cur = intraOpThreads();
+  REQUIRE(setIntraOpThreads(0) == cur);   // core guards n < 1 (issue #24): 0 is a no-op before upstream sees it
+  REQUIRE(intraOpThreads() == cur);
+  REQUIRE(setIntraOpThreads(cur) == cur); // early-returns for the current count: unchanged
+  REQUIRE(intraOpThreads() == cur);
+}
+
 TEST_CASE("load: missing path throws") {
   REQUIRE_THROWS([] { EtRuntime rt("/nonexistent/definitely-not-here.pte"); }());
 }
@@ -300,19 +320,11 @@ TEST_CASE("forward: unplanned inputs survive the caller buffer being freed (ASan
   REQUIRE(*static_cast<const float*>(r2.outputs()[0].data) == 17.0f);
 }
 
-TEST_CASE("intraop: setIntraOpThreads resizes the shared pool and reports the applied count") {
-  const uint32_t before = intraOpThreads();
-  REQUIRE(setIntraOpThreads(1) == 1);
-  REQUIRE(intraOpThreads() == 1);
-  // The pool is process-global: restore so sibling tests run on the default pool.
-  setIntraOpThreads(before);
-  REQUIRE(intraOpThreads() == before);
+TEST_CASE("intraop: a reset after a runtime exists is a logged no-op") {
+  EtRuntime rt(ADD_PTE_PATH);
+  const uint32_t cur = intraOpThreads();
+  REQUIRE(setIntraOpThreads(1) == cur);   // refused: returns the current count
+  REQUIRE(intraOpThreads() == cur);
 }
 
-TEST_CASE("intraop: upstream quirks -- 0 is silently ignored, same-count reset is a no-op") {
-  const uint32_t cur = intraOpThreads();
-  REQUIRE(setIntraOpThreads(0) == cur);   // core guards n < 1 (issue #24): 0 is a no-op before upstream sees it
-  REQUIRE(intraOpThreads() == cur);
-  REQUIRE(setIntraOpThreads(cur) == cur); // early-returns for the current count: unchanged
-  REQUIRE(intraOpThreads() == cur);
-}
+

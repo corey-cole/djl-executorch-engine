@@ -1,5 +1,7 @@
 #include "et_runtime.h"
 
+#include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -35,6 +37,10 @@ struct ForwardState {
 
 namespace {
 
+// Set once any EtRuntime has been constructed (even by a throwing ctor); read by the intra-op
+// reset guard. Guards the XNNPACK pthreadpool_t capture, so it must outlive all runtimes.
+std::atomic<bool> g_etRuntimeConstructed{false};
+
 // Builds the MethodMeta snapshot for the "forward" method. Same throws / -1 / 0 conventions as the
 // old EtRuntime::methodMeta() body: a non-tensor input keeps -1 / empty shape / 0.
 MethodMeta buildMethodMeta(Module& module) {
@@ -66,6 +72,9 @@ MethodMeta buildMethodMeta(Module& module) {
 
 EtRuntime::EtRuntime(const std::string& ptePath)
     : state_(std::make_unique<RuntimeState>(ptePath)) {
+  // Set even when this ctor later throws: the pool is captured by XNNPACK at runtime creation,
+  // so "has ever been constructed" is the safe boundary for the intra-op reset guard.
+  g_etRuntimeConstructed.store(true);
   // Force-load now so a bad path/file throws at construction (the "load throws" contract).
   if (state_->module.load() != executorch::runtime::Error::Ok) {
     throw std::runtime_error("EtRuntime: failed to load .pte: " + ptePath);
@@ -237,6 +246,16 @@ uint32_t setIntraOpThreads(uint32_t n) {
     // uint32_t can only observe 0 here (a negative jint is absorbed by the shim's guard);
     // keep the no-op-and-report contract for native callers too (issue #24).
     return intraOpThreads();
+  }
+  if (g_etRuntimeConstructed.load()) {
+    // XNNPACK captures the pthreadpool_t at runtime creation (xnn_create_runtime_v2) and a
+    // reset destroys the old pool object, so a reset after any EtRuntime exists is a
+    // use-after-free on the next forward(), not merely a race (issue #26). Refuse it.
+    const uint32_t cur = intraOpThreads();
+    std::fprintf(stderr,
+        "measly::et: setIntraOpThreads(%u) ignored: an EtRuntime already exists; the shared "
+        "pool is fixed at %u threads\n", n, cur);
+    return cur;
   }
   executorch::extension::threadpool::ThreadPool* pool =
       executorch::extension::threadpool::get_threadpool();

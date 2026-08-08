@@ -85,8 +85,10 @@ class EtRuntime {
 // _unsafe_reset_threadpool always returns true (it early-returns for n == 0 and for
 // n == get_thread_count()), so a bool status would be meaningless -- callers compare instead.
 //
-// Must be called before the first EtRuntime is constructed: delegate init during load submits
-// work to the pool, and the reset must not race in-flight work.
+// Enforced, not just documented: the core refuses a reset once any EtRuntime has been
+// constructed -- a logged no-op returning the current count. XNNPACK captures the
+// pthreadpool_t when it creates a runtime, and _unsafe_reset_threadpool destroys the old pool
+// object, so a late reset is a use-after-free on the next forward(), not merely a race.
 uint32_t setIntraOpThreads(uint32_t n);
 uint32_t intraOpThreads();
 

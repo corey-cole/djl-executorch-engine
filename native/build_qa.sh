@@ -55,7 +55,9 @@ if [ "${ET_HOST_OS}" = "windows" ]; then
   bash native/tests/check_windows_crt.sh native/asan
 
   echo "--- Catch2 unit suite (no sanitizers; MSVC has no LSan) ---"
-  ./native/asan/et_runtime_test.exe
+  # --order decl: same rationale as the Linux run below -- Catch2 v3 randomizes by default and the
+  # intra-op pool tests must precede ANY EtRuntime construction (issue #26).
+  ./native/asan/et_runtime_test.exe --order decl
   echo "--- Leak harness SKIPPED: no LeakSanitizer under MSVC (Linux-only coverage) ---"
 else
   # QA is the only ASan consumer; install the toolset's ASan runtime here (moved out of build.sh).
@@ -76,7 +78,11 @@ else
   cmake --build native/asan --target et_runtime_test et_leak_harness -j"${JOBS}"
 
   echo "--- Catch2 unit suite ---"
-  ./native/asan/et_runtime_test
+  # --order decl: Catch2 v3 randomizes test order by default, but the intra-op tests (registered
+  # first in et_runtime_test.cpp) MUST run before any EtRuntime construction -- the reset guard
+  # (issue #26) refuses a reset once a runtime has been constructed, so a randomized order would
+  # flake the pool tests.
+  ./native/asan/et_runtime_test --order decl
 
   echo "--- ASan/LSan leak harness (${ITERS} iterations) ---"
   ./native/asan/et_leak_harness native/spike/add.pte "${ITERS}"                # planned: grow==0, guards the runtime pin
