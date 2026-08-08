@@ -75,7 +75,7 @@ else
     -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
     -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
-  cmake --build native/asan --target et_runtime_test et_leak_harness -j"${JOBS}"
+  cmake --build native/asan --target et_runtime_test et_leak_harness et_stress_harness -j"${JOBS}"
 
   echo "--- Catch2 unit suite ---"
   # --order decl: Catch2 v3 randomizes test order by default, but the intra-op tests (registered
@@ -88,4 +88,20 @@ else
   ./native/asan/et_leak_harness native/spike/add.pte "${ITERS}"                # planned: grow==0, guards the runtime pin
   ./native/asan/et_leak_harness native/spike/add_unplanned.pte "${ITERS}" 4    # staged 8*ITERS times, grow == 0 (slots sized at load)
   ./native/asan/et_leak_harness native/spike/add_unplanned.pte 1 10000         # inverted: isolates steady state; grow == 0
+
+  # Opt-in: saturates every core for its duration, which is not something to do on a free CI runner.
+  # ET_STRESS_SECONDS tunes the per-arm duration (default 20).
+  if [ "${ET_STRESS:-0}" = "1" ]; then
+    STRESS_PTE="src/test/resources/models/stress/stress_mlp.pte"
+    STRESS_SECS="${ET_STRESS_SECONDS:-20}"
+    if [ ! -f "${STRESS_PTE}" ]; then
+      echo "--- Stress harness SKIPPED: ${STRESS_PTE} not found"
+      echo "    (build it via tools/scripts/export_stress_model.py)"
+    else
+      echo "--- ASan/LSan stress harness: 8 threads, global sharing, ${STRESS_SECS}s ---"
+      ET_SHARING_MODE=2 ./native/asan/et_stress_harness "${STRESS_PTE}" 8 "${STRESS_SECS}"
+      echo "--- ASan/LSan stress harness: 8 threads, sharing disabled, ${STRESS_SECS}s ---"
+      ET_SHARING_MODE=0 ./native/asan/et_stress_harness "${STRESS_PTE}" 8 "${STRESS_SECS}"
+    fi
+  fi
 fi

@@ -223,4 +223,12 @@ if(ET_BUILD_QA)
   # W4 guard-page harness (manual runs only; never executes in CI — see the brief §3/W4).
   add_executable(et_overread_harness ${CMAKE_CURRENT_SOURCE_DIR}/harness/et_overread_harness.cpp)
   target_link_libraries(et_overread_harness PRIVATE et_runtime)
+
+  # Threaded stress harness: N threads x own EtRuntime over one .pte, asserting bitwise-identical
+  # outputs under ASan/LSan. Needs Threads (std::thread/std::barrier), like et_scaling_harness.
+  # Always BUILT so it cannot bitrot; only RUN when ET_STRESS=1 (see native/build_qa.sh) so the
+  # default QA pass stays cheap.
+  find_package(Threads REQUIRED)
+  add_executable(et_stress_harness ${CMAKE_CURRENT_SOURCE_DIR}/harness/et_stress_harness.cpp)
+  target_link_libraries(et_stress_harness PRIVATE et_runtime Threads::Threads)
 endif()
