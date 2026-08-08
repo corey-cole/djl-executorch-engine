@@ -277,6 +277,12 @@ Java_org_measly_executorch_jni_EtNative_destroy(JNIEnv* env, jclass, jlong handl
 
 extern "C" JNIEXPORT jint JNICALL
 Java_org_measly_executorch_jni_EtNative_setIntraOpThreads(JNIEnv* env, jclass, jint n) {
+  if (n < 1) {
+    // jint is signed: -1 (or 0) must never reach the pool allocator as a huge uint32_t. No-op
+    // and report the current count -- the core's "count in effect AFTER the attempt" contract
+    // (issue #24). The Java gate already rejects n < 1, but EtNative is a public entry point.
+    return static_cast<jint>(measly::et::intraOpThreads());
+  }
   return static_cast<jint>(measly::et::setIntraOpThreads(static_cast<uint32_t>(n)));
 }
 
