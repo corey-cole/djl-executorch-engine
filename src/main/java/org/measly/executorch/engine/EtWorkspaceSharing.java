@@ -72,19 +72,6 @@ final class EtWorkspaceSharing {
     }
 
     /**
-     * Applies the precedence chain: per-model option, then JVM property, then unspecified.
-     *
-     * <p>A key present with a null value counts as absent. A bad option throws (explicit per-model
-     * intent must not degrade silently); a bad property WARNs and is ignored (a typo in a
-     * process-wide flag must not fail startup), matching the {@code num_threads} precedent.
-     *
-     * @param options the DJL model options map; may be null
-     * @param propertyValue the value of {@link #PROPERTY}, passed in so this stays pure and
-     *     testable; may be null
-     * @return the native mode int, or {@link #UNSPECIFIED}
-     * @throws IllegalArgumentException if the per-model option carries an unrecognized value
-     */
-    /**
      * Renders a resolved mode int as a human-readable name, for logging.
      *
      * @param mode one of {@link #UNSPECIFIED}, {@link #DISABLED}, {@link #PER_MODEL}, {@link
@@ -107,6 +94,19 @@ final class EtWorkspaceSharing {
         }
     }
 
+    /**
+     * Applies the precedence chain: per-model option, then JVM property, then unspecified.
+     *
+     * <p>A key present with a null value counts as absent. A bad option throws (explicit per-model
+     * intent must not degrade silently); a bad property WARNs and is ignored (a typo in a
+     * process-wide flag must not fail startup), matching the {@code num_threads} precedent.
+     *
+     * @param options the DJL model options map; may be null
+     * @param propertyValue the value of {@link #PROPERTY}, passed in so this stays pure and
+     *     testable; may be null
+     * @return the native mode int, or {@link #UNSPECIFIED}
+     * @throws IllegalArgumentException if the per-model option carries an unrecognized value
+     */
     static int resolve(Map<String, ?> options, String propertyValue) {
         Object raw = options == null ? null : options.get(OPTION_KEY);
         if (raw != null) {

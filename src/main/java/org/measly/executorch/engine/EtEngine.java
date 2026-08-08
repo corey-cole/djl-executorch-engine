@@ -26,6 +26,34 @@ public final class EtEngine extends Engine {
      */
     public static final String NUM_THREADS_PROPERTY = "ai.djl.executorch.num_threads";
 
+    /**
+     * DJL per-model option key controlling the XNNPACK workspace sharing mode, e.g. {@code
+     * Criteria.optOption(EtEngine.WORKSPACE_SHARING_MODE_OPTION, "per_model")}. Accepted values are
+     * {@code disabled}, {@code per_model}, or {@code global} (case-insensitive, trimmed). Precedence
+     * is this option, then {@link #WORKSPACE_SHARING_MODE_PROPERTY}, then no spec at all -- leaving
+     * the runtime's compiled-in default ({@code global} for our pin). An unrecognized option value
+     * fails the model load; an unrecognized property value WARNs and is ignored.
+     *
+     * <p>Unlike {@link #NUM_THREADS_PROPERTY}, this is NOT process-global and NOT write-once:
+     * ExecuTorch resolves the mode per delegate at load time, so modes compose across models and
+     * load order does not matter.
+     */
+    public static final String WORKSPACE_SHARING_MODE_OPTION = EtWorkspaceSharing.OPTION_KEY;
+
+    /**
+     * JVM-wide default for models that do not carry {@link #WORKSPACE_SHARING_MODE_OPTION}, e.g.
+     * {@code -Dai.djl.executorch.workspace_sharing_mode=disabled}. Accepted values are {@code
+     * disabled}, {@code per_model}, or {@code global} (case-insensitive, trimmed). Precedence is
+     * {@link #WORKSPACE_SHARING_MODE_OPTION}, then this property, then no spec at all -- leaving the
+     * runtime's compiled-in default ({@code global} for our pin). An unrecognized property value
+     * WARNs and is ignored (an unrecognized option value, by contrast, fails the model load).
+     *
+     * <p>Unlike {@link #NUM_THREADS_PROPERTY}, this is NOT process-global and NOT write-once:
+     * ExecuTorch resolves the mode per delegate at load time, so modes compose across models and
+     * load order does not matter.
+     */
+    public static final String WORKSPACE_SHARING_MODE_PROPERTY = EtWorkspaceSharing.PROPERTY;
+
     private static final Logger logger = LoggerFactory.getLogger(EtEngine.class);
     private static final Object INTRAOP_LOCK = new Object();
     // -1 = unset (leave the runtime default); >= 1 = requested. Written by the setter, read at seal.

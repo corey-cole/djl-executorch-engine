@@ -83,8 +83,8 @@ EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode)
   //
   // The options map and its BackendOptions storage are stack-local, which the non-owning-span
   // caveat on LoadBackendOptionsMap would normally forbid. It is correct here because
-  // Module::load deep-copies into Module-owned storage before returning, and the lazy
-  // load_method that forward() triggers consumes that copy -- see the doc comment on
+  // Module::load deep-copies into Module-owned storage before returning, and the load_forward()
+  // call below in this constructor consumes that copy -- see the doc comment on
   // Module::load(const LoadBackendOptionsMap&, Verification).
   executorch::runtime::Error loadErr;
   if (workspaceSharingMode >= 0) {

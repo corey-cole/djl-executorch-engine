@@ -81,7 +81,8 @@ Criteria.builder().optOption("workspaceSharingMode", "disabled")   // per model
 
 Accepted values: `disabled`, `per_model`, `global` — case-insensitive, trimmed. Bare integers are
 **not** accepted in the public API: they are opaque at a call site, and accepting them would let an
-out-of-range value through to a native failure.
+out-of-range value through to a native failure. The option key and property name are published as
+`EtEngine.WORKSPACE_SHARING_MODE_OPTION` and `EtEngine.WORKSPACE_SHARING_MODE_PROPERTY`.
 
 Resolution happens per load, in `EtModel.load(Path, String, Map<String, ?>)` — where DJL already
 delivers the options map and where the engine currently ignores it:
