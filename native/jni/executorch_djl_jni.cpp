@@ -123,12 +123,16 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_org_measly_executorch_jni_EtNative_loadModule(JNIEnv* env, jclass, jstring jpath) {
+Java_org_measly_executorch_jni_EtNative_loadModule(
+    JNIEnv* env, jclass, jstring jpath, jint jworkspaceSharingMode) {
   const char* path = env->GetStringUTFChars(jpath, nullptr);
   std::string p(path);
   env->ReleaseStringUTFChars(jpath, path);
   try {
-    return reinterpret_cast<jlong>(new EtRuntime(p));
+    // No range check here: the Java layer emits only -1/0/1/2, and any other value is deliberately
+    // passed through so ExecuTorch rejects it at delegate init. et_runtime_test.cpp relies on that
+    // to prove the runtime spec reaches the XNNPACK backend.
+    return reinterpret_cast<jlong>(new EtRuntime(p, static_cast<int>(jworkspaceSharingMode)));
   } catch (const std::exception& e) {
     throwJava(env, "EtRuntime load failed", &e);
     return 0;

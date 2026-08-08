@@ -18,7 +18,7 @@ class EtNativeTest {
     @Test
     void forwardAddsTwoScalars() {
         TestSupport.assumeNativeAvailable();
-        long handle = EtNative.loadModule(TestSupport.addPtePath());
+        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1);
         try {
             EtTensor[] out = EtNative.forward(
                     handle, new EtTensor[] {floatScalar(2f), floatScalar(3f)});
