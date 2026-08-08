@@ -165,6 +165,19 @@ EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode)
   if (loadErr != executorch::runtime::Error::Ok) {
     throw std::runtime_error("EtRuntime: failed to load .pte: " + ptePath);
   }
+  // Force the "forward" Method to load too. Module::load() and Module::method_meta() are both
+  // PROGRAM-level: method_meta() calls load() and then program_->method_meta(), never load_method.
+  // Delegate init -- the only place XnnpackBackendOptions::resolve_sharing_mode runs -- happens in
+  // load_method, which is otherwise triggered lazily by the first forward(). Without this call the
+  // runtime spec above would sit unused until first inference, so an invalid mode would surface at
+  // predict() rather than at load, breaking this codebase's "load throws" contract.
+  //
+  // Side effect, intended: the XNNPACK subgraph compile now happens at construction instead of on
+  // the first forward(). In the timing harness that shifts cost from cold_ms into load_ms; warmup
+  // is discarded there, so steady-state numbers are unaffected.
+  if (state_->module.load_forward() != executorch::runtime::Error::Ok) {
+    throw std::runtime_error("EtRuntime: failed to load \"forward\" from .pte: " + ptePath);
+  }
   state_->meta = buildMethodMeta(state_->module);
 ```
 
