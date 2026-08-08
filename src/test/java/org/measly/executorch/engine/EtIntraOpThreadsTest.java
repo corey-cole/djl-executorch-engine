@@ -4,10 +4,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /** Pure state machine for the intra-op thread pool gate; never touches the native library. */
 class EtIntraOpThreadsTest {
+
+    @BeforeEach
+    void resetGate() {
+        EtEngine.resetIntraOpForTest();
+    }
 
     @Test
     void setIntraOpThreadsRejectsNonPositive() {

@@ -198,6 +198,19 @@ public final class EtEngine extends Engine {
         }
     }
 
+    /**
+     * Test seam (same package, no-native unit tests only): restores the gate to its unset,
+     * unsealed state so each unit test starts from a known position. The native pool is never
+     * touched (issue #28).
+     */
+    static void resetIntraOpForTest() {
+        synchronized (INTRAOP_LOCK) {
+            pendingIntraOpThreads = -1;
+            intraOpSealed = false;
+            sealedIntraOpThreads = -1;
+        }
+    }
+
     @Override
     public String toString() {
         return getEngineName() + ':' + getVersion();
