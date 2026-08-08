@@ -86,6 +86,7 @@ class StressGateIT {
                                     }
                                 } catch (Throwable e) {
                                     failures.add(e);
+                                    start.reset(); // release peers parked at the barrier
                                     stop.set(true); // do not let the others spin for the full run
                                 }
                             },
