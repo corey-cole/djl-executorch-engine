@@ -66,7 +66,7 @@ class StressGateIT {
                                 // is the one that was doing the forwards, so nothing can be in
                                 // flight when close() runs.
                                 try (PerThreadContext ctx = PerThreadContext.open(MODE)) {
-                                    start.await();
+                                    if (!stop.get()) start.await();
                                     while (!stop.get()) {
                                         for (int i = 0; i < cases.size(); i++) {
                                             float[] out =

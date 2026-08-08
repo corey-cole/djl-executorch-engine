@@ -11,6 +11,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Queue;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -63,7 +64,7 @@ public final class SweepRunner {
                                     for (int i = 0; i < cases.size(); i++) {
                                         ctx.predict(cases.get(i).v1, cases.get(i).v2);
                                     }
-                                    start.await();
+                                    if (!stop.get()) start.await();
                                     while (!stop.get()) {
                                         for (int i = 0; i < cases.size(); i++) {
                                             float[] out = ctx.predict(cases.get(i).v1, cases.get(i).v2);
@@ -157,10 +158,12 @@ public final class SweepRunner {
         StringBuilder tsv = new StringBuilder();
         System.out.println();
         System.out.printf(
+                Locale.ROOT,
                 "%-32s %12s %12s %10s %10s%n",
                 "cell", "fwd/s", "mean ms", "parallel", "peakRSS MB");
         for (Result r : results) {
             System.out.printf(
+                    Locale.ROOT,
                     "%-32s %12.1f %12.3f %10.2f %10.1f%n",
                     r.cell().label(),
                     r.forwardsPerSecond(),
@@ -175,13 +178,13 @@ public final class SweepRunner {
                     .append('\t')
                     .append(r.forwards())
                     .append('\t')
-                    .append(String.format("%.3f", r.wallSeconds()))
+                    .append(String.format(Locale.ROOT, "%.3f", r.wallSeconds()))
                     .append('\t')
-                    .append(String.format("%.1f", r.forwardsPerSecond()))
+                    .append(String.format(Locale.ROOT, "%.1f", r.forwardsPerSecond()))
                     .append('\t')
-                    .append(String.format("%.4f", r.meanLatencyMs()))
+                    .append(String.format(Locale.ROOT, "%.4f", r.meanLatencyMs()))
                     .append('\t')
-                    .append(String.format("%.3f", r.achievedParallelism()))
+                    .append(String.format(Locale.ROOT, "%.3f", r.achievedParallelism()))
                     .append('\t')
                     .append(r.peakRssKb())
                     .append('\n');
