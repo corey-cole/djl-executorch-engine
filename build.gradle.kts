@@ -30,7 +30,7 @@ dependencies {
 }
 
 tasks.test {
-    useJUnitPlatform { excludeTags("leak", "oom", "intraop") }
+    useJUnitPlatform { excludeTags("leak", "oom", "intraop", "stress", "stress-sweep", "stress-baseline") }
     jvmArgs("-XX:+HeapDumpOnOutOfMemoryError")
     finalizedBy(tasks.jacocoTestReport)
 }
@@ -78,6 +78,48 @@ tasks.register<Test>("intraOpTest") {
 // intraOpTest runs under build/check (its forked JVM cannot share the pool with the test task)
 // but not under `test` itself, which excludes the tag.
 tasks.check { dependsOn(tasks.named("intraOpTest")) }
+
+// --- Threading / workspace stress arms. All opt-in; `test` excludes every tag below. ---
+// Never wire any of these to CI: they saturate every core for their whole duration, and free CI
+// providers take a dim view of that. `stressGate` in particular is a local/self-hosted tool.
+
+tasks.register<Test>("stressGate") {
+    description = "Local-only concurrency correctness gate: 8 threads, maximum contention."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("stress") }
+    // Deliberately NO num_threads property: the gate wants the real-world intra-op default, which
+    // together with 8 caller threads is the maximum-contention configuration.
+    systemProperty("et.stress.seconds", providers.gradleProperty("stressSeconds").getOrElse("30"))
+}
+
+// The sweep is split across two JVMs because the intra-op pool is process-global and write-once:
+// measly::et::setIntraOpThreads refuses a reset once any EtRuntime exists (issue #26), so the eight
+// intra-op=1 cells and the intra-op=default confirmation cell cannot share a process.
+tasks.register<Test>("stressSweepCore") {
+    description = "Throughput sweep: {1,2,4,8} threads x {global,disabled} at ONE intra-op thread."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("stress-sweep") }
+    jvmArgs("-Dai.djl.executorch.num_threads=1")
+}
+
+tasks.register<Test>("stressSweepBaseline") {
+    description = "Sweep confirmation cell: 1 thread at the DEFAULT intra-op pool size."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("stress-baseline") }
+    mustRunAfter(tasks.named("stressSweepCore")) // both append to one report; keep the order stable
+}
+
+tasks.register("stressSweep") {
+    description = "Full 9-cell sweep (stressSweepCore + stressSweepBaseline)."
+    group = "verification"
+    dependsOn(tasks.named("stressSweepCore"), tasks.named("stressSweepBaseline"))
+}
 
 tasks.jacocoTestReport {
     dependsOn(tasks.test)
