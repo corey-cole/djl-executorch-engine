@@ -10,6 +10,8 @@
 #include <executorch/extension/module/module.h>
 #include <executorch/extension/tensor/tensor.h>
 #include <executorch/extension/threadpool/threadpool.h>
+#include <executorch/runtime/backend/backend_options_map.h>
+#include <executorch/runtime/backend/options.h>
 #include <executorch/runtime/executor/method_meta.h>
 
 #include "dtype_size.h"
@@ -21,7 +23,9 @@ namespace measly::et {
 using executorch::extension::Module;
 using executorch::extension::from_blob;
 using executorch::extension::TensorPtr;
+using executorch::runtime::BackendOptions;
 using executorch::runtime::EValue;
+using executorch::runtime::LoadBackendOptionsMap;
 
 struct RuntimeState {
   Module module;
@@ -70,14 +74,47 @@ MethodMeta buildMethodMeta(Module& module) {
 
 }  // namespace
 
-EtRuntime::EtRuntime(const std::string& ptePath)
+EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode)
     : state_(std::make_unique<RuntimeState>(ptePath)) {
   // Set even when this ctor later throws: the pool is captured by XNNPACK at runtime creation,
   // so "has ever been constructed" is the safe boundary for the intra-op reset guard.
   g_etRuntimeConstructed.store(true);
   // Force-load now so a bad path/file throws at construction (the "load throws" contract).
-  if (state_->module.load() != executorch::runtime::Error::Ok) {
+  //
+  // The options map and its BackendOptions storage are stack-local, which the non-owning-span
+  // caveat on LoadBackendOptionsMap would normally forbid. It is correct here because
+  // Module::load deep-copies into Module-owned storage before returning, and the lazy
+  // load_method that forward() triggers consumes that copy -- see the doc comment on
+  // Module::load(const LoadBackendOptionsMap&, Verification).
+  executorch::runtime::Error loadErr;
+  if (workspaceSharingMode >= 0) {
+    BackendOptions<1> xnnOpts;
+    // Key from backends/xnnpack/runtime/XNNPACKBackend.h (workspace_sharing_mode_option_key).
+    xnnOpts.set_option("workspace_sharing_mode", workspaceSharingMode);
+    LoadBackendOptionsMap optionsMap;
+    // Backend id from the same header (xnnpack_backend_key). Spelled EXACTLY "XnnpackBackend":
+    // Method::load matches it against the .pte's delegate id, and a mismatch is a SILENT no-op,
+    // not an error.
+    optionsMap.set_options("XnnpackBackend", xnnOpts.view());
+    loadErr = state_->module.load(optionsMap);
+  } else {
+    loadErr = state_->module.load();
+  }
+  if (loadErr != executorch::runtime::Error::Ok) {
     throw std::runtime_error("EtRuntime: failed to load .pte: " + ptePath);
+  }
+  // Force the "forward" Method to load too. Module::load() and Module::method_meta() are both
+  // PROGRAM-level: method_meta() calls load() and then program_->method_meta(), never load_method.
+  // Delegate init -- the only place XnnpackBackendOptions::resolve_sharing_mode runs -- happens in
+  // load_method, which is otherwise triggered lazily by the first forward(). Without this call the
+  // runtime spec above would sit unused until first inference, so an invalid mode would surface at
+  // predict() rather than at load, breaking this codebase's "load throws" contract.
+  //
+  // Side effect, intended: the XNNPACK subgraph compile now happens at construction instead of on
+  // the first forward(). In the timing harness that shifts cost from cold_ms into load_ms; warmup
+  // is discarded there, so steady-state numbers are unaffected.
+  if (state_->module.load_forward() != executorch::runtime::Error::Ok) {
+    throw std::runtime_error("EtRuntime: failed to load \"forward\" from .pte: " + ptePath);
   }
   state_->meta = buildMethodMeta(state_->module);
 
