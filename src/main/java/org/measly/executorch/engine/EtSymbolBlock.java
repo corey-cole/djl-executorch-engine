@@ -20,13 +20,22 @@ import org.measly.executorch.jni.EtTensor;
  * ExecuTorch {@code Module} may not support concurrent execution. Use one {@code Model} /
  * {@code Predictor} per thread, and do not close the model while a forward call is in flight.
  *
- * <p><b>Threading, and why more threads is usually wrong.</b> The rule above is about
- * <i>safety</i>, not throughput. XNNPACK-delegated models already parallelize inside a single
- * {@code forward()} on ExecuTorch's shared intra-op pool, and concurrent delegate calls serialize
- * on a process-global workspace mutex — so N {@code Predictor}s on N threads is typically slower
- * than one, not N× faster. Tune {@code ai.djl.executorch.num_threads} before adding caller
- * threads. Measured on a 4-core/8-thread host with MobileNetV2: 1 thread 462 forwards/s, 4
- * threads 305, 8 threads 147 (peak RSS 33 MB → 224 MB). Ratios on larger hosts are unmeasured.
+ * <p><b>Threading, and why more threads is usually wrong <i>under the default sharing mode</i>.</b>
+ * The rule above is about <i>safety</i>, not throughput. XNNPACK-delegated models already
+ * parallelize inside a single {@code forward()} on ExecuTorch's shared intra-op pool, and under the
+ * shipped {@code global} workspace sharing mode concurrent delegate calls serialize on one
+ * process-global workspace mutex — so N {@code Predictor}s on N threads is typically slower than
+ * one, not N× faster. Tune {@code ai.djl.executorch.num_threads} before adding caller threads.
+ * Measured on a 4-core/8-thread host with MobileNetV2: 1 thread 462 forwards/s, 4 threads 305, 8
+ * threads 147 (peak RSS 33 MB → 224 MB). Ratios on larger hosts are unmeasured.
+ *
+ * <p><b>These figures are conditional on that mutex.</b> Loading a model with
+ * {@code Criteria.optOption("workspaceSharingMode", "disabled")} gives it a private workspace, and
+ * caller threads then scale: measured achieved parallelism at one intra-op thread was 1.12× / 1.12×
+ * / 1.12× / 1.17× at 1/2/4/8 caller threads under {@code global}, versus 1.12× / 2.23× / 4.35× /
+ * 7.13× under {@code disabled}. The cost is activation-arena memory per delegate instance. Prefer
+ * intra-op tuning first; reach for {@code disabled} when several models with differing call rates
+ * share a JVM and memory is not the binding constraint.
  */
 public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable {
 

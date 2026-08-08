@@ -47,7 +47,7 @@ class LoggingBridgeIT {
         Path corrupt = Paths.get(getClass().getResource("/models/corrupt.pte").toURI());
 
         assertThrows(RuntimeException.class,
-                () -> EtNative.loadModule(corrupt.toAbsolutePath().toString()));
+                () -> EtNative.loadModule(corrupt.toAbsolutePath().toString(), -1));
 
         assertTrue(
                 appender.list.stream().anyMatch(e -> e.getLevel() == Level.ERROR),

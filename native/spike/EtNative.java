@@ -12,8 +12,8 @@ public final class EtNative {
 
     private EtNative() {}
 
-    /** Loads a .pte and returns an opaque native handle. */
-    public static native long loadModule(String ptePath);
+    /** Loads a .pte and returns an opaque native handle. workspaceSharingMode: -1 to omit the spec. */
+    public static native long loadModule(String ptePath, int workspaceSharingMode);
 
     /** Runs forward(a, b) on a 2-input float model, returns the output as a float[]. */
     public static native float[] forwardFloat(long handle, float[] a, float[] b);

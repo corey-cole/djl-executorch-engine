@@ -327,4 +327,27 @@ TEST_CASE("intraop: a reset after a runtime exists is a logged no-op") {
   REQUIRE(intraOpThreads() == cur);
 }
 
+// Per-model XNNPACK workspace sharing (spec 2026-08-08). add.pte is XNNPACK-delegated (its
+// delegate id string is "XnnpackBackend"), so the runtime spec is actually consumed here.
+TEST_CASE("workspace: every valid sharing mode loads") {
+  REQUIRE_NOTHROW([] { EtRuntime rt(ADD_PTE_PATH, 0); }());  // Disabled
+  REQUIRE_NOTHROW([] { EtRuntime rt(ADD_PTE_PATH, 1); }());  // PerModel
+  REQUIRE_NOTHROW([] { EtRuntime rt(ADD_PTE_PATH, 2); }());  // Global
+}
+
+TEST_CASE("workspace: omitting the mode (-1) loads on the runtime default") {
+  REQUIRE_NOTHROW([] { EtRuntime rt(ADD_PTE_PATH, -1); }());
+  REQUIRE_NOTHROW([] { EtRuntime rt(ADD_PTE_PATH); }());  // same thing via the default argument
+}
+
+// THE WIRING PROOF. XnnpackBackendOptions::resolve_sharing_mode returns InvalidArgument for an
+// out-of-range mode and XnnpackBackend::init propagates it, so the load fails -- but ONLY if the
+// spec actually reached the XNNPACK backend. If the backend id or the option key were misspelled,
+// Method::load would hand the backend an empty span, the mode would silently stay at the default,
+// and this load would SUCCEED. There is no read-back API that would otherwise catch that: the
+// backend's get_option returns the process-global value, not the per-model resolved one, and
+// init does not log the mode it resolved. Do not delete this test as a mere bad-input check.
+TEST_CASE("workspace: an out-of-range mode is rejected by the backend (proves the spec lands)") {
+  REQUIRE_THROWS([] { EtRuntime rt(ADD_PTE_PATH, 99); }());
+}
 

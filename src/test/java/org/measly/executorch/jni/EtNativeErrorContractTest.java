@@ -19,13 +19,13 @@ class EtNativeErrorContractTest {
     void loadModuleWithMissingFileThrowsRuntimeException() {
         TestSupport.assumeNativeLibraryAvailable();
         assertThrows(
-                RuntimeException.class, () -> EtNative.loadModule("/nonexistent/foo.pte"));
+                RuntimeException.class, () -> EtNative.loadModule("/nonexistent/foo.pte", -1));
     }
 
     @Test
     void forwardWithHeapInputBufferThrowsIllegalArgumentException() {
         TestSupport.assumeNativeLibraryAvailable();
-        long handle = EtNative.loadModule(TestSupport.addPtePath());
+        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1);
         try {
             // Heap ByteBuffer: GetDirectBufferAddress returns null, exercising the exact
             // forward() data-site check that issue #12 fixes.

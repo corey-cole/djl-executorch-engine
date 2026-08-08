@@ -16,7 +16,15 @@ public final class EtNative {
 
     private EtNative() {}
 
-    public static native long loadModule(String ptePath);
+    /**
+     * Loads a .pte.
+     *
+     * @param ptePath path to the model file
+     * @param workspaceSharingMode XNNPACK workspace sharing for this model: 0=Disabled, 1=PerModel,
+     *     2=Global, -1 to send no spec and leave the runtime default in force
+     * @return the native handle
+     */
+    public static native long loadModule(String ptePath, int workspaceSharingMode);
 
     public static native EtMethodMeta methodMeta(long handle);
 

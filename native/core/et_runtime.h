@@ -65,7 +65,18 @@ class ForwardResult {
 // Owns the ExecuTorch Module. Throws std::runtime_error on load/forward/meta failure.
 class EtRuntime {
  public:
-  explicit EtRuntime(const std::string& ptePath);
+  // workspaceSharingMode: XNNPACK workspace sharing for THIS model, supplied as a per-load backend
+  // runtime spec (Module::load(LoadBackendOptionsMap)). 0=Disabled, 1=PerModel, 2=Global, matching
+  // executorch::backends::xnnpack::WorkspaceSharingMode in backends/xnnpack/runtime/XNNPACKBackend.h
+  // -- a header the runtime tarball does NOT install, hence the hardcoded values.
+  //
+  // -1 omits the spec entirely, leaving whatever default the runtime was compiled with (Global for
+  // our pin: EXECUTORCH_XNNPACK_SHARED_WORKSPACE=ON). Omitting is deliberately not the same as
+  // passing 2 -- it follows the pin rather than pinning a value we would have to keep in sync.
+  //
+  // Any other value is passed through to ExecuTorch, which rejects it at delegate init and fails
+  // the load. et_runtime_test.cpp depends on that to prove the spec reaches the backend.
+  explicit EtRuntime(const std::string& ptePath, int workspaceSharingMode = -1);
   ~EtRuntime();
   EtRuntime(const EtRuntime&) = delete;
   EtRuntime& operator=(const EtRuntime&) = delete;
