@@ -79,22 +79,32 @@ the bottleneck and masks the workspace lock entirely, which would make the whole
 wrong thing. With a batch of ~32 it is a genuine GEMM, compute-bound, and the ~1 MB of weights stay
 resident in L2 — so contention that shows up is lock contention, not bandwidth starvation.
 
-### 3.4 Starting constants, and how they get finalised
+### 3.4 Final constants, measured
 
-Starting point, chosen to land near 8 MFLOP per forward:
+Measured on the tuning host — **11th Gen Intel Core i7-1185G7 @ 3.00 GHz (4P/8T, Linux)** — with
+the authoritative native figure, `ET_INTRAOP_THREADS=1 ./native/bench/et_scaling_harness <pte> 1 2000 200`
+(`per_thread_mean_ms` at one caller thread *is* the per-forward cost at one intra-op thread).
+Consecutive bursts drift as the laptop's turbo budget drains, so each run was taken after ≥4 min
+of idle, with the budget fresh.
 
-| constant     | start |
+| constant     | final |
 |--------------|-------|
 | `BATCH`      | 32    |
 | `HIDDEN`     | 256   |
-| `DEPTH`      | 4     |
+| `DEPTH`      | 5     |
 | `N_BUCKETS`  | 64    |
 
-**This estimate carries roughly a ±3× error bar** — it assumes ~20 GFLOP/s of single-threaded f32
-GEMM, which is a guess about the host, not a measurement. The export script therefore takes all
-four as named constants and **prints the measured per-forward cost** at export time. Retuning is
-mechanical: adjust, re-export, read the printed number. This document is updated with the final
-tuned values once measured, and the measured cost is recorded in the script's header comment.
+Measured cost at one intra-op thread, three runs: **351 / 354 / 358 µs** — inside the 300–500 µs
+target of §2 with headroom on both sides. For reference, the default-pool (8-thread) figure from
+`et_timing_harness` is 140 µs, and the export script's Python-runtime figure is ~285 µs at default
+threads (a different build with different overheads — not the tuning number).
+
+Tuning history: `DEPTH=4` measured **284 µs** — just under the band floor — so `DEPTH` was raised to
+5. Cost scales linearly with `DEPTH` (~1.25× for +25% FLOPs) because the ~1.25 MB of weights per
+branch stay resident in the per-core L2; the batch stays at 32 to keep the `Linear` stack a
+compute-bound GEMM (§3.3). The final constants are the ones in
+`tools/scripts/export_stress_model.py`, whose header records the measured cost, and the `.pte` +
+goldens committed together carry them.
 
 ## 4. Correctness oracle
 
@@ -286,3 +296,39 @@ should be.
 - `per_model` in the sweep (§6.2).
 - `weight_cache_enabled`, which remains deliberately unexposed per `CLAUDE.md`.
 - Any CI wiring for either arm.
+
+## 10. Measured results
+
+Host: **11th Gen Intel Core i7-1185G7 @ 3.00 GHz, 4P/8T, Linux** (ThinkPad T14 Gen 2i). All
+measurements below were taken on this box; absolute numbers are state-dependent (this laptop's
+turbo budget drains under sustained AVX2 load, roughly halving single-thread clocks after ~1 min
+of continuous work), so the *ratios* are the evidence, not the wall figures.
+
+`./gradlew stressSweep` (9 cells, 10 s each, two forked JVMs because the intra-op pool is
+process-global and write-once), report `build/reports/stress/sweep.tsv`:
+
+| threads | mode | intraop | forwards | wall_s | fwd_per_s | mean_ms | parallelism | peak_rss_kb |
+|---------|------|---------|----------|--------|-----------|---------|-------------|-------------|
+| 1 | global | 1 | 12496 | 10.006 | 1248.8 | 0.8007 | 1.121 | 596308 |
+| 1 | disabled | 1 | 13080 | 10.005 | 1307.3 | 0.7649 | 1.029 | 596308 |
+| 2 | global | 1 | 12960 | 10.011 | 1294.5 | 1.5450 | 1.146 | 651500 |
+| 2 | disabled | 1 | 19040 | 10.004 | 1903.2 | 1.0509 | 2.012 | 700376 |
+| 4 | global | 1 | 12256 | 10.016 | 1223.6 | 3.2690 | 1.149 | 730548 |
+| 4 | disabled | 1 | 24824 | 10.004 | 2481.4 | 1.6120 | 3.983 | 730548 |
+| 8 | global | 1 | 12120 | 10.030 | 1208.4 | 6.6204 | 1.154 | 778680 |
+| 8 | disabled | 1 | 26136 | 10.025 | 2607.1 | 3.0686 | 6.666 | 778680 |
+| 1 | global | default | 17408 | 10.001 | 1740.6 | 0.5745 | 5.495 | 591828 |
+
+Shape, as predicted:
+
+- **`global` is flat near 1** — achieved parallelism 1.121/1.146/1.149/1.154 at 1/2/4/8 caller
+  threads; total throughput ~1.2–1.3 k forwards/s regardless of thread count. The process-global
+  workspace mutex serializes the delegate calls, exactly the §6.2 expectation.
+- **`disabled` climbs with caller threads** — 1.029/2.012/3.983/6.666. Sub-linear at 8 threads on
+  a 4P/8T host, as expected.
+- This corroborates the MobileNetV2 finding recorded in `CLAUDE.md` (global
+  1.12/1.12/1.12/1.17 vs disabled 1.12/2.23/4.35/7.13): same shape, same mechanism, a different
+  model — so the result is not a MobileNetV2 artifact.
+- The intra-op=default confirmation cell is ~1.4× faster per forward than the intra-op=1 cells
+  (the baseline cell's parallel GEMM), which is why the sweep's contention cells must pin
+  `ai.djl.executorch.num_threads=1`.

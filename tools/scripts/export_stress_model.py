@@ -38,6 +38,14 @@ BATCH is load-bearing. At batch 1 the Linear stack is a GEMV -- memory-bandwidth
 becomes the bottleneck and masks the workspace lock entirely. At batch 32 it is a real GEMM,
 compute-bound, with ~1 MB of weights that stay resident in L2.
 
+TUNED CONSTANTS (measured, not estimated -- see the design doc, section 3.4). On the measurement
+host (11th Gen Intel Core i7-1185G7 @ 3.00 GHz, 4P/8T) the authoritative native figure is
+ET_INTRAOP_THREADS=1 ./native/bench/et_scaling_harness ... 1 2000 200:
+
+  DEPTH=4: 284 us/forward at one intra-op thread -- just under the 300-500 us target band.
+  DEPTH=5: 354 us/forward (350.9/354.4/357.6) -- in band. Cost scales linearly with DEPTH; the
+           ~1.25 MB of weights per branch stay L2-resident, so DEPTH is the cheapest knob.
+
 Run from the repo root:
 
     PATH=$HOME/workspace/executorch/.venv/bin:$PATH \
@@ -59,7 +67,7 @@ from executorch.backends.xnnpack.partition.xnnpack_partitioner import XnnpackPar
 SEED = 20260808
 BATCH = 32
 HIDDEN = 256
-DEPTH = 4
+DEPTH = 5
 N_BUCKETS = 64
 RAMP = 1e-5          # input ramp step; MUST match StressTranslator.RAMP exactly
 SAMPLE_COUNT = 16    # strided output samples recorded per case
