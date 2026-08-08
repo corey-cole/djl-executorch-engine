@@ -160,7 +160,6 @@ public final class EtEngine extends Engine {
             }
             int n = resolveIntraOpThreads(
                     pendingIntraOpThreads, System.getProperty(NUM_THREADS_PROPERTY));
-            sealedIntraOpThreads = n;
             intraOpSealed = true;
             if (n >= 1) {
                 int actual = EtNative.setIntraOpThreads(n);
@@ -168,9 +167,11 @@ public final class EtEngine extends Engine {
                     logger.warn("{}: requested {} but the pool reports {}; using {}",
                             NUM_THREADS_PROPERTY, n, actual, actual);
                 }
+                sealedIntraOpThreads = actual;   // record the APPLIED count (issue #25)
                 logger.info("intra-op thread pool sealed at {} ({}={})",
                         actual, NUM_THREADS_PROPERTY, n);
             } else {
+                sealedIntraOpThreads = n;        // -1 = the runtime default
                 logger.info("intra-op thread pool left at the runtime default ({})",
                         EtNative.intraOpThreads());
             }
