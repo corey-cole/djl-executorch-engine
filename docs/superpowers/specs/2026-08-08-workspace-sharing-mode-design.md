@@ -32,6 +32,13 @@ saturation does not mask the lock, achieved parallelism (CPU-seconds ÷ wall-sec
 | 4 | 1.12 | 4.35 |
 | 8 | 1.17 | 7.13 |
 
+These figures were obtained via `native/harness/et_scaling_harness.cpp`, which sets the mode through
+the process-global `set_option("XnnpackBackend", ...)` backend path — not through the per-load
+runtime spec this design ships (section 5). Both paths converge on the same `WorkspaceSharingMode` at
+delegate init (`XnnpackBackendOptions::resolve_sharing_mode` does not distinguish how the option
+arrived), so the numbers are expected to transfer, but the shipped per-load path has not itself been
+measured.
+
 ## 2. What the modes mean
 
 `WorkspaceSharingMode` (`backends/xnnpack/runtime/XNNPACKBackend.h`):
@@ -111,11 +118,38 @@ if (mode >= 0) {
 } else {
   err = state_->module.load();
 }
+// Force the "forward" Method to load too, unconditionally.
+if (err == executorch::runtime::Error::Ok) {
+  err = state_->module.load_forward();
+}
 ```
 
 `LoadBackendOptionsMap` does not own its option spans, but `Module::load` deep-copies into
-Module-owned storage before returning and the lazy `load_method` triggered by `forward()` consumes
-that copy — so the stack-local `BackendOptions` and map are correct here.
+Module-owned storage before returning, so the stack-local `BackendOptions` and map are correct here.
+
+This turned out to need one more call than originally believed. The original draft of this section
+assumed the lazy `load_method` triggered by the first `forward()` would consume the deep-copied spec,
+so `module.load()` (or `module.load(map)`) alone would be enough. That is wrong: `Module::load()` and
+`Module::method_meta()` are both **program-level** — `method_meta()` calls `load()` and then
+`program_->method_meta()`, and never touches `load_method`. Delegate init, which is the only place
+`XnnpackBackendOptions::resolve_sharing_mode` runs, happens inside `load_method`, which is otherwise
+triggered lazily by the first `forward()`. Left unforced, the runtime spec built above would sit
+unused until first inference — and worse, `EtRuntime`'s "load throws" contract, which is meant to
+surface a bad `.pte` or a bad option at construction, would not: an invalid mode would only surface at
+`predict()` time.
+
+So the shipped constructor in `native/core/et_runtime.cpp` calls `state_->module.load_forward()`
+**unconditionally** — not only when a mode is specified — right after the `module.load()`/
+`module.load(map)` call above, and throws if it does not return `Error::Ok`. This is required for
+every model this engine loads, whether or not `workspaceSharingMode` is set, because it is also what
+makes delegate init (and therefore any other XNNPACK-backend errors) surface at load rather than at
+first `forward()`.
+
+**Accepted consequence.** The XNNPACK subgraph compile that used to happen lazily on the first
+`forward()` now happens at construction, for every model. In `native/harness/et_timing_harness.cpp`
+this moves that cost from `cold_ms` into `load_ms`; the harness discards a warmup call before timing
+steady state, so steady-state throughput numbers are unaffected. Model loading is correspondingly
+slower and the first inference is correspondingly faster than before this change.
 
 Required headers, both present in the pinned tarball: `runtime/backend/backend_options_map.h` and
 `runtime/backend/options.h`. `backends/xnnpack/runtime/XNNPACKBackend.h` is **not** installed, so the
@@ -161,7 +195,10 @@ process-wide.
   each succeeds. Then mode `99` throws. That last case is the wiring proof: an out-of-range mode can
   only fail if the spec actually reached the XNNPACK backend under our exact backend-id and
   option-key spellings. Both strings live in `et_runtime.cpp`, so this is the correct layer. It is
-  deterministic and involves no timing.
+  deterministic and involves no timing. Construction alone is sufficient to reach the backend because
+  the `EtRuntime` constructor calls `module.load_forward()` unconditionally (section 5) — delegate
+  init, where `resolve_sharing_mode` runs, happens inside `load_method`, so there is no need to drive
+  an actual `forward()` call to exercise this path.
 - **Java unit (no native)** — the string→int resolution table, option-beats-property precedence, and
   the unrecognised-value contract from section 6. Pure, safe in the shared JVM.
 - **Java integration** — `optOption("workspaceSharingMode", "disabled")` loads successfully; an

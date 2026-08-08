@@ -42,9 +42,15 @@ class WorkspaceSharingIT {
     }
 
     @Test
-    void modesComposeAcrossConcurrentlyLoadedModels() throws Exception {
-        // A model electing "disabled" is isolated regardless of what other loaded models chose.
-        // Both must remain independently usable while the other is open.
+    void twoModelsWithDifferentModesRemainIndependentlyUsableWhileBothAreOpen() throws Exception {
+        // NOT a concurrency test despite the older name: both loads and all predicts below are
+        // sequential. It also does not prove the option reached native XNNPACK sharing state --
+        // this arithmetic holds under ANY mode, including one that was silently ignored. It is a
+        // DJL-plumbing regression guard: two models opened with different workspaceSharingMode
+        // values stay independently loadable and predictable. For genuine cross-boundary evidence
+        // that the mode reaches the backend, see the mode-99 case in
+        // native/test/et_runtime_test.cpp (an out-of-range mode can only fail if the spec actually
+        // reached XNNPACK under our exact backend-id/option-key spellings).
         TestSupport.assumeNativeAvailable();
         try (ZooModel<float[], Float> isolated = criteriaWithMode("disabled").loadModel();
                 ZooModel<float[], Float> shared = criteriaWithMode("global").loadModel();
@@ -57,7 +63,12 @@ class WorkspaceSharingIT {
     }
 
     @Test
-    void anUnrecognizedModeFailsTheLoad() {
+    void anUnrecognizedModeIsRejectedByJavaBeforeAnyNativeCall() {
+        // EtWorkspaceSharing.resolve() throws IllegalArgumentException before the JNI call, so this
+        // proves Java-side rejection plus that DJL's Criteria stack does not swallow the exception --
+        // not that the option ever reached native. For genuine cross-boundary evidence, see the
+        // mode-99 case in native/test/et_runtime_test.cpp, which drives an out-of-range mode across
+        // the JNI boundary into XNNPACK.
         TestSupport.assumeNativeAvailable();
         // Explicit per-model intent must not degrade silently to the default.
         assertThrows(Exception.class, () -> criteriaWithMode("disabeld").loadModel());

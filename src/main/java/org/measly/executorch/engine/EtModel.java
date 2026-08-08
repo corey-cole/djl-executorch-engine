@@ -45,14 +45,17 @@ public class EtModel extends BaseModel {
         if (modelFile == null) {
             throw new FileNotFoundException(".pte file not found in: " + modelPath);
         }
+        // Per-model, resolved fresh on every load: nothing is sealed, and load order does not
+        // matter. Throws IllegalArgumentException for a bad per-model option. Resolved before the
+        // intra-op seal below so a bad option here fails fast, before anything irreversible happens.
+        int workspaceSharingMode =
+                EtWorkspaceSharing.resolve(options, System.getProperty(EtWorkspaceSharing.PROPERTY));
         // First load seals the process-global intra-op thread pool (applies pending/property value,
         // logs the outcome); later loads are no-ops. Must precede loadModule: delegate init during
         // load submits work to the pool.
         EtEngine.sealIntraOpThreads();
-        // Per-model, by contrast: resolved fresh on every load, nothing is sealed, and load order
-        // does not matter. Throws IllegalArgumentException for a bad per-model option.
-        int workspaceSharingMode =
-                EtWorkspaceSharing.resolve(options, System.getProperty(EtWorkspaceSharing.PROPERTY));
+        logger.info(
+                "model {} workspaceSharingMode={}", getName(), EtWorkspaceSharing.name(workspaceSharingMode));
         // Not unit-tested below this point: loadModule/methodMeta/destroy require the native library
         // (integration-tested via EtModelTest#loadAndForwardAddModel).
         long handle = EtNative.loadModule(modelFile.toString(), workspaceSharingMode);

@@ -84,6 +84,29 @@ final class EtWorkspaceSharing {
      * @return the native mode int, or {@link #UNSPECIFIED}
      * @throws IllegalArgumentException if the per-model option carries an unrecognized value
      */
+    /**
+     * Renders a resolved mode int as a human-readable name, for logging.
+     *
+     * @param mode one of {@link #UNSPECIFIED}, {@link #DISABLED}, {@link #PER_MODEL}, {@link
+     *     #GLOBAL}
+     * @return {@code "unspecified"}, {@code "disabled"}, {@code "per_model"}, {@code "global"}, or
+     *     {@code "unknown(<mode>)"} for any other int
+     */
+    static String name(int mode) {
+        switch (mode) {
+            case UNSPECIFIED:
+                return "unspecified";
+            case DISABLED:
+                return "disabled";
+            case PER_MODEL:
+                return "per_model";
+            case GLOBAL:
+                return "global";
+            default:
+                return "unknown(" + mode + ")";
+        }
+    }
+
     static int resolve(Map<String, ?> options, String propertyValue) {
         Object raw = options == null ? null : options.get(OPTION_KEY);
         if (raw != null) {

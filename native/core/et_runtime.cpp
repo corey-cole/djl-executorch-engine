@@ -90,12 +90,22 @@ EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode)
   if (workspaceSharingMode >= 0) {
     BackendOptions<1> xnnOpts;
     // Key from backends/xnnpack/runtime/XNNPACKBackend.h (workspace_sharing_mode_option_key).
-    xnnOpts.set_option("workspace_sharing_mode", workspaceSharingMode);
+    if (xnnOpts.set_option("workspace_sharing_mode", workspaceSharingMode) !=
+        executorch::runtime::Error::Ok) {
+      throw std::runtime_error(
+          "EtRuntime: failed to set workspace_sharing_mode option (mode=" +
+          std::to_string(workspaceSharingMode) + ")");
+    }
     LoadBackendOptionsMap optionsMap;
-    // Backend id from the same header (xnnpack_backend_key). Spelled EXACTLY "XnnpackBackend":
-    // Method::load matches it against the .pte's delegate id, and a mismatch is a SILENT no-op,
-    // not an error.
-    optionsMap.set_options("XnnpackBackend", xnnOpts.view());
+    // Backend id from the same header (xnnpack_backend_key). Spelled EXACTLY "XnnpackBackend": the
+    // id match happens during delegate init, which Method::load drives (surfacing through
+    // BackendInitContext::get_runtime_spec inside XnnpackBackendOptions::resolve_sharing_mode), and
+    // a mismatch there is a SILENT no-op, not an error.
+    if (optionsMap.set_options("XnnpackBackend", xnnOpts.view()) !=
+        executorch::runtime::Error::Ok) {
+      throw std::runtime_error(
+          "EtRuntime: failed to register XnnpackBackend options in LoadBackendOptionsMap");
+    }
     loadErr = state_->module.load(optionsMap);
   } else {
     loadErr = state_->module.load();

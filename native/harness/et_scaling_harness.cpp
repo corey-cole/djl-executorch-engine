@@ -105,6 +105,13 @@ long peak_rss_kb() {
 // loads: the backend reads these at init() and the keys are documented as affecting only
 // subsequently loaded models.
 //
+// Deliberate: this harness uses the process-global set_option(...) path below, not the per-load
+// LoadBackendOptionsMap route the ENGINE uses (native/core/et_runtime.cpp). That route is a better
+// fit for a single-process sweep across fixed modes; the design (2026-08-08-workspace-sharing-mode-
+// design.md) explicitly does NOT use this path in the engine, because process-global set_option
+// affects only subsequently loaded models and makes behaviour depend on load order. Do not copy this
+// file's approach into engine code.
+//
 // The option keys are string literals rather than the constants from
 // backends/xnnpack/runtime/XNNPACKBackend.h because the runtime tarball installs runtime/backend/
 // but NOT backends/xnnpack/runtime/ -- that header is not available to consumers. If the runtime

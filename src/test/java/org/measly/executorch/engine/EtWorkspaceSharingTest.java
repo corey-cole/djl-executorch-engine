@@ -82,6 +82,15 @@ class EtWorkspaceSharingTest {
     }
 
     @Test
+    void nameRendersEachModeHumanReadably() {
+        assertEquals("unspecified", EtWorkspaceSharing.name(EtWorkspaceSharing.UNSPECIFIED));
+        assertEquals("disabled", EtWorkspaceSharing.name(EtWorkspaceSharing.DISABLED));
+        assertEquals("per_model", EtWorkspaceSharing.name(EtWorkspaceSharing.PER_MODEL));
+        assertEquals("global", EtWorkspaceSharing.name(EtWorkspaceSharing.GLOBAL));
+        assertEquals("unknown(99)", EtWorkspaceSharing.name(99));
+    }
+
+    @Test
     void nonStringOptionValuesAreCoerced() {
         // DJL's options map is Map<String, ?>; callers can put anything in it.
         Map<String, Object> options = new HashMap<>();
