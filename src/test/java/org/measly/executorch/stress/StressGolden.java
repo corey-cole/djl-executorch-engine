@@ -116,12 +116,16 @@ public final class StressGolden {
         JsonObject cfg = require(root, "config", path).getAsJsonObject();
         Config config =
                 new Config(
-                        cfg.get("batch").getAsInt(),
-                        cfg.get("hidden").getAsInt(),
-                        cfg.get("depth").getAsInt(),
-                        cfg.get("nBuckets").getAsInt(),
-                        cfg.get("ramp").getAsFloat());
-        int stride = require(root, "sampleStride", path).getAsInt();
+                        (int) number(require(cfg, "batch", path), "batch", path),
+                        (int) number(require(cfg, "hidden", path), "hidden", path),
+                        (int) number(require(cfg, "depth", path), "depth", path),
+                        (int) number(require(cfg, "nBuckets", path), "nBuckets", path),
+                        (float) number(require(cfg, "ramp", path), "ramp", path));
+        int stride = (int) number(require(root, "sampleStride", path), "sampleStride", path);
+        if (stride <= 0) {
+            throw new IllegalStateException(
+                    "Golden file " + path + " has non-positive sampleStride " + stride);
+        }
         JsonArray arr = require(root, "cases", path).getAsJsonArray();
         if (arr.size() == 0) {
             throw new IllegalStateException("Golden file " + path + " has no cases");
@@ -131,8 +135,8 @@ public final class StressGolden {
         List<Case> cases = new ArrayList<>(arr.size());
         for (int i = 0; i < arr.size(); i++) {
             JsonObject c = arr.get(i).getAsJsonObject();
-            String name = c.get("name").getAsString();
-            JsonArray s = c.get("samples").getAsJsonArray();
+            String name = require(c, "name", path).getAsString();
+            JsonArray s = require(c, "samples", path).getAsJsonArray();
             if (s.size() != expectedSamples) {
                 throw new IllegalStateException(
                         "Golden case "
@@ -146,16 +150,16 @@ public final class StressGolden {
             }
             float[] samples = new float[s.size()];
             for (int j = 0; j < samples.length; j++) {
-                samples[j] = s.get(j).getAsFloat();
+                samples[j] = (float) number(s.get(j), "sample[" + j + "]", path);
             }
             cases.add(
                     new Case(
                             name,
-                            c.get("v1").getAsFloat(),
-                            c.get("v2").getAsFloat(),
-                            c.get("sum").getAsDouble(),
-                            c.get("absSum").getAsDouble(),
-                            c.get("maxAbs").getAsDouble(),
+                            (float) number(require(c, "v1", path), "v1", path),
+                            (float) number(require(c, "v2", path), "v2", path),
+                            number(require(c, "sum", path), "sum", path),
+                            number(require(c, "absSum", path), "absSum", path),
+                            number(require(c, "maxAbs", path), "maxAbs", path),
                             samples));
         }
         return new StressGolden(config, stride, cases);
@@ -168,6 +172,19 @@ public final class StressGolden {
                     "Golden file " + path + " is missing required key '" + key + "'");
         }
         return e;
+    }
+
+    /**
+     * Reads a required numeric value, surfacing a non-numeric one as an {@link IllegalStateException}
+     * naming the field. Guards the file's own numbers, which gson would otherwise report as {@link
+     * NumberFormatException} or a cast failure.
+     */
+    private static double number(com.google.gson.JsonElement e, String what, Path path) {
+        if (!e.isJsonPrimitive() || !e.getAsJsonPrimitive().isNumber()) {
+            throw new IllegalStateException(
+                    "Golden file " + path + ": '" + what + "' is not a number");
+        }
+        return e.getAsDouble();
     }
 
     /** Throws {@link AssertionError} if {@code output} does not match the recorded digest. */

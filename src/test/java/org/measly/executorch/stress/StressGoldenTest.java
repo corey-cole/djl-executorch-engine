@@ -99,4 +99,25 @@ class StressGoldenTest {
         StressGolden g = StressGolden.load(write(dir, MINIMAL));
         assertThrows(AssertionError.class, () -> g.verify(g.cases().get(0), new float[] {1.0f}));
     }
+
+    @Test
+    void aConfigMissingANestedKeyIsRejected(@TempDir Path dir) throws IOException {
+        Path p = write(dir, MINIMAL.replace("\"batch\":2,", ""));
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> StressGolden.load(p));
+        assertTrue(e.getMessage().contains("batch"), "message must name the missing key");
+    }
+
+    @Test
+    void aNonPositiveSampleStrideIsRejected(@TempDir Path dir) throws IOException {
+        Path p = write(dir, MINIMAL.replace("\"sampleStride\":2", "\"sampleStride\":0"));
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> StressGolden.load(p));
+        assertTrue(e.getMessage().contains("sampleStride"), "message must name the offending field");
+    }
+
+    @Test
+    void aNonNumericSampleElementIsRejected(@TempDir Path dir) throws IOException {
+        Path p = write(dir, MINIMAL.replace("[1.0,3.0]", "[1.0,\"boom\"]"));
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> StressGolden.load(p));
+        assertTrue(e.getMessage().contains("sample"), "message must localise the bad element");
+    }
 }
