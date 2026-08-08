@@ -233,6 +233,11 @@ std::span<const OutputView> ForwardResult::outputs() const {
 }
 
 uint32_t setIntraOpThreads(uint32_t n) {
+  if (n < 1) {
+    // uint32_t can only observe 0 here (a negative jint is absorbed by the shim's guard);
+    // keep the no-op-and-report contract for native callers too (issue #24).
+    return intraOpThreads();
+  }
   executorch::extension::threadpool::ThreadPool* pool =
       executorch::extension::threadpool::get_threadpool();
   pool->_unsafe_reset_threadpool(n);  // documented to always return true; no-ops for 0/unchanged

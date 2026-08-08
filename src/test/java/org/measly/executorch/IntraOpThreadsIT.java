@@ -9,6 +9,7 @@ import java.nio.file.Paths;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.measly.executorch.engine.EtEngine;
+import org.measly.executorch.jni.EtNative;
 
 /**
  * The only test proving the property reaches the native pool end to end. Runs in a dedicated
@@ -39,6 +40,11 @@ class IntraOpThreadsIT {
             assertEquals("2", e.getMessage().substring(
                     e.getMessage().indexOf("at ") + 3,
                     e.getMessage().indexOf("; set")));
+            // Direct EtNative calls bypass the Java gate: the shim must refuse non-positive jint
+            // instead of casting it into the pool allocator (issue #24). Runtimes are alive here,
+            // so a misbehaving call would crash natively rather than throw.
+            assertEquals(2, EtNative.setIntraOpThreads(-1));
+            assertEquals(2, EtNative.setIntraOpThreads(0));
         }
     }
 }

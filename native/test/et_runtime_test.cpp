@@ -311,7 +311,7 @@ TEST_CASE("intraop: setIntraOpThreads resizes the shared pool and reports the ap
 
 TEST_CASE("intraop: upstream quirks -- 0 is silently ignored, same-count reset is a no-op") {
   const uint32_t cur = intraOpThreads();
-  REQUIRE(setIntraOpThreads(0) == cur);   // upstream early-returns for 0: unchanged
+  REQUIRE(setIntraOpThreads(0) == cur);   // core guards n < 1 (issue #24): 0 is a no-op before upstream sees it
   REQUIRE(intraOpThreads() == cur);
   REQUIRE(setIntraOpThreads(cur) == cur); // early-returns for the current count: unchanged
   REQUIRE(intraOpThreads() == cur);
