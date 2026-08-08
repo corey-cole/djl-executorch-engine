@@ -104,6 +104,7 @@ tasks.register<Test>("stressSweepCore") {
     classpath = sourceSets["test"].runtimeClasspath
     useJUnitPlatform { includeTags("stress-sweep") }
     jvmArgs("-Dai.djl.executorch.num_threads=1")
+    systemProperty("et.stress.cellSeconds", providers.gradleProperty("stressCellSeconds").getOrElse("10"))
 }
 
 tasks.register<Test>("stressSweepBaseline") {
@@ -113,6 +114,7 @@ tasks.register<Test>("stressSweepBaseline") {
     classpath = sourceSets["test"].runtimeClasspath
     useJUnitPlatform { includeTags("stress-baseline") }
     mustRunAfter(tasks.named("stressSweepCore")) // both append to one report; keep the order stable
+    systemProperty("et.stress.cellSeconds", providers.gradleProperty("stressCellSeconds").getOrElse("10"))
 }
 
 tasks.register("stressSweep") {
