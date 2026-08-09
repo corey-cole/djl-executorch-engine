@@ -21,6 +21,20 @@
 - **JMX registration failure is never fatal.** One logged warning, no retry, load proceeds.
 - **XNNPACK delegate workspace is out of scope** — `xnn_workspace_t` is opaque in the shipped `xnnpack.h`. Document the exclusion; do not approximate it.
 - Java code style follows the existing files: 4-space indent, 100-column soft limit, javadoc on public members.
+- **Every native build destroys the clangd index.** `.clangd` points at `native/build`, but
+  `native/build.sh:92` does `rm -rf "${NATIVE_BUILD_DIR}"` unconditionally and its configure does
+  **not** pass `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` (nor does `native/CMakeLists.txt` set it), so
+  `compile_commands.json` is gone after *any* build — host fast path included, not just container
+  runs. A container run additionally leaves the tree root-owned, so the regenerate fails until it is
+  chowned. This plan runs native builds in Tasks 1, 2, 3, and 10; restore the database afterwards
+  with:
+
+  ```bash
+  sudo chown -R "$(id -u):$(id -g)" native/build          # only needed after a container build
+  cmake -S native -B native/build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+  ```
+
+  Configure only — no `cmake --build` needed, the database is written at configure time.
 
 ---
 
@@ -109,8 +123,11 @@ If `plannedArenaBytes > 0` fails, do **not** weaken the assertion. Add a tempora
 `build_qa.sh` runs as root and does not chown its outputs back.
 
 ```bash
-sudo chown -R "$(id -u):$(id -g)" native/asan
+sudo chown -R "$(id -u):$(id -g)" native/asan native/build
+cmake -S native -B native/build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 ```
+
+The second command restores the clangd database that the build wiped (see Global Constraints).
 
 - [ ] **Step 7: Commit**
 
@@ -203,8 +220,11 @@ Expected: PASS.
 - [ ] **Step 6: Fix container file ownership**
 
 ```bash
-sudo chown -R "$(id -u):$(id -g)" native/asan
+sudo chown -R "$(id -u):$(id -g)" native/asan native/build
+cmake -S native -B native/build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 ```
+
+The second command restores the clangd database that the build wiped (see Global Constraints).
 
 - [ ] **Step 7: Commit**
 
@@ -401,6 +421,12 @@ Java_org_measly_executorch_jni_EtNative_stagingBytes(JNIEnv* env, jclass, jlong 
 Expected: build succeeds and stages `libexecutorch_djl.so` into `src/main/resources/native/linux-x86_64/`.
 
 This is the local fast path and breaks the glibc-2.28 floor — correct for running tests, never for a release.
+
+It also wiped `native/build`, so restore the clangd database before doing any more C++ editing (no chown needed — this was a host build, not a container one):
+
+```bash
+cmake -S native -B native/build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+```
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
@@ -2022,10 +2048,12 @@ Expected: PASS.
 
 ```bash
 ./native/local_build_wrapper.sh native/build_qa.sh
-sudo chown -R "$(id -u):$(id -g)" native/asan
+sudo chown -R "$(id -u):$(id -g)" native/asan native/build
+cmake -S native -B native/build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 ```
 
-Expected: PASS, clean under ASan/LSan.
+Expected: PASS, clean under ASan/LSan. The last command restores the clangd database, which both
+this run and the Step 1 container build destroyed.
 
 - [ ] **Step 5: File the upstream issue**
 
