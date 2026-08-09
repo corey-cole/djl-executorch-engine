@@ -44,8 +44,8 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
     private final EtMethodMeta meta;
     // Serializes the stats cold path against close(): toStats() reads the native handle and
     // queries staging bytes, close() destroys the handle, and a destroy between the read and the
-    // JNI call would be a use-after-free. The lock is taken only by close()/toStats()/deregister
-    // (reentrant), never by forwardInternal — the hot path stays lock-free.
+    // JNI call would be a use-after-free. The lock is taken only by close() and toStats(), never
+    // by forwardInternal — the hot path stays lock-free.
     private final Object statsLock = new Object();
     // Attached by EtModel.load right after construction. Null only in the narrow window before
     // that, and in tests that build a block directly.
@@ -115,12 +115,12 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
     @Override
     public void close() {
         // Mutual exclusion with toStats(): a concurrent snapshot poll must never observe the
-        // handle between destroy() freeing it and the handle read. Reentrant — deregister() below
-        // calls toStats() on this block, which takes the same monitor.
+        // handle between destroy() freeing it and the handle read.
         synchronized (statsLock) {
             if (handle != 0) {
-                // Before destroy: deregister reads this block's counters for the closed-model
-                // rollup, and toStats() would report -1 staging bytes once the handle is zeroed.
+                // Deregister first so no poll can reach a handle this method is about to free.
+                // The rollup itself is order-independent — the registry holds the counters object
+                // directly, so it no longer has to read them back through this block.
                 EtEngineStats.deregister(handle);
                 EtNative.destroy(handle);
                 handle = 0;

@@ -1,6 +1,9 @@
 package org.measly.executorch.engine;
 
 import java.lang.management.ManagementFactory;
+import java.lang.ref.Reference;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -29,15 +32,49 @@ import org.slf4j.LoggerFactory;
  * check-then-act race at the flush boundary, and {@code percentile()} sorts the whole buffer on
  * every call. Use it for profiling; use this class for production monitoring.
  *
- * <p>Per-model detail covers live models only. A model's totals fold into the closed-model rollup
- * when it closes, so a restart-on-error loop cannot erase throughput history.
+ * <p>Per-model detail covers live models only. A model's totals fold into the rollup when it stops
+ * being tracked — whether it was closed properly or dropped without {@code close()} and later
+ * garbage-collected — so a restart-on-error loop cannot erase throughput history.
+ *
+ * <p>The registry holds models weakly, so it never keeps a leaked model alive on its own account.
+ * Note the corollary for {@code modelsLive}: a model that was dropped without {@code close()} is
+ * still counted until the GC actually reclaims it, so the figure is an upper bound rather than an
+ * instantaneous truth. It is not a substitute for closing models.
  */
 public final class EtEngineStats {
 
-    private static final Map<Long, EtSymbolBlock> LIVE = new ConcurrentHashMap<>();
+    private static final ReferenceQueue<EtSymbolBlock> REAPED = new ReferenceQueue<>();
+    private static final Map<Long, ModelRef> LIVE = new ConcurrentHashMap<>();
     private static final AtomicLong MODELS_LOADED = new AtomicLong();
     private static final AtomicLong CLOSED_FORWARD_COUNT = new AtomicLong();
     private static final AtomicLong CLOSED_FORWARD_TOTAL_NANOS = new AtomicLong();
+
+    /**
+     * A registry entry: the block <b>weakly</b>, its counters <b>strongly</b>.
+     *
+     * <p>Weak on the block because this map is static and lives for the JVM. A caller who drops a
+     * model without closing it already leaks the native handle; a strong entry here would also pin
+     * {@link EtSymbolBlock} — and through it the model's {@link EtNDManager} — for the life of the
+     * process, turning a native-only leak into a permanent heap one and making {@code modelsLive}
+     * climb forever. (It does not make a leaked model free: DJL's {@code BaseNDManager} attaches
+     * every base manager to a static system manager, so the manager stays reachable regardless.
+     * That retention is DJL's and predates this class.)
+     *
+     * <p>Strong on the counters because they are the only thing worth keeping: a few longs and two
+     * string references, independent of the block's object graph. Holding them lets a collected
+     * model's forwards still reach the rollup, which a bare {@code WeakReference} would lose —
+     * exactly the history the rollup exists to preserve.
+     */
+    private static final class ModelRef extends WeakReference<EtSymbolBlock> {
+        final long handle;
+        final EtModelCounters counters;
+
+        ModelRef(EtSymbolBlock block, long handle, EtModelCounters counters) {
+            super(block, REAPED);
+            this.handle = handle;
+            this.counters = counters;
+        }
+    }
 
     private static final String UNKNOWN = "unknown";
 
@@ -112,26 +149,46 @@ public final class EtEngineStats {
     }
 
     /** Records a newly loaded model. Called from {@link EtModel#load}. */
-    static void register(long handle, EtSymbolBlock block) {
-        LIVE.put(handle, block);
+    static void register(long handle, EtSymbolBlock block, EtModelCounters counters) {
+        purgeCollected(); // bounded by what the GC has reaped since the last call, usually nothing
+        LIVE.put(handle, new ModelRef(block, handle, counters));
         MODELS_LOADED.incrementAndGet();
     }
 
     /**
-     * Removes a model and folds its totals into the closed-model rollup. Called from {@link
-     * EtSymbolBlock#close()} <b>before</b> the native handle is released, so the counters are still
-     * readable. Idempotent: a second close finds nothing to remove.
+     * Removes a model and folds its totals into the rollup. Called from {@link
+     * EtSymbolBlock#close()}. Idempotent: a second close finds nothing to remove.
      */
     static void deregister(long handle) {
-        EtSymbolBlock block = LIVE.remove(handle);
-        if (block == null) {
-            return;
+        ModelRef ref = LIVE.remove(handle);
+        if (ref != null) {
+            foldIntoRollup(ref.counters);
         }
-        EtModelStats stats = block.toStats();
-        if (stats != null) {
-            CLOSED_FORWARD_COUNT.addAndGet(stats.getForwardCount());
-            CLOSED_FORWARD_TOTAL_NANOS.addAndGet(stats.getForwardTotalNanos());
+    }
+
+    /**
+     * Folds every model the GC has reclaimed since the last call into the rollup and drops its
+     * entry. Called from {@link #snapshot()} and {@link #register}, so the map self-heals on any
+     * activity; draining costs O(models collected), not O(models tracked).
+     */
+    private static void purgeCollected() {
+        for (Reference<? extends EtSymbolBlock> reaped = REAPED.poll();
+                reaped != null;
+                reaped = REAPED.poll()) {
+            ModelRef ref = (ModelRef) reaped;
+            // Two-argument remove, deliberately. If this handle was already deregistered by
+            // close() and the allocator has since handed the same address to a new model, the
+            // current mapping is a different ModelRef — removing by key alone would evict the live
+            // model and double-count this one. The compare-and-remove makes both impossible.
+            if (LIVE.remove(ref.handle, ref)) {
+                foldIntoRollup(ref.counters);
+            }
         }
+    }
+
+    private static void foldIntoRollup(EtModelCounters counters) {
+        CLOSED_FORWARD_COUNT.addAndGet(counters.forwardCount());
+        CLOSED_FORWARD_TOTAL_NANOS.addAndGet(counters.forwardTotalNanos());
     }
 
     /**
@@ -140,10 +197,15 @@ public final class EtEngineStats {
      * @return an immutable snapshot; never {@code null}, never throws
      */
     public static EtStatsSnapshot snapshot() {
+        purgeCollected();
         List<EtModelStats> models = new ArrayList<>(LIVE.size());
         long arena = 0;
         long staging = 0;
-        for (EtSymbolBlock block : LIVE.values()) {
+        for (ModelRef ref : LIVE.values()) {
+            EtSymbolBlock block = ref.get();
+            if (block == null) {
+                continue; // collected between the purge above and here; the next poll folds it in
+            }
             EtModelStats stats = block.toStats();
             if (stats == null) {
                 continue; // registered but counters not yet attached; nothing to report

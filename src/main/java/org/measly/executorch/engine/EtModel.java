@@ -72,14 +72,17 @@ public class EtModel extends BaseModel {
         }
         final long loadNanos = System.nanoTime() - loadStartNanos;
         EtSymbolBlock etBlock = new EtSymbolBlock(handle, (EtNDManager) manager, meta);
-        etBlock.attachCounters(
+        EtModelCounters counters =
                 new EtModelCounters(
                         getName(),
                         EtWorkspaceSharing.name(workspaceSharingMode),
                         meta.plannedArenaBytes,
-                        loadNanos));
+                        loadNanos);
+        etBlock.attachCounters(counters);
         block = etBlock;
-        EtEngineStats.register(handle, etBlock);
+        // The registry holds the block weakly and these counters strongly, so a caller who drops
+        // the model without closing it is purged rather than pinned, and its forwards survive.
+        EtEngineStats.register(handle, etBlock, counters);
         // After registration so the first JMX read already sees this model. One-shot: later loads
         // return immediately.
         EtEngineStats.registerMBeanOnce();
