@@ -16,7 +16,9 @@ public final class EtMethodMeta {
      * ExecuTorch's planned activation arena for {@code forward}, in bytes, captured at load.
      *
      * <p>Excludes the XNNPACK delegate workspace, which cannot be sized from this layer:
-     * {@code xnn_workspace_t} is opaque in the shipped {@code xnnpack.h}. Treat this as an exact
+     * {@code xnn_workspace_t} is opaque in the shipped {@code xnnpack.h}. Tracked upstream at
+     * <a href="https://github.com/measly-java-learning/executorch-runtime-dist/issues/17">
+     * executorch-runtime-dist#17</a>. Treat this as an exact
      * lower bound on native footprint, not a total.
      */
     public final long plannedArenaBytes;

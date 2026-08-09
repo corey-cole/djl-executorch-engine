@@ -52,7 +52,10 @@ public final class EtModelStats {
 
     /**
      * @return ExecuTorch's planned activation arena in bytes. Excludes the XNNPACK delegate
-     *     workspace, which cannot be sized from this layer.
+     *     workspace, which cannot be sized from this layer: {@code xnn_workspace_t} is opaque in
+     *     the shipped {@code xnnpack.h}. Tracked upstream at
+     *     <a href="https://github.com/measly-java-learning/executorch-runtime-dist/issues/17">
+     *     executorch-runtime-dist#17</a>.
      */
     public long getPlannedArenaBytes() {
         return plannedArenaBytes;
