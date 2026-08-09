@@ -208,7 +208,11 @@ public final class EtEngineStats {
             }
             EtModelStats stats = block.toStats();
             if (stats == null) {
-                continue; // registered but counters not yet attached; nothing to report
+                // Defensive only, and not reachable through EtModel.load: attachCounters() always
+                // precedes register(), and register() now requires the counters outright. Kept so
+                // a block registered by some future path without counters degrades to "absent from
+                // the list" rather than a NullPointerException out of a monitoring poll.
+                continue;
             }
             models.add(stats);
             if (stats.getPlannedArenaBytes() > 0) {

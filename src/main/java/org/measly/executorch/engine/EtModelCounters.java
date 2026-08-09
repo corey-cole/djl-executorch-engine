@@ -35,6 +35,15 @@ final class EtModelCounters {
     /**
      * Records one completed forward. Called only from the model's owning thread.
      *
+     * <p><b>The write order is load-bearing: count, then total, then max.</b> A reader on another
+     * thread can interleave anywhere between these three volatile writes, and this order is what
+     * guarantees the invariant {@code forwardMaxNanos <= forwardTotalNanos} — the max is published
+     * only after the total that already includes the same sample. The JMM forbids reordering
+     * volatile writes with each other, so the guarantee is real, but it is a property of this
+     * sequence and not of the field declarations. Writing max first would let a reader observe a
+     * max with no total behind it, breaking an assertion in {@code StatsConcurrencyIT} in a way
+     * that only shows up as a rare flake under load.
+     *
      * @param nanos the measured wall duration of the native forward call
      */
     void recordForward(long nanos) {

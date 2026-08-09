@@ -9,6 +9,13 @@ package org.measly.executorch.engine;
  * <p><b>Byte fields use {@code -1} for "unavailable" and {@code 0} for "genuinely zero".</b> The
  * distinction matters: {@link #getStagingBytes()} is legitimately {@code 0} for a memory-planned
  * model, which is every model exported with ExecuTorch's defaults.
+ *
+ * <p><b>The three forward counters are sampled individually, not as an atomic triple.</b> A
+ * snapshot taken while that model is running can therefore pair a count of N with a total that
+ * still reflects N-1 forwards, so {@code forwardTotalNanos / forwardCount} is a slightly noisy
+ * mean at high call rates. This is deliberate: making the read atomic would mean locking the
+ * forward path, and the skew is at most one in-flight call. The counters are individually
+ * monotonic, and {@code forwardMaxNanos <= forwardTotalNanos} always holds.
  */
 public final class EtModelStats {
 
