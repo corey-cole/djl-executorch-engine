@@ -3,6 +3,7 @@ package org.measly.executorch.stress;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -22,8 +23,7 @@ class StressSweepBaselineIT {
         StressGolden golden = StressGolden.load(TestSupport.stressGoldenPath());
         int seconds = Integer.getInteger("et.stress.cellSeconds", 10);
 
-        List<SweepRunner.Result> results = List.of();
-        results = new java.util.ArrayList<>(results);
+        List<SweepRunner.Result> results = new ArrayList<>();
         for (SweepConfig.Cell cell : SweepConfig.baselineCells()) {
             results.add(SweepRunner.run(cell, golden, seconds));
         }
