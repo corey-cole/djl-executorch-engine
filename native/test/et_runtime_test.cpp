@@ -217,6 +217,23 @@ TEST_CASE("methodMeta: declared input byte counts are captured at load") {
   REQUIRE(meta.inputNbytes[1] == sizeof(float));
 }
 
+TEST_CASE("methodMeta: the planned activation arena is captured at load") {
+  EtRuntime rt(ADD_PTE_PATH);
+  MethodMeta meta = rt.methodMeta();
+  // add.pte is memory-planned (the export default), so ExecuTorch allocates a planned arena for
+  // its activations. Exact bytes are an ExecuTorch planning detail we deliberately do not pin.
+  REQUIRE(meta.plannedArenaBytes > 0);
+}
+
+TEST_CASE("methodMeta: the planned arena excludes the XNNPACK delegate workspace") {
+  // Documents a known limitation as an executable fact: the number we report is the ExecuTorch
+  // planned arena only. xnn_workspace_t is opaque in the shipped xnnpack.h (create/release only),
+  // so the delegate workspace cannot be added here. See the runtime-dist issue in Task 9.
+  EtRuntime rt(ADD_PTE_PATH);
+  MethodMeta meta = rt.methodMeta();
+  REQUIRE(meta.plannedArenaBytes < 64u * 1024u * 1024u);  // an arena, not a whole workspace
+}
+
 TEST_CASE("staging: slots are sized at load, so repeated forwards never grow") {
   EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
   float a = 2.0f, b = 3.0f;

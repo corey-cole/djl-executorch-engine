@@ -42,6 +42,12 @@ struct MethodMeta {
   // an upper bound for a dynamic one; 0 for a non-tensor input. Staging slots are sized from this
   // at construction, so a slot only ever grows when an input exceeds its declared bound.
   std::vector<size_t> inputNbytes;
+  // Sum of MethodMeta::memory_planned_buffer_size(i) over num_memory_planned_buffers(), captured
+  // once at load. This is ExecuTorch's planned activation arena for "forward". It does NOT include
+  // the XNNPACK delegate workspace: xnn_workspace_t is opaque in the shipped xnnpack.h (create and
+  // release only, no size accessor), and under the default `global` sharing mode that workspace is
+  // not per-model in any case. Treat this as an exact lower bound on native footprint, not a total.
+  size_t plannedArenaBytes = 0;
 };
 
 struct ForwardState;  // pimpl
