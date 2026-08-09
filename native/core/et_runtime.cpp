@@ -183,6 +183,14 @@ EtRuntime::~EtRuntime() = default;
 
 MethodMeta EtRuntime::methodMeta() const { return state_->meta; }
 
+size_t EtRuntime::stagingBytes() const {
+  size_t total = 0;
+  for (const auto& slot : state_->staging) {
+    total += slot->capacity();
+  }
+  return total;
+}
+
 ForwardResult EtRuntime::forward(std::span<const InputDesc> inputs) {
   // from_blob does not copy: for memory-planned inputs each InputDesc.data must stay valid through
   // module.forward(); for unplanned inputs the data is memcpy'd into the engine-owned staging slot

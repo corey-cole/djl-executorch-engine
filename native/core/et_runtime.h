@@ -87,6 +87,13 @@ class EtRuntime {
   EtRuntime(const EtRuntime&) = delete;
   EtRuntime& operator=(const EtRuntime&) = delete;
   MethodMeta methodMeta() const;
+
+  // Total bytes currently held by this runtime's input staging slots. Returns 0 when every input
+  // is memory-planned (the ExecuTorch export default) -- planned inputs are never staged, so their
+  // slots stay at capacity 0. Cold path: O(numInputs), intended for a monitoring poll, not the
+  // forward path.
+  size_t stagingBytes() const;
+
   ForwardResult forward(std::span<const InputDesc> inputs);
 
  private:

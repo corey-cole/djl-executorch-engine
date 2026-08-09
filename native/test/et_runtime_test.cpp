@@ -247,6 +247,28 @@ TEST_CASE("staging: slots are sized at load, so repeated forwards never grow") {
   REQUIRE(guard.stagedInputCount() == 200);   // still staged every call
 }
 
+TEST_CASE("stagingBytes: zero for an all-planned model") {
+  // add.pte's inputs are memory-planned, so no slot is ever allocated. Zero here is the correct
+  // answer, not a missing measurement -- callers distinguish it from -1 ("unavailable").
+  EtRuntime rt(ADD_PTE_PATH);
+  REQUIRE(rt.stagingBytes() == 0);
+}
+
+TEST_CASE("stagingBytes: sums every slot of an unplanned model and is stable across forwards") {
+  EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
+  // Each slot is ensure(nbytes + kStagingPadding), rounded up to a 64-byte multiple by StagingSlot.
+  const size_t perSlot = ((sizeof(float) + kStagingPadding + 63) / 64) * 64;
+  REQUIRE(rt.stagingBytes() == 2 * perSlot);
+
+  float a = 2.0f, b = 3.0f;
+  std::vector<InputDesc> inputs = {{&a, {1}, 6}, {&b, {1}, 6}};
+  ForwardResult result = rt.forward(inputs);
+  REQUIRE(*static_cast<const float*>(result.outputs()[0].data) == 5.0f);
+  // Slots are sized at load, so a forward must not change the total. If this ever fails, the
+  // grow-only invariant that makes steady-state allocation-free has been broken.
+  REQUIRE(rt.stagingBytes() == 2 * perSlot);
+}
+
 TEST_CASE("forward: an input past its declared bound is rejected before the staging copy") {
   // The staging memcpy's length comes from the caller's shape, so an oversized shape would read
   // past the source buffer -- before module.forward() runs and ExecuTorch gets to reject it. The
