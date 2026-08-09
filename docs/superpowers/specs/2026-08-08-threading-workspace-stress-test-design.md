@@ -305,19 +305,23 @@ turbo budget drains under sustained AVX2 load, roughly halving single-thread clo
 of continuous work), so the *ratios* are the evidence, not the wall figures.
 
 `./gradlew stressSweep` (9 cells, 10 s each, two forked JVMs because the intra-op pool is
-process-global and write-once), report `build/reports/stress/sweep.tsv`:
+process-global and write-once), report `build/reports/stress/sweep.tsv`. Rows carry a `run_id`
+column (one value across both arms of a single invocation; see `sweep.tsv`), and `peak_rss_kb` is
+each cell's **own** peak (the process VmHWM mark is reset before each timed region), so cells may
+now differ or decline — the pre-fix column was a cumulative high-water mark and forced adjacent
+cells identical.
 
-| threads | mode | intraop | forwards | wall_s | fwd_per_s | mean_ms | parallelism | peak_rss_kb |
-|---------|------|---------|----------|--------|-----------|---------|-------------|-------------|
-| 1 | global | 1 | 12496 | 10.006 | 1248.8 | 0.8007 | 1.121 | 596308 |
-| 1 | disabled | 1 | 13080 | 10.005 | 1307.3 | 0.7649 | 1.029 | 596308 |
-| 2 | global | 1 | 12960 | 10.011 | 1294.5 | 1.5450 | 1.146 | 651500 |
-| 2 | disabled | 1 | 19040 | 10.004 | 1903.2 | 1.0509 | 2.012 | 700376 |
-| 4 | global | 1 | 12256 | 10.016 | 1223.6 | 3.2690 | 1.149 | 730548 |
-| 4 | disabled | 1 | 24824 | 10.004 | 2481.4 | 1.6120 | 3.983 | 730548 |
-| 8 | global | 1 | 12120 | 10.030 | 1208.4 | 6.6204 | 1.154 | 778680 |
-| 8 | disabled | 1 | 26136 | 10.025 | 2607.1 | 3.0686 | 6.666 | 778680 |
-| 1 | global | default | 17408 | 10.001 | 1740.6 | 0.5745 | 5.495 | 591828 |
+| run_id | threads | mode | intraop | forwards | wall_s | fwd_per_s | mean_ms | parallelism | peak_rss_kb |
+|--------|---------|------|---------|----------|--------|-----------|---------|-------------|-------------|
+| 2026-08-09T00:33:08.014052585Z | 1 | global | 1 | 13928 | 10.006 | 1392.0 | 0.7184 | 1.083 | 592220 |
+| 2026-08-09T00:33:08.014052585Z | 1 | disabled | 1 | 13648 | 10.005 | 1364.1 | 0.7331 | 1.025 | 593092 |
+| 2026-08-09T00:33:08.014052585Z | 2 | global | 1 | 13784 | 10.009 | 1377.1 | 1.4523 | 1.159 | 656616 |
+| 2026-08-09T00:33:08.014052585Z | 2 | disabled | 1 | 20976 | 10.003 | 2097.0 | 0.9537 | 2.009 | 657916 |
+| 2026-08-09T00:33:08.014052585Z | 4 | global | 1 | 13048 | 10.010 | 1303.5 | 3.0686 | 1.159 | 723268 |
+| 2026-08-09T00:33:08.014052585Z | 4 | disabled | 1 | 26760 | 10.008 | 2673.8 | 1.4960 | 4.000 | 721844 |
+| 2026-08-09T00:33:08.014052585Z | 8 | global | 1 | 12648 | 10.031 | 1260.9 | 6.3448 | 1.165 | 795724 |
+| 2026-08-09T00:33:08.014052585Z | 8 | disabled | 1 | 28648 | 10.013 | 2861.0 | 2.7963 | 6.778 | 793356 |
+| 2026-08-09T00:33:08.014052585Z | 1 | global | default | 19536 | 10.003 | 1953.1 | 0.5120 | 5.820 | 587572 |
 
 Shape, as predicted:
 

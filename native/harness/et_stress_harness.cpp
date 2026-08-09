@@ -51,11 +51,13 @@ struct Workload {
   std::vector<InputDesc> inputs;
 };
 
-// Fills every f32 input with the same deterministic ramp the JVM side uses (`(float) i * ramp + v`),
-// so both arms drive the model down the same bucket. Non-f32 inputs are byte-filled; the stress
-// model has none, but the harness should not silently produce garbage if pointed at another .pte.
+// Fills every f32 input with a deterministic ramp (`(float) e * kRamp + v`). This arm is oracle
+// layer 2 ONLY — it compares against its own in-process reference, never the goldens — so kRamp
+// only needs to be A deterministic fill; it is deliberately NOT kept in sync with
+// stress_golden.json's config.ramp. Non-f32 inputs are byte-filled; the stress model has none,
+// but the harness should not silently produce garbage if pointed at another .pte.
 Workload buildWorkload(const MethodMeta& meta, float v) {
-  constexpr float kRamp = 1e-5f;
+  constexpr float kRamp = 1e-5f;  // deterministic fill only; see the comment above
   Workload w;
   w.buffers.resize(meta.numInputs);
   w.inputs.reserve(meta.numInputs);

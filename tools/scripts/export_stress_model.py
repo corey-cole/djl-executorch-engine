@@ -69,7 +69,7 @@ BATCH = 32
 HIDDEN = 256
 DEPTH = 5
 N_BUCKETS = 64
-RAMP = 1e-5          # input ramp step; MUST match StressTranslator.RAMP exactly
+RAMP = 1e-5          # input ramp step; travels to Java via stress_golden.json (config.ramp) — do not hardcode it on the Java side
 SAMPLE_COUNT = 16    # strided output samples recorded per case
 # -----------------------------------------------------------------------------------------------
 
