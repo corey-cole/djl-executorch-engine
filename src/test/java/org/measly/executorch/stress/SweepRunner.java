@@ -109,6 +109,7 @@ public final class SweepRunner {
             throw e;
         }
         long cpu0 = processCpuNanos();
+        resetPeakRssMark(); // VmHWM is process-cumulative; reset so this cell's peak is its own
         long t0 = System.nanoTime();
         Thread.sleep(seconds * 1000L);
         stop.set(true);
@@ -141,7 +142,22 @@ public final class SweepRunner {
         return 0;
     }
 
-    /** Peak resident set in KiB from /proc/self/status (VmHWM). Returns 0 off Linux. */
+    /**
+     * Resets the process VmHWM mark so a later VmHWM read reflects only this cell's timed region.
+     */
+    private static void resetPeakRssMark() {
+        try {
+            Files.writeString(Path.of("/proc/self/clear_refs"), "5");
+        } catch (IOException | RuntimeException e) {
+            // Read-only procfs (containers) or non-Linux: the mark stays cumulative — acceptable
+            // degradation of a nice-to-have metric, never a result.
+        }
+    }
+
+    /**
+     * Peak resident set in KiB from /proc/self/status (VmHWM), reset per cell by
+     * {@link #resetPeakRssMark()} before the timed region. Returns 0 off Linux.
+     */
     private static long peakRssKb() {
         try {
             for (String line : Files.readAllLines(Paths.get("/proc/self/status"))) {
