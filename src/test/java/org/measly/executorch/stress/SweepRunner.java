@@ -26,6 +26,40 @@ public final class SweepRunner {
 
     private static final Path REPORT = Paths.get("build/reports/stress/sweep.tsv");
 
+    /**
+     * Run id for this JVM's rows; both sweep arms of one invocation share it. The Gradle sweep
+     * tasks coordinate through build/reports/stress/.run_id (cleared per invocation by
+     * stressSweepCore's doFirst; the baseline arm adopts the core arm's id), and -PstressRunId is
+     * injected as {@code et.stress.runId}. Fallback: a standalone invocation generates its own id.
+     */
+    private static final String RUN_ID = resolveRunId();
+
+    private static String resolveRunId() {
+        String override = System.getProperty("et.stress.runId");
+        if (override != null && !override.isEmpty()) {
+            return override;
+        }
+        Path idFile = Paths.get("build/reports/stress/.run_id");
+        try {
+            if (Files.exists(idFile)) {
+                String existing = Files.readString(idFile).strip();
+                if (!existing.isEmpty()) {
+                    return existing;
+                }
+            }
+        } catch (IOException e) {
+            // Fall through to a fresh id.
+        }
+        String fresh = java.time.Instant.now().toString();
+        try {
+            Files.createDirectories(idFile.getParent());
+            Files.writeString(idFile, fresh);
+        } catch (IOException e) {
+            // A missing sidecar is coordination-only; a per-JVM id is fine.
+        }
+        return fresh;
+    }
+
     /** Bound on every barrier wait; a pre-barrier worker failure must surface, not hang. */
     private static final int BARRIER_WAIT_SECONDS = 60;
 
@@ -179,6 +213,7 @@ public final class SweepRunner {
     public static void report(List<Result> results) {
         StringBuilder tsv = new StringBuilder();
         System.out.println();
+        System.out.println("run: " + RUN_ID);
         System.out.printf(
                 Locale.ROOT,
                 "%-32s %12s %12s %10s %10s%n",
@@ -192,7 +227,9 @@ public final class SweepRunner {
                     r.meanLatencyMs(),
                     r.achievedParallelism(),
                     r.peakRssKb() / 1024.0);
-            tsv.append(r.cell().threads())
+            tsv.append(RUN_ID)
+                    .append('\t')
+                    .append(r.cell().threads())
                     .append('\t')
                     .append(r.cell().mode())
                     .append('\t')
@@ -217,7 +254,7 @@ public final class SweepRunner {
             if (fresh) {
                 Files.writeString(
                         REPORT,
-                        "threads\tmode\tintraop\tforwards\twall_s\tfwd_per_s\tmean_ms\tparallelism\tpeak_rss_kb\n",
+                        "run_id\tthreads\tmode\tintraop\tforwards\twall_s\tfwd_per_s\tmean_ms\tparallelism\tpeak_rss_kb\n",
                         StandardCharsets.UTF_8,
                         StandardOpenOption.CREATE);
             }
