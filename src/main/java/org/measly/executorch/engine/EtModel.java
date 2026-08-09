@@ -80,6 +80,9 @@ public class EtModel extends BaseModel {
                         loadNanos));
         block = etBlock;
         EtEngineStats.register(handle, etBlock);
+        // After registration so the first JMX read already sees this model. One-shot: later loads
+        // return immediately.
+        EtEngineStats.registerMBeanOnce();
         for (int i = 0; i < meta.numInputs; i++) {
             logger.info("model {} input {} memoryPlanned={}", getName(), i, meta.inputMemoryPlanned[i]);
         }

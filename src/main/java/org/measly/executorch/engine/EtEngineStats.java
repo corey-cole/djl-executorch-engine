@@ -1,12 +1,18 @@
 package org.measly.executorch.engine;
 
+import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import javax.management.MBeanServer;
+import javax.management.ObjectName;
 import org.measly.executorch.jni.EtNative;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The engine's production monitoring surface: an always-on, fixed-cost view of throughput, native
@@ -36,6 +42,74 @@ public final class EtEngineStats {
     private static final String UNKNOWN = "unknown";
 
     private EtEngineStats() {}
+
+    /** The JMX object name this engine registers under. */
+    public static final String OBJECT_NAME = "org.measly.executorch:type=EtEngineStats";
+
+    private static final Logger logger = LoggerFactory.getLogger(EtEngineStats.class);
+    // Guards the one-shot auto-registration attempt. A failed attempt is not retried: a
+    // per-load retry would log on every load and re-run a failure we already reported.
+    private static final AtomicBoolean JMX_ATTEMPTED = new AtomicBoolean();
+
+    /** MXBean implementation. Separate from the static facade because an MXBean needs an instance. */
+    private static final class Bean implements EtEngineStatsMXBean {
+        @Override
+        public EtStatsSnapshot getSnapshot() {
+            return EtEngineStats.snapshot();
+        }
+    }
+
+    /**
+     * Registers the JMX MBean under {@value #OBJECT_NAME} on the platform MBean server.
+     *
+     * <p>Idempotent: registering an already-registered name is a no-op. Any JMX failure is logged
+     * and swallowed — a monitoring surface must never be the thing that breaks the application.
+     */
+    public static void registerMBean() {
+        try {
+            MBeanServer server = ManagementFactory.getPlatformMBeanServer();
+            ObjectName objectName = new ObjectName(OBJECT_NAME);
+            if (server.isRegistered(objectName)) {
+                return;
+            }
+            server.registerMBean(new Bean(), objectName);
+            logger.info("registered JMX MBean {}", OBJECT_NAME);
+        } catch (Exception e) {
+            logger.warn(
+                    "could not register JMX MBean {} ({}); set {}=false to silence this",
+                    OBJECT_NAME,
+                    e.toString(),
+                    EtEngine.JMX_ENABLED_PROPERTY);
+        }
+    }
+
+    /** Removes the JMX MBean if present. Safe to call when it was never registered. */
+    public static void unregisterMBean() {
+        try {
+            MBeanServer server = ManagementFactory.getPlatformMBeanServer();
+            ObjectName objectName = new ObjectName(OBJECT_NAME);
+            if (server.isRegistered(objectName)) {
+                server.unregisterMBean(objectName);
+            }
+        } catch (Exception e) {
+            logger.warn("could not unregister JMX MBean {} ({})", OBJECT_NAME, e.toString());
+        }
+    }
+
+    /**
+     * One-shot auto-registration, driven by the first model load. Honours {@link
+     * EtEngine#JMX_ENABLED_PROPERTY}; only the exact value {@code false} disables it.
+     */
+    static void registerMBeanOnce() {
+        if (!JMX_ATTEMPTED.compareAndSet(false, true)) {
+            return;
+        }
+        if ("false".equalsIgnoreCase(System.getProperty(EtEngine.JMX_ENABLED_PROPERTY))) {
+            logger.info("JMX MBean disabled by {}=false", EtEngine.JMX_ENABLED_PROPERTY);
+            return;
+        }
+        registerMBean();
+    }
 
     /** Records a newly loaded model. Called from {@link EtModel#load}. */
     static void register(long handle, EtSymbolBlock block) {

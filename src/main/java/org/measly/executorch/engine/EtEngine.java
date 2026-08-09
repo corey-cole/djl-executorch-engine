@@ -54,6 +54,17 @@ public final class EtEngine extends Engine {
      */
     public static final String WORKSPACE_SHARING_MODE_PROPERTY = EtWorkspaceSharing.PROPERTY;
 
+    /**
+     * JVM flag controlling whether the engine registers its JMX MBean, e.g.
+     * {@code -Dai.djl.executorch.jmx_enabled=false}. Registration happens once, at the first model
+     * load, under the object name {@value EtEngineStats#OBJECT_NAME}. Any value other than
+     * {@code false} (case-insensitive) leaves it enabled.
+     *
+     * <p>Registration failure — a name collision, a {@code SecurityManager}, a restricted
+     * container — is a single logged warning and never fails a model load.
+     */
+    public static final String JMX_ENABLED_PROPERTY = "ai.djl.executorch.jmx_enabled";
+
     private static final Logger logger = LoggerFactory.getLogger(EtEngine.class);
     private static final Object INTRAOP_LOCK = new Object();
     // -1 = unset (leave the runtime default); >= 1 = requested. Written by the setter, read at seal.

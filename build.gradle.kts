@@ -30,7 +30,7 @@ dependencies {
 }
 
 tasks.test {
-    useJUnitPlatform { excludeTags("leak", "oom", "intraop", "stress", "stress-sweep", "stress-baseline") }
+    useJUnitPlatform { excludeTags("leak", "oom", "intraop", "jmx-disabled", "stress", "stress-sweep", "stress-baseline") }
     jvmArgs("-XX:+HeapDumpOnOutOfMemoryError")
     finalizedBy(tasks.jacocoTestReport)
 }
@@ -73,6 +73,15 @@ tasks.register<Test>("intraOpTest") {
     classpath = sourceSets["test"].runtimeClasspath
     useJUnitPlatform { includeTags("intraop") }
     jvmArgs("-Dai.djl.executorch.num_threads=2")
+}
+
+val jmxDisabledTest by tasks.registering(Test::class) {
+    description = "Verifies ai.djl.executorch.jmx_enabled=false suppresses MBean registration."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("jmx-disabled") }
+    jvmArgs("-Dai.djl.executorch.jmx_enabled=false")
 }
 
 // intraOpTest runs under build/check (its forked JVM cannot share the pool with the test task)
