@@ -87,6 +87,14 @@ Rewritten as the consumer landing page:
 8. **Building from source** — a link to `docs/building.md`.
 9. **Third-party licenses** — kept verbatim; it is a legal notice tied to the runtime pin.
 
+**Style: no emoji anywhere in `README.md`.** Section headings, status markers, table cells, callouts
+— none. The file is both the GitHub landing page and the Maven Central description, and it renders
+in contexts with no control over font fallback. `README.md` and `CLAUDE.md` are emoji-free today, so
+this is a constraint to hold, not a cleanup to perform.
+
+Emphasis uses bold, and admonitions use a `> **Note:**`-style blockquote. Where the current README
+uses a warning marker, plain words carry it.
+
 ### 3. `docs/building.md`
 
 Absorbs what leaves the README: prerequisites, the manylinux container and the glibc-2.28 floor,
@@ -187,5 +195,7 @@ Documentation fails silently, so every claim gets a mechanical check.
 - **No javadoc failure gate.** The cleanup is content-only; warnings stay non-fatal by decision.
 - **No rewriting of `benchmarking.md`, `ci-native-build.md`, or `executorch-build-notes.md`.** They
   are current and cited, and they stay as they are.
-- **Nothing is deleted.** Every moved document keeps its content and gains a status header.
+- **Nothing is deleted.** Every moved document keeps its content and gains a status header. The
+  no-emoji rule applies to `README.md` only: the research documents contain emoji markers
+  (`⚠`) that are load-bearing within their own text, and they move unedited apart from the header.
 - **No published documentation site or GitHub Pages.**
