@@ -25,17 +25,21 @@ class StressSweepIT {
         int seconds = Integer.getInteger("et.stress.cellSeconds", 10);
 
         List<SweepRunner.Result> results = new ArrayList<>();
-        for (SweepConfig.Cell cell : SweepConfig.coreCells()) {
-            results.add(SweepRunner.run(cell, golden, seconds));
-        }
-        SweepRunner.report(results);
-
-        // The pool is sealed at the first model load, which the first cell already did. Assert the
-        // fork actually took effect — without it every number above measures something else.
+        List<SweepConfig.Cell> cells = SweepConfig.coreCells();
+        // The pool is sealed at the first model load, which the first cell already performed. Assert
+        // the fork took effect immediately after the FIRST cell — the earliest point the count is
+        // both meaningful and cheap — so a dropped fork flag fails fast instead of after ~8 cells
+        // of numbers that measure something else.
+        results.add(SweepRunner.run(cells.get(0), golden, seconds));
         assertEquals(
                 1,
                 EtEngine.getIntraOpThreads(),
                 "stressSweepCore must fork with -Dai.djl.executorch.num_threads=1");
+        for (int i = 1; i < cells.size(); i++) {
+            results.add(SweepRunner.run(cells.get(i), golden, seconds));
+        }
+        SweepRunner.report(results);
+
         assertEquals(8, results.size());
         assertTrue(
                 results.stream().allMatch(r -> r.forwards() > 0),
