@@ -48,11 +48,14 @@ class StressGoldenTest {
 
     @Test
     void aMissingFileNamesThePathAndTheFix() {
+        // Constructed via Paths.get so the assertion compares the message against the same
+        // separator rendering on every platform (Windows renders backslashes).
+        Path missing = Paths.get("no/such/stress_golden.json");
         IllegalStateException e =
                 assertThrows(
                         IllegalStateException.class,
-                        () -> StressGolden.load(Paths.get("no/such/stress_golden.json")));
-        assertTrue(e.getMessage().contains("no/such"), "message must quote the path");
+                        () -> StressGolden.load(missing));
+        assertTrue(e.getMessage().contains(missing.toString()), "message must quote the path");
         assertTrue(e.getMessage().contains("export_stress_model.py"), "message must name the fix");
     }
 
