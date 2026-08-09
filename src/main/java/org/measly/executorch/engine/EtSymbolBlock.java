@@ -110,6 +110,9 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
     @Override
     public void close() {
         if (handle != 0) {
+            // Before destroy: deregister reads this block's counters for the closed-model rollup,
+            // and toStats() would report -1 staging bytes once the handle is zeroed.
+            EtEngineStats.deregister(handle);
             EtNative.destroy(handle);
             handle = 0;
         }

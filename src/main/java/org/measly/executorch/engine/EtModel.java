@@ -79,6 +79,7 @@ public class EtModel extends BaseModel {
                         meta.plannedArenaBytes,
                         loadNanos));
         block = etBlock;
+        EtEngineStats.register(handle, etBlock);
         for (int i = 0; i < meta.numInputs; i++) {
             logger.info("model {} input {} memoryPlanned={}", getName(), i, meta.inputMemoryPlanned[i]);
         }
