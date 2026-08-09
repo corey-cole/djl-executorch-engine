@@ -42,6 +42,9 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
     private volatile long handle;
     private EtNDManager manager;
     private final EtMethodMeta meta;
+    // Attached by EtModel.load right after construction. Null only in the narrow window before
+    // that, and in tests that build a block directly.
+    private volatile EtModelCounters counters;
 
     EtSymbolBlock(long handle, EtNDManager manager, EtMethodMeta meta) {
         this.handle = handle;
@@ -78,7 +81,12 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
             }
             in[i] = new EtTensor(et.getShape().getShape(), st, buf);
         }
+        final long startNanos = System.nanoTime();
         EtTensor[] out = EtNative.forward(handle, in);
+        EtModelCounters c = counters;
+        if (c != null) {
+            c.recordForward(System.nanoTime() - startNanos);
+        }
         NDManager rm = inputs.isEmpty() ? manager : inputs.head().getManager();
         EtNDManager target = (rm instanceof EtNDManager) ? (EtNDManager) rm : manager;
         NDList ret = new NDList(out.length);
@@ -110,6 +118,46 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
     /** @return true once the native handle has been released by {@link #close()}. */
     boolean isClosed() {
         return handle == 0;
+    }
+
+    /** Attaches the counters this block updates on each forward. Called once, at load. */
+    void attachCounters(EtModelCounters counters) {
+        this.counters = counters;
+    }
+
+    /**
+     * Builds an immutable snapshot of this model's counters and native footprint.
+     *
+     * <p>Reads {@code handle} once into a local: a concurrent {@code close()} would otherwise let
+     * a zero-check pass and then hand a freed pointer to native code. A closed block reports
+     * {@code -1} staging bytes, meaning "unavailable" — distinct from a memory-planned model's
+     * genuine {@code 0}.
+     *
+     * @return the snapshot, or {@code null} if no counters were ever attached
+     */
+    EtModelStats toStats() {
+        EtModelCounters c = counters;
+        if (c == null) {
+            return null;
+        }
+        final long h = handle;
+        long staging = -1L;
+        if (h != 0) {
+            try {
+                staging = EtNative.stagingBytes(h);
+            } catch (RuntimeException e) {
+                staging = -1L; // a monitoring read must never propagate
+            }
+        }
+        return new EtModelStats(
+                c.name(),
+                c.workspaceSharingMode(),
+                c.plannedArenaBytes(),
+                staging,
+                c.loadNanos(),
+                c.forwardCount(),
+                c.forwardTotalNanos(),
+                c.forwardMaxNanos());
     }
 
     /** @return the metadata captured at load (test seam, mirrors {@link #isClosed()}). */

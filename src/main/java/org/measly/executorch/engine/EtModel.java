@@ -58,6 +58,10 @@ public class EtModel extends BaseModel {
                 "model {} workspaceSharingMode={}", getName(), EtWorkspaceSharing.name(workspaceSharingMode));
         // Not unit-tested below this point: loadModule/methodMeta/destroy require the native library
         // (integration-tested via EtModelTest#loadAndForwardAddModel).
+        // Timed from here so loadNanos covers delegate initialisation: EtRuntime's constructor
+        // calls Module::load_forward() unconditionally, so the XNNPACK setup cost lands in load,
+        // not in the first forward.
+        final long loadStartNanos = System.nanoTime();
         long handle = EtNative.loadModule(modelFile.toString(), workspaceSharingMode);
         EtMethodMeta meta;
         try {
@@ -66,7 +70,15 @@ public class EtModel extends BaseModel {
             EtNative.destroy(handle); // don't leak the native module if metadata query fails
             throw e;
         }
-        block = new EtSymbolBlock(handle, (EtNDManager) manager, meta);
+        final long loadNanos = System.nanoTime() - loadStartNanos;
+        EtSymbolBlock etBlock = new EtSymbolBlock(handle, (EtNDManager) manager, meta);
+        etBlock.attachCounters(
+                new EtModelCounters(
+                        getName(),
+                        EtWorkspaceSharing.name(workspaceSharingMode),
+                        meta.plannedArenaBytes,
+                        loadNanos));
+        block = etBlock;
         for (int i = 0; i < meta.numInputs; i++) {
             logger.info("model {} input {} memoryPlanned={}", getName(), i, meta.inputMemoryPlanned[i]);
         }
