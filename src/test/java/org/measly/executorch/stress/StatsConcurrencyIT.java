@@ -97,8 +97,13 @@ class StatsConcurrencyIT {
         poller.start();
 
         start.countDown();
-        assertTrue(done.await(5, TimeUnit.MINUTES), "workers did not finish");
-        running.set(false);
+        try {
+            assertTrue(done.await(5, TimeUnit.MINUTES), "workers did not finish");
+        } finally {
+            // Always stop the poller, even when the await times out: a poller left running on a
+            // failed test is a non-daemon thread that busy-loops and hangs the test JVM.
+            running.set(false);
+        }
         poller.join(TimeUnit.SECONDS.toMillis(30));
         for (Thread worker : workers) {
             worker.join(TimeUnit.SECONDS.toMillis(30));

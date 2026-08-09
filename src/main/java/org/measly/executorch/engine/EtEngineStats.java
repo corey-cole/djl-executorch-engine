@@ -184,7 +184,14 @@ public final class EtEngineStats {
     }
 
     private static String sharingModeDefault() {
-        String value = System.getProperty(EtEngine.WORKSPACE_SHARING_MODE_PROPERTY);
+        String value;
+        try {
+            value = System.getProperty(EtEngine.WORKSPACE_SHARING_MODE_PROPERTY);
+        } catch (SecurityException e) {
+            // Unreadable under a restrictive SecurityManager: report the spec's convention for an
+            // unresolvable config field rather than throwing out of a monitoring read.
+            return UNKNOWN;
+        }
         // "unspecified" is meaningful here and distinct from "unknown": it means no spec is sent
         // and the runtime's compiled-in default (global for our pin) applies.
         return (value == null || value.isEmpty()) ? "unspecified" : value;
@@ -193,7 +200,11 @@ public final class EtEngineStats {
     private static int safeIntraOpThreads() {
         try {
             return EtNative.intraOpThreads();
-        } catch (RuntimeException | UnsatisfiedLinkError e) {
+        } catch (RuntimeException | LinkageError e) {
+            // LinkageError (not just UnsatisfiedLinkError) because a failed EtNative class init —
+            // e.g. System.load throwing inside <clinit> — surfaces as ExceptionInInitializerError
+            // on first access and NoClassDefFoundError afterwards. A broken or absent library must
+            // degrade this read, never throw out of snapshot().
             return -1; // native library unavailable
         }
     }

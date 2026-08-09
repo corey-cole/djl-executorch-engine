@@ -30,7 +30,7 @@ dependencies {
 }
 
 tasks.test {
-    useJUnitPlatform { excludeTags("leak", "oom", "intraop", "jmx-disabled", "stress", "stress-sweep", "stress-baseline") }
+    useJUnitPlatform { excludeTags("leak", "oom", "intraop", "jmx-disabled", "stats-degraded", "stress", "stress-sweep", "stress-baseline") }
     jvmArgs("-XX:+HeapDumpOnOutOfMemoryError")
     finalizedBy(tasks.jacocoTestReport)
 }
@@ -75,7 +75,7 @@ tasks.register<Test>("intraOpTest") {
     jvmArgs("-Dai.djl.executorch.num_threads=2")
 }
 
-val jmxDisabledTest by tasks.registering(Test::class) {
+val jmxDisabledTest = tasks.register<Test>("jmxDisabledTest") {
     description = "Verifies ai.djl.executorch.jmx_enabled=false suppresses MBean registration."
     group = "verification"
     testClassesDirs = sourceSets["test"].output.classesDirs
@@ -84,9 +84,32 @@ val jmxDisabledTest by tasks.registering(Test::class) {
     jvmArgs("-Dai.djl.executorch.jmx_enabled=false")
 }
 
+val statsDegradedTest = tasks.register<Test>("statsDegradedTest") {
+    description = "Verifies snapshot() degrades (never throws) when the native library is broken."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("stats-degraded") }
+    // Point the native load at a checked-in non-library file: any garbage file makes System.load
+    // throw inside EtNative's <clinit>, which is exactly the degraded condition under test. The
+    // value must be absolute — System.load needs a path, and the forked JVM's working directory is
+    // not guaranteed to be the project root.
+    environment(
+        "EXECUTORCH_LIBRARY_PATH",
+        file("src/test/resources/not-a-library.txt").absolutePath,
+    )
+}
+
 // intraOpTest runs under build/check (its forked JVM cannot share the pool with the test task)
-// but not under `test` itself, which excludes the tag.
-tasks.check { dependsOn(tasks.named("intraOpTest")) }
+// but not under `test` itself, which excludes the tag. The opt-out and degraded-library branches
+// are likewise forked-JVM-only, so they join check for parity.
+tasks.check {
+    dependsOn(
+        tasks.named("intraOpTest"),
+        jmxDisabledTest,
+        statsDegradedTest,
+    )
+}
 
 // --- Threading / workspace stress arms. All opt-in; `test` excludes every tag below. ---
 // Never wire any of these to CI: they saturate every core for their whole duration, and free CI
