@@ -421,13 +421,71 @@ A `NoSuchMethodError` or a null-`g_metaCtor` abort at class init means Step 4's 
 
 Expected: PASS. Any other caller of the old three-argument `EtMethodMeta` constructor surfaces here.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: Commit and push so winbox can fetch it**
 
 ```bash
 git add src/main/java/org/measly/executorch/jni/ native/jni/executorch_djl_jni.cpp \
         src/test/java/org/measly/executorch/jni/
 git commit -m "feat(jni): expose plannedArenaBytes and stagingBytes to Java"
+git push -u origin feat/production-observability
 ```
+
+- [ ] **Step 9: Verify the JNI signature on Windows (winbox, over SSH)**
+
+**Why this step exists here and not in Task 10.** The Windows Catch2 suite links only the
+**JNIEnv-free core** — it never touches `executorch_djl_jni.cpp`, so it **cannot** catch a
+`g_metaCtor` signature mismatch. The only thing that proves the signature on MSVC is running the
+**JVM** test suite on Windows. Deferring that to Task 10 would stack seven tasks on top of an
+unverified ABI change. winbox has JDK 17 (Zulu 17.0.19), so it can run the real proof now.
+
+Drive winbox in **short commands with `</dev/null`**, not one long-timeout script — a long remote
+invocation over this link tends to stall rather than fail cleanly.
+
+Fetch the branch. The checkout is behind and carries local modifications (`native/build_qa.sh`,
+untracked `native/tests/check_windows_crt.sh`), so stash rather than discard:
+
+```bash
+ssh winbox "cd C:\\Users\\cored\\workspace\\djl-executorch-engine; git stash push -u -m preplan; git fetch origin; git checkout feat/production-observability; git pull --ff-only" </dev/null
+```
+
+Build the shim. `build.sh` does not activate Visual Studio itself — the caller must already have
+the MSVC dev shell active, and Git-Bash must be invoked by explicit path (PATH order can otherwise
+pick WSL's `bash.exe`) with `--noprofile` so the profile does not reset the VS environment:
+
+```bash
+ssh winbox "& 'C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\Common7\\Tools\\Launch-VsDevShell.ps1' -Arch amd64; cd C:\\Users\\cored\\workspace\\djl-executorch-engine; & 'C:\\Program Files\\Git\\bin\\bash.exe' --noprofile -c './native/build.sh'" </dev/null
+```
+
+Expected: compiles clean and stages `executorch_djl.dll` into
+`src\main\resources\native\windows-x86_64\`.
+
+Watch for two MSVC-specific failures that GCC does not produce: a narrowing warning on
+`static_cast<jlong>(meta.plannedArenaBytes)` (`size_t` is 64-bit on win64, so this should be
+silent — a warning here means the cast was dropped), and `C1189 "You need C++17 to compile
+ExecuTorch"` (means the `CMAKE_CXX_STANDARD` lines in `native/CMakeLists.txt` were touched).
+
+Then run the JVM tests — this is the actual signature proof:
+
+```bash
+ssh winbox "cd C:\\Users\\cored\\workspace\\djl-executorch-engine; .\\gradlew.bat test --tests 'org.measly.executorch.jni.*'" </dev/null
+```
+
+Expected: PASS. A `NoSuchMethodError` or a JVM abort during `EtNative` class init means
+`GetMethodID(g_etMethodMetaClass, "<init>", "(I[I[ZJ)V")` returned null — the signature does not
+match the Java constructor, and Linux masked it only because both were rebuilt together there.
+
+Confirm the CRT gate still passes over the rebuilt tree:
+
+```bash
+ssh winbox "cd C:\\Users\\cored\\workspace\\djl-executorch-engine; & 'C:\\Program Files\\Git\\bin\\bash.exe' --noprofile -c './native/tests/check_windows_crt.sh'" </dev/null
+```
+
+Expected: PASS. MSVC does **not** reliably diagnose a CRT mismatch — no `LNK2038`, not even an
+`LNK4098` — so this script is the only real gate on the `/MT` static-CRT requirement.
+
+Record the outcome in the task notes. If any of the three fail, fix on the Linux host, push, and
+re-run this step before starting Task 4 — do not proceed with an unverified ABI change underneath
+seven dependent tasks.
 
 ---
 
@@ -2031,22 +2089,33 @@ git add src/main/resources/native/ src/main/java/
 git commit -m "chore: rebuild native shim in manylinux_2_28 and link upstream workspace issue"
 ```
 
-- [ ] **Step 9: Trigger the aarch64 and Windows builds**
+- [ ] **Step 9: Re-verify Windows with the final code**
 
-`linux-aarch64` and `windows-x86_64` cannot be built on this host. Push the branch and let CI produce them:
+Task 3 proved the JNI signature on winbox against the JNI change alone. Re-run it now that the full
+Java surface exists — `EtEngineStats`, the MXBean, and the registry all run on Windows too, and JMX
+is the piece most likely to behave differently there:
 
 ```bash
-git push -u origin feat/production-observability
+git push
+ssh winbox "cd C:\\Users\\cored\\workspace\\djl-executorch-engine; git pull --ff-only" </dev/null
+ssh winbox "& 'C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\Common7\\Tools\\Launch-VsDevShell.ps1' -Arch amd64; cd C:\\Users\\cored\\workspace\\djl-executorch-engine; & 'C:\\Program Files\\Git\\bin\\bash.exe' --noprofile -c './native/build.sh'" </dev/null
+ssh winbox "cd C:\\Users\\cored\\workspace\\djl-executorch-engine; .\\gradlew.bat test" </dev/null
+ssh winbox "cd C:\\Users\\cored\\workspace\\djl-executorch-engine; .\\gradlew.bat jmxDisabledTest" </dev/null
 ```
 
-Then confirm the native build matrix is green for all three platforms before merging:
+Expected: PASS. `EtEngineStatsJmxTest` is the one to watch — it is the only coverage of the
+platform MBean server outside Linux.
+
+- [ ] **Step 10: Confirm the CI matrix**
+
+`linux-aarch64` still cannot be built or tested on either host, so CI is its only proof:
 
 ```bash
 gh run list --branch feat/production-observability --limit 5
 ```
 
-The Windows leg is the one to watch: it is the only platform where the `EtMethodMeta` constructor
-signature change is exercised against MSVC, and its Catch2 suite is the only XNNPACK proof there.
+Confirm all three platform legs are green before merging. The aarch64 leg is now the only
+unverified one — Windows was covered directly in Task 3 and Step 9 above.
 
 ---
 
@@ -2055,5 +2124,7 @@ signature change is exercised against MSVC, and its Catch2 suite is the only XNN
 **Spec coverage.** Every spec section maps to a task: configuration group → Tasks 4 and 7; process totals and per-model detail → Tasks 5–7; planned arena → Task 1; staging bytes → Task 2; JNI bridge and the `g_metaCtor` footgun → Task 3; the closed-handle race → Task 6; JMX MXBean and opt-out → Task 8; `snapshot()` never throws and the `-1`/`0` convention → Tasks 6 and 7; Catch2, unit, integration, concurrency, and overhead testing → Tasks 1, 2, 3, 5, 6, 7, 8, 9; the upstream issue → Task 10; three-platform rebuild → Task 10.
 
 **Deliberate ordering.** Native (1–2) precedes the JNI bridge (3) which precedes all Java work, because the Java tests cannot pass without a rebuilt shim. Task 10 rebuilds with the release toolchain at the end, because Task 3's `build.sh` artifact breaks the glibc floor and would otherwise ship.
+
+**Windows verification is early by design.** The Windows Catch2 suite links only the JNIEnv-free core and therefore cannot catch a `g_metaCtor` signature mismatch — only the JVM suite can. Task 3 Step 9 runs that suite on winbox (JDK 17, VS 18 Community, both confirmed present) so the ABI change is proven before seven tasks are stacked on it; Task 10 Step 9 re-runs it against the finished surface. `linux-aarch64` remains CI-only.
 
 **Naming consistency.** `plannedArenaBytes` and `stagingBytes` are used identically in C++ (`MethodMeta::plannedArenaBytes`, `EtRuntime::stagingBytes()`), Java fields (`EtMethodMeta.plannedArenaBytes`, `EtNative.stagingBytes`), and bean getters (`getPlannedArenaBytes()`, `getStagingBytes()`). `EtModelCounters` (mutable, package-private) and `EtModelStats` (immutable, public) are distinct types throughout and never interchanged.
