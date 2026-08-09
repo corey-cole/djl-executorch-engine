@@ -83,6 +83,28 @@ Key ABI constraint: the build passes `-DCMAKE_BUILD_TYPE=Release` on Windows bec
 ./gradlew build       # full build incl. jacoco coverage report
 ```
 
+### Threading / workspace stress (local only, opt-in)
+
+```bash
+./gradlew stressGate                     # 8-thread correctness gate, ~30s (add -PstressSeconds=N)
+./gradlew stressSweep                    # 9-cell throughput matrix -> build/reports/stress/sweep.tsv
+ET_STRESS=1 ./native/local_build_wrapper.sh native/build_qa.sh   # native harness under ASan/LSan
+```
+
+**None of these run in CI, deliberately** — they saturate every core for their whole duration. The
+`stress`, `stress-sweep`, and `stress-baseline` tags are excluded from `tasks.test`.
+
+The fixture is `src/test/resources/models/stress/` — a bucket-gather + 5-layer MLP whose `.pte` and
+golden digests are **committed together**; regenerating one without the other is a silent
+wrong-answer bug, so `tools/scripts/export_stress_model.py` always writes both.
+
+`stressSweep` is two forked JVMs (`stressSweepCore` + `stressSweepBaseline`) because the intra-op
+pool is process-global and write-once, so intra-op=1 cells and the intra-op=default cell cannot
+share a process.
+
+`src/test/java/org/measly/executorch/stress/PerThreadContext.java` is the reference pattern for
+multi-threaded use: **one `ZooModel` per thread**, not a shared model behind a `ThreadLocal`.
+
 Run a single test class/method:
 ```bash
 ./gradlew test --tests 'org.measly.executorch.engine.EtModelTest'

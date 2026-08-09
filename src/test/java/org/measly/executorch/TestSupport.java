@@ -99,4 +99,30 @@ public final class TestSupport {
     public static String medOutputPtePath() {
         return new File("native/spike/med_output.pte").getAbsolutePath();
     }
+
+    /** Directory holding the stress fixture (.pte + goldens), which are committed together. */
+    public static java.nio.file.Path stressModelDir() {
+        return java.nio.file.Paths.get("src/test/resources/models/stress");
+    }
+
+    /** Path to the committed golden digest file. */
+    public static java.nio.file.Path stressGoldenPath() {
+        return stressModelDir().resolve("stress_golden.json");
+    }
+
+    /**
+     * Skips the test (assumption) if the native lib or the stress fixture is unavailable. The .pte
+     * and its goldens are committed together on purpose — a regenerated model with stale goldens is
+     * a silent wrong-answer bug — so both are checked here.
+     */
+    public static void assumeStressModelAvailable() {
+        loadNativeLibrary();
+        if (!isModelArtifactAvailable(stressModelDir().resolve("stress_mlp.pte").toString())
+                || !isModelArtifactAvailable(stressGoldenPath().toString())) {
+            Assumptions.abort(
+                    "Stress fixture not found in "
+                            + stressModelDir()
+                            + " (build it via tools/scripts/export_stress_model.py).");
+        }
+    }
 }

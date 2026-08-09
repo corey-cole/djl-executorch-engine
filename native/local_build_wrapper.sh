@@ -50,6 +50,8 @@ docker run --rm \
     -e BUILD_ONLY \
     -e REPS \
     -e INTRAOP \
+    -e ET_STRESS \
+    -e ET_STRESS_SECONDS \
     -v "${REPO_ROOT}":/workspace \
     -w /workspace \
     "${ET_BUILD_IMAGE}" \
