@@ -79,7 +79,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   if (g_etMethodMetaClass == nullptr) {
     return JNI_ERR;
   }
-  g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I[Z)V");
+  g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I[ZJ)V");
   if (g_metaCtor == nullptr) {
     return JNI_ERR;
   }
@@ -168,7 +168,8 @@ Java_org_measly_executorch_jni_EtNative_methodMeta(JNIEnv* env, jclass, jlong ha
     p[i] = meta.inputMemoryPlanned[i] ? JNI_TRUE : JNI_FALSE;
   }
   env->SetBooleanArrayRegion(planned, 0, n, p.data());
-  return env->NewObject(g_etMethodMetaClass, g_metaCtor, static_cast<jint>(n), types, planned);
+  return env->NewObject(g_etMethodMetaClass, g_metaCtor, static_cast<jint>(n), types, planned,
+                        static_cast<jlong>(meta.plannedArenaBytes));
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL
@@ -293,4 +294,15 @@ Java_org_measly_executorch_jni_EtNative_setIntraOpThreads(JNIEnv* env, jclass, j
 extern "C" JNIEXPORT jint JNICALL
 Java_org_measly_executorch_jni_EtNative_intraOpThreads(JNIEnv* env, jclass) {
   return static_cast<jint>(measly::et::intraOpThreads());
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_org_measly_executorch_jni_EtNative_stagingBytes(JNIEnv* env, jclass, jlong handle) {
+  auto* rt = reinterpret_cast<EtRuntime*>(handle);
+  try {
+    return static_cast<jlong>(rt->stagingBytes());
+  } catch (const std::exception& e) {
+    throwJava(env, "stagingBytes failed", &e);
+    return -1;
+  }
 }
