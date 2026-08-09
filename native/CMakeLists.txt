@@ -3,14 +3,9 @@ project(executorch_djl LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Emit compile_commands.json so clangd works out of the box; .clangd points at native/build.
-# Set here rather than passed by build.sh because build.sh unconditionally `rm -rf`s the build
-# tree, so without this every build -- host fast path included, not only container runs -- leaves
-# the editor with no index until someone re-configures by hand.
-#
-# Ignored by the MSVC/Visual Studio generators, which do not emit the database; harmless there.
-# A container build writes container-absolute paths (/workspace/...) and root ownership, so it
-# still needs a host re-configure afterwards -- this only fixes the host case.
+# Emit compile_commands.json from every configure. Load-bearing for native/gen_clangd_db.sh, which
+# merges the databases of two configures into the one clangd reads (see .clangd) and passes no
+# flags of its own. Ignored by the MSVC/Visual Studio generators, which do not emit the database.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Static CRT (/MT) on Windows: folds the C runtime into the DLL so end users need no VC++

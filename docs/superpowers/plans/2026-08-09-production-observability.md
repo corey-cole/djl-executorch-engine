@@ -21,28 +21,11 @@
 - **JMX registration failure is never fatal.** One logged warning, no retry, load proceeds.
 - **XNNPACK delegate workspace is out of scope** — `xnn_workspace_t` is opaque in the shipped `xnnpack.h`. Document the exclusion; do not approximate it.
 - Java code style follows the existing files: 4-space indent, 100-column soft limit, javadoc on public members.
-- **Every native build resets the clangd index.** `.clangd` points at `native/build`, and
-  `native/build.sh:92` does `rm -rf "${NATIVE_BUILD_DIR}"` unconditionally — so the tree is
-  rebuilt from scratch by *any* build, host fast path included, not just container runs.
-  `native/CMakeLists.txt` sets `CMAKE_EXPORT_COMPILE_COMMANDS ON`, so a host build does leave a
-  working database behind. Two cases still need a manual re-configure:
-
-  - **After a container build**, the database holds container-absolute paths (`/workspace/...`)
-    and the tree is root-owned, so clangd resolves nothing.
-  - **After any build**, the database covers only the 3 shim sources. QA targets are `OFF` by
-    default, so `native/test/et_runtime_test.cpp` and `native/harness/*` are **not indexed** —
-    and that test file is edited in Tasks 1 and 2.
-
-  Restore with:
-
-  ```bash
-  sudo chown -R "$(id -u):$(id -g)" native/build          # only needed after a container build
-  cmake -S native -B native/build -G Ninja -DET_BUILD_QA=ON
-  ```
-
-  Configure only — no `cmake --build` needed, the database is written at configure time.
-  `-DET_BUILD_QA=ON` raises it from 3 entries to 112 (the extra 108 are Catch2's own sources,
-  which are inert unless you open one).
+- **clangd is already set up and survives every build.** `.clangd` points at
+  `native/build-clangd`, which only `./native/gen_clangd_db.sh` ever writes — no build script
+  touches it, so no restore step is needed after any task here. Re-run that script only if you bump
+  `native/cmake/EtRuntimePin.cmake` or change compile flags in `native/CMakeLists.txt`; a stale
+  database resolves against the old runtime headers silently.
 
 ---
 
@@ -131,11 +114,8 @@ If `plannedArenaBytes > 0` fails, do **not** weaken the assertion. Add a tempora
 `build_qa.sh` runs as root and does not chown its outputs back.
 
 ```bash
-sudo chown -R "$(id -u):$(id -g)" native/asan native/build
-cmake -S native -B native/build -G Ninja -DET_BUILD_QA=ON
+sudo chown -R "$(id -u):$(id -g)" native/asan
 ```
-
-The second command restores the clangd database: the container build left it holding `/workspace/...` paths, and QA-off would omit the Catch2 test (see Global Constraints).
 
 - [ ] **Step 7: Commit**
 
@@ -228,11 +208,8 @@ Expected: PASS.
 - [ ] **Step 6: Fix container file ownership**
 
 ```bash
-sudo chown -R "$(id -u):$(id -g)" native/asan native/build
-cmake -S native -B native/build -G Ninja -DET_BUILD_QA=ON
+sudo chown -R "$(id -u):$(id -g)" native/asan
 ```
-
-The second command restores the clangd database: the container build left it holding `/workspace/...` paths, and QA-off would omit the Catch2 test (see Global Constraints).
 
 - [ ] **Step 7: Commit**
 
@@ -429,12 +406,6 @@ Java_org_measly_executorch_jni_EtNative_stagingBytes(JNIEnv* env, jclass, jlong 
 Expected: build succeeds and stages `libexecutorch_djl.so` into `src/main/resources/native/linux-x86_64/`.
 
 This is the local fast path and breaks the glibc-2.28 floor — correct for running tests, never for a release.
-
-It also reset `native/build`. The host build leaves a valid database, but only for the 3 shim sources — re-configure with QA on to index the Catch2 test too (no chown needed, this was a host build):
-
-```bash
-cmake -S native -B native/build -G Ninja -DET_BUILD_QA=ON
-```
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
@@ -2056,12 +2027,10 @@ Expected: PASS.
 
 ```bash
 ./native/local_build_wrapper.sh native/build_qa.sh
-sudo chown -R "$(id -u):$(id -g)" native/asan native/build
-cmake -S native -B native/build -G Ninja -DET_BUILD_QA=ON
+sudo chown -R "$(id -u):$(id -g)" native/asan
 ```
 
-Expected: PASS, clean under ASan/LSan. The last command restores the clangd database, which both
-this run and the Step 1 container build left holding container-absolute paths.
+Expected: PASS, clean under ASan/LSan.
 
 - [ ] **Step 5: File the upstream issue**
 
