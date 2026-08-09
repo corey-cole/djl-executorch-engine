@@ -3,6 +3,16 @@ project(executorch_djl LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Emit compile_commands.json so clangd works out of the box; .clangd points at native/build.
+# Set here rather than passed by build.sh because build.sh unconditionally `rm -rf`s the build
+# tree, so without this every build -- host fast path included, not only container runs -- leaves
+# the editor with no index until someone re-configures by hand.
+#
+# Ignored by the MSVC/Visual Studio generators, which do not emit the database; harmless there.
+# A container build writes container-absolute paths (/workspace/...) and root ownership, so it
+# still needs a host re-configure afterwards -- this only fixes the host case.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Static CRT (/MT) on Windows: folds the C runtime into the DLL so end users need no VC++
 # redistributable. Windows consumers here are developers on potentially locked-down workstations who
 # may not be able to run an installer. Pairs with the -static pin row selected below — the runtime
