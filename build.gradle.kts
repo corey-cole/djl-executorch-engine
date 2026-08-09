@@ -100,6 +100,15 @@ val statsDegradedTest = tasks.register<Test>("statsDegradedTest") {
     )
 }
 
+val checkDocLinks = tasks.register<Exec>("checkDocLinks") {
+    group = "verification"
+    description = "Verifies every relative markdown link in tracked .md files resolves."
+    commandLine("tools/scripts/check_doc_links.sh")
+    // Skipped on Windows: Exec cannot run a .sh directly there, and the check is
+    // platform-independent, so the Linux legs of CI already cover it for everyone.
+    onlyIf { !System.getProperty("os.name").lowercase().contains("windows") }
+}
+
 // intraOpTest runs under build/check (its forked JVM cannot share the pool with the test task)
 // but not under `test` itself, which excludes the tag. The opt-out and degraded-library branches
 // are likewise forked-JVM-only, so they join check for parity.
@@ -108,6 +117,7 @@ tasks.check {
         tasks.named("intraOpTest"),
         jmxDisabledTest,
         statsDegradedTest,
+        checkDocLinks,
     )
 }
 
