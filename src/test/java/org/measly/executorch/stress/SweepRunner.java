@@ -16,6 +16,8 @@ import java.util.Queue;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -23,6 +25,9 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class SweepRunner {
 
     private static final Path REPORT = Paths.get("build/reports/stress/sweep.tsv");
+
+    /** Bound on every barrier wait; a pre-barrier worker failure must surface, not hang. */
+    private static final int BARRIER_WAIT_SECONDS = 60;
 
     private SweepRunner() {}
 
@@ -64,7 +69,8 @@ public final class SweepRunner {
                                     for (int i = 0; i < cases.size(); i++) {
                                         ctx.predict(cases.get(i).v1, cases.get(i).v2);
                                     }
-                                    if (!stop.get()) start.await();
+                                    if (!stop.get())
+                                        start.await(BARRIER_WAIT_SECONDS, TimeUnit.SECONDS);
                                     while (!stop.get()) {
                                         for (int i = 0; i < cases.size(); i++) {
                                             float[] out = ctx.predict(cases.get(i).v1, cases.get(i).v2);
@@ -90,17 +96,17 @@ public final class SweepRunner {
         }
 
         try {
-            start.await(); // release every worker at once; loads and warmup are already done
-        } catch (BrokenBarrierException bbe) {
-            // A worker failed before reaching the barrier (e.g. open() threw), so the barrier
-            // broke instead of tripping. Surface the real failure, not a misleading "Broken barrier".
+            start.await(BARRIER_WAIT_SECONDS, TimeUnit.SECONDS); // release every worker at once; loads and warmup are already done
+        } catch (BrokenBarrierException | TimeoutException e) {
+            // A worker failed before reaching the barrier (broken), or reset it before we arrived
+            // (timeout). Either way, surface the real failure, not the barrier mechanics.
             if (!failures.isEmpty()) {
-                AssertionError e =
+                AssertionError err =
                         new AssertionError("cell " + cell.label() + " failed during load/warmup");
-                failures.forEach(e::addSuppressed);
-                throw e;
+                failures.forEach(err::addSuppressed);
+                throw err;
             }
-            throw bbe;
+            throw e;
         }
         long cpu0 = processCpuNanos();
         long t0 = System.nanoTime();
