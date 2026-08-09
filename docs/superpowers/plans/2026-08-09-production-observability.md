@@ -441,6 +441,14 @@ unverified ABI change. winbox has JDK 17 (Zulu 17.0.19), so it can run the real 
 Drive winbox in **short commands with `</dev/null`**, not one long-timeout script — a long remote
 invocation over this link tends to stall rather than fail cleanly.
 
+**The remote shell is `pwsh` 7.6.4 (PSEdition Core), not cmd and not Windows PowerShell 5.1.**
+sshd's `DefaultShell` is pinned to
+`C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\pwsh.exe`. Write
+commands in PowerShell 7 syntax — cmd forms fail outright (`if exist ... (...)` produces
+`Missing '(' after 'if'`). Two 7.x-vs-5.1 differences to keep in mind: `&&`/`||` chain operators
+work in 7.x but not 5.1, and redirection defaults to UTF-8 no BOM in 7.x versus UTF-16LE in 5.1 —
+so never generate a build input by redirecting through `powershell.exe`, which resolves to 5.1.
+
 Fetch the branch. The checkout is behind and carries local modifications (`native/build_qa.sh`,
 untracked `native/tests/check_windows_crt.sh`), so stash rather than discard:
 
