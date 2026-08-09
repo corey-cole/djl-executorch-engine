@@ -16,6 +16,9 @@ public final class LibUtils {
 
     private static final int BUF = 64 * 1024;
     private static boolean loaded;
+    // Absolute path handed to System.load, for the observability snapshot. Written under the same
+    // synchronized(loadLibrary) as `loaded`, so a reader that sees loaded==true sees this too.
+    private static String loadedPath;
 
     private LibUtils() {}
 
@@ -29,6 +32,7 @@ public final class LibUtils {
         String override = System.getenv("EXECUTORCH_LIBRARY_PATH");
         if (override != null && !override.isEmpty()) {
             System.load(override);
+            loadedPath = override;
             loaded = true;
             return;
         }
@@ -42,11 +46,24 @@ public final class LibUtils {
             if (!Files.isRegularFile(target)) {
                 extract(resource, target);
             }
-            System.load(target.toAbsolutePath().toString());
+            String absolute = target.toAbsolutePath().toString();
+            System.load(absolute);
+            loadedPath = absolute;
             loaded = true;
         } catch (IOException e) {
             throw new IllegalStateException("Failed to extract native library " + resource, e);
         }
+    }
+
+    /**
+     * The absolute path of the native library handed to {@code System.load}, or {@code null} if
+     * the library has not been loaded. Reported by the observability snapshot so an operator can
+     * tell an {@code EXECUTORCH_LIBRARY_PATH} override from a classpath extraction.
+     *
+     * @return the loaded library path, or {@code null}
+     */
+    static synchronized String loadedPath() {
+        return loadedPath;
     }
 
     static String platform() {
