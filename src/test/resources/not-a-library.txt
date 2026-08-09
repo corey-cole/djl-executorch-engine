@@ -1,0 +1,5 @@
+This file is deliberately NOT a shared library.
+
+EtStatsDegradedIT sets EXECUTORCH_LIBRARY_PATH to this file so that System.load fails inside
+EtNative's class initializer, exercising the "broken native library" degradation path of
+EtEngineStats.snapshot(). Any non-ELF text file fails System.load the same way.

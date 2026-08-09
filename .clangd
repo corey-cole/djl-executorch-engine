@@ -1,0 +1,25 @@
+# Point clangd at a compile database that no build script ever touches.
+#
+# Generate or refresh it with:
+#   ./native/gen_clangd_db.sh
+#
+# Why not native/build: that tree is the shim build's, and native/build.sh `rm -rf`s it on every
+# run. Worse, the blessed build path (native/local_build_wrapper.sh) runs in a container, so the
+# database it leaves behind holds container-absolute paths (/workspace/...) and is root-owned --
+# clangd resolves nothing and repairing it needs sudo. native/build-clangd is written only by
+# gen_clangd_db.sh, so it survives every build.
+#
+# Why that script instead of a single cmake configure: native/CMakeLists.txt builds the JNI shim
+# only when ET_BUILD_QA and ET_BUILD_BENCH are both OFF (the Catch2 units and harnesses are
+# JVM-free and deliberately need no JDK), so no one configure covers both jni/ and test/. The
+# script runs both and merges the two databases.
+#
+# STALENESS: the database is refreshed only when you run that script. After a bump of
+# native/cmake/EtRuntimePin.cmake it keeps resolving against the OLD runtime headers, silently and
+# with no warning. Re-run the script as part of the pin-bump procedure (noted in CLAUDE.md).
+#
+# Only this file is committed. native/build-clangd/ is git-ignored: its entries carry absolute
+# paths (the build tree, the fetched runtime's include dir, the JDK, and the .pte fixture paths
+# passed as -D macro values), so it is valid only on the machine that generated it.
+CompileFlags:
+  CompilationDatabase: native/build-clangd

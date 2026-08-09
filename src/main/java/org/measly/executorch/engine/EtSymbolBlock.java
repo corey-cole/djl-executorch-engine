@@ -42,6 +42,14 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
     private volatile long handle;
     private EtNDManager manager;
     private final EtMethodMeta meta;
+    // Serializes the stats cold path against close(): toStats() reads the native handle and
+    // queries staging bytes, close() destroys the handle, and a destroy between the read and the
+    // JNI call would be a use-after-free. The lock is taken only by close() and toStats(), never
+    // by forwardInternal — the hot path stays lock-free.
+    private final Object statsLock = new Object();
+    // Attached by EtModel.load right after construction. Null only in the narrow window before
+    // that, and in tests that build a block directly.
+    private volatile EtModelCounters counters;
 
     EtSymbolBlock(long handle, EtNDManager manager, EtMethodMeta meta) {
         this.handle = handle;
@@ -78,7 +86,12 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
             }
             in[i] = new EtTensor(et.getShape().getShape(), st, buf);
         }
+        final long startNanos = System.nanoTime();
         EtTensor[] out = EtNative.forward(handle, in);
+        EtModelCounters c = counters;
+        if (c != null) {
+            c.recordForward(System.nanoTime() - startNanos);
+        }
         NDManager rm = inputs.isEmpty() ? manager : inputs.head().getManager();
         EtNDManager target = (rm instanceof EtNDManager) ? (EtNDManager) rm : manager;
         NDList ret = new NDList(out.length);
@@ -101,15 +114,66 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
 
     @Override
     public void close() {
-        if (handle != 0) {
-            EtNative.destroy(handle);
-            handle = 0;
+        // Mutual exclusion with toStats(): a concurrent snapshot poll must never observe the
+        // handle between destroy() freeing it and the handle read.
+        synchronized (statsLock) {
+            if (handle != 0) {
+                // Deregister first so no poll can reach a handle this method is about to free.
+                // The rollup itself is order-independent — the registry holds the counters object
+                // directly, so it no longer has to read them back through this block.
+                EtEngineStats.deregister(handle);
+                EtNative.destroy(handle);
+                handle = 0;
+            }
         }
     }
 
     /** @return true once the native handle has been released by {@link #close()}. */
     boolean isClosed() {
         return handle == 0;
+    }
+
+    /** Attaches the counters this block updates on each forward. Called once, at load. */
+    void attachCounters(EtModelCounters counters) {
+        this.counters = counters;
+    }
+
+    /**
+     * Builds an immutable snapshot of this model's counters and native footprint.
+     *
+     * <p>Runs under {@link #statsLock}, the same monitor {@link #close()} holds while it destroys
+     * the native handle: a concurrent {@code close()} cannot free the handle between the non-zero
+     * check and {@code EtNative.stagingBytes(...)}, so a poll can never hand a freed pointer to
+     * native code. A closed block reports {@code -1} staging bytes, meaning "unavailable" —
+     * distinct from a memory-planned model's genuine {@code 0}.
+     *
+     * @return the snapshot, or {@code null} if no counters were ever attached
+     */
+    EtModelStats toStats() {
+        EtModelCounters c = counters;
+        if (c == null) {
+            return null;
+        }
+        synchronized (statsLock) {
+            final long h = handle;
+            long staging = -1L;
+            if (h != 0) {
+                try {
+                    staging = EtNative.stagingBytes(h);
+                } catch (RuntimeException e) {
+                    staging = -1L; // a monitoring read must never propagate
+                }
+            }
+            return new EtModelStats(
+                    c.name(),
+                    c.workspaceSharingMode(),
+                    c.plannedArenaBytes(),
+                    staging,
+                    c.loadNanos(),
+                    c.forwardCount(),
+                    c.forwardTotalNanos(),
+                    c.forwardMaxNanos());
+        }
     }
 
     /** @return the metadata captured at load (test seam, mirrors {@link #isClosed()}). */

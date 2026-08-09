@@ -58,6 +58,10 @@ public class EtModel extends BaseModel {
                 "model {} workspaceSharingMode={}", getName(), EtWorkspaceSharing.name(workspaceSharingMode));
         // Not unit-tested below this point: loadModule/methodMeta/destroy require the native library
         // (integration-tested via EtModelTest#loadAndForwardAddModel).
+        // Timed from here so loadNanos covers delegate initialisation: EtRuntime's constructor
+        // calls Module::load_forward() unconditionally, so the XNNPACK setup cost lands in load,
+        // not in the first forward.
+        final long loadStartNanos = System.nanoTime();
         long handle = EtNative.loadModule(modelFile.toString(), workspaceSharingMode);
         EtMethodMeta meta;
         try {
@@ -66,7 +70,22 @@ public class EtModel extends BaseModel {
             EtNative.destroy(handle); // don't leak the native module if metadata query fails
             throw e;
         }
-        block = new EtSymbolBlock(handle, (EtNDManager) manager, meta);
+        final long loadNanos = System.nanoTime() - loadStartNanos;
+        EtSymbolBlock etBlock = new EtSymbolBlock(handle, (EtNDManager) manager, meta);
+        EtModelCounters counters =
+                new EtModelCounters(
+                        getName(),
+                        EtWorkspaceSharing.name(workspaceSharingMode),
+                        meta.plannedArenaBytes,
+                        loadNanos);
+        etBlock.attachCounters(counters);
+        block = etBlock;
+        // The registry holds the block weakly and these counters strongly, so a caller who drops
+        // the model without closing it is purged rather than pinned, and its forwards survive.
+        EtEngineStats.register(handle, etBlock, counters);
+        // After registration so the first JMX read already sees this model. One-shot: later loads
+        // return immediately.
+        EtEngineStats.registerMBeanOnce();
         for (int i = 0; i < meta.numInputs; i++) {
             logger.info("model {} input {} memoryPlanned={}", getName(), i, meta.inputMemoryPlanned[i]);
         }

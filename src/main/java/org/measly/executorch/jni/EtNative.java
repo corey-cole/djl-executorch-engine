@@ -28,6 +28,17 @@ public final class EtNative {
 
     public static native EtMethodMeta methodMeta(long handle);
 
+    /**
+     * Total bytes currently held by the runtime's input staging slots.
+     *
+     * <p>Returns 0 when every input is memory-planned (the export default) — planned inputs are
+     * never staged. Callers must not pass a destroyed handle; doing so is a use-after-free.
+     *
+     * @param handle the native handle
+     * @return staging bytes, or 0 for an all-planned model
+     */
+    public static native long stagingBytes(long handle);
+
     public static native EtTensor[] forward(long handle, EtTensor[] inputs);
 
     public static native void destroy(long handle);

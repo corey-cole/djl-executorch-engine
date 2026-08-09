@@ -42,6 +42,12 @@ struct MethodMeta {
   // an upper bound for a dynamic one; 0 for a non-tensor input. Staging slots are sized from this
   // at construction, so a slot only ever grows when an input exceeds its declared bound.
   std::vector<size_t> inputNbytes;
+  // Sum of MethodMeta::memory_planned_buffer_size(i) over num_memory_planned_buffers(), captured
+  // once at load. This is ExecuTorch's planned activation arena for "forward". It does NOT include
+  // the XNNPACK delegate workspace: xnn_workspace_t is opaque in the shipped xnnpack.h (create and
+  // release only, no size accessor), and under the default `global` sharing mode that workspace is
+  // not per-model in any case. Treat this as an exact lower bound on native footprint, not a total.
+  size_t plannedArenaBytes = 0;
 };
 
 struct ForwardState;  // pimpl
@@ -81,6 +87,13 @@ class EtRuntime {
   EtRuntime(const EtRuntime&) = delete;
   EtRuntime& operator=(const EtRuntime&) = delete;
   MethodMeta methodMeta() const;
+
+  // Total bytes currently held by this runtime's input staging slots. Returns 0 when every input
+  // is memory-planned (the ExecuTorch export default) -- planned inputs are never staged, so their
+  // slots stay at capacity 0. Cold path: O(numInputs), intended for a monitoring poll, not the
+  // forward path.
+  size_t stagingBytes() const;
+
   ForwardResult forward(std::span<const InputDesc> inputs);
 
  private:

@@ -2,11 +2,13 @@ package org.measly.executorch.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
+import org.measly.executorch.TestSupport;
 
 class LibUtilsTest {
 
@@ -106,5 +108,15 @@ class LibUtilsTest {
         } finally {
             System.setProperty("os.name", os);
         }
+    }
+
+    @Test
+    void loadedPathIsRecordedAfterLoad() {
+        TestSupport.assumeNativeLibraryAvailable();
+        String path = LibUtils.loadedPath();
+        assertNotNull(path, "loadedPath must be set once the library is loaded");
+        assertTrue(
+                path.endsWith(LibUtils.libName(LibUtils.platform())),
+                "loadedPath must point at the platform's library file, got: " + path);
     }
 }

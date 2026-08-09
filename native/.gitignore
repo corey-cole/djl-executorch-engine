@@ -4,3 +4,5 @@ executorch/
 # CMake build trees (regenerated; never committed)
 asan/
 build/
+# clangd's compile database (native/gen_clangd_db.sh). Absolute paths: host-specific by nature.
+build-clangd/
