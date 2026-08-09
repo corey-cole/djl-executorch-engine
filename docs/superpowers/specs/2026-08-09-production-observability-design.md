@@ -203,3 +203,30 @@ A monitoring surface must never be the thing that breaks production.
 - **XNNPACK workspace attribution.** Blocked upstream; issue filed instead.
 - **Documentation cleanup.** Its own brainstorm → spec → plan cycle, starting once this lands, so
   the docs describe the final API rather than being written twice.
+
+## Measured overhead
+
+Hot-path verification (Task 9): `MobilenetBenchmark.steadyState` (AverageTime, 5 iterations × 10 s,
+1 fork) before and after the counters landed, on the reference host — 11th Gen Intel Core i7-1185G7,
+**8 cores** (`nproc`). The pre-change baseline in `scratchpad.txt` predates the benchmark's
+variant/export-mode split, so its single `ExecuTorch` arm maps to today's `ET_HYBRID` (engine
+`ExecuTorch`, PyTorch-backed preprocessing); both ExecuTorch arms are listed for completeness.
+
+| Date | Source | Arm | Score (ms/op) |
+|---|---|---|---|
+| 2026-08-09 | baseline (scratchpad.txt, pre-change) | ExecuTorch steadyState | 19.049 ± 1.119 |
+| 2026-08-09 | baseline (scratchpad.txt, pre-change) | ExecuTorch steadyState | 19.401 ± 1.164 |
+| 2026-08-09 | baseline (scratchpad.txt, pre-change) | PyTorch steadyState | 32.558 ± 3.272 |
+| 2026-08-09 | baseline (scratchpad.txt, pre-change) | PyTorch steadyState | 28.995 ± 1.574 |
+| 2026-08-09 | post-change `:example:jmh` | ET_HYBRID (planned) steadyState | 18.716 ± 1.164 |
+| 2026-08-09 | post-change `:example:jmh` | ET_HYBRID (unplanned) steadyState | 18.822 ± 0.920 |
+| 2026-08-09 | post-change `:example:jmh` | ET_NATIVE (planned) steadyState | 19.299 ± 2.434 |
+| 2026-08-09 | post-change `:example:jmh` | ET_NATIVE (unplanned) steadyState | 19.064 ± 3.072 |
+| 2026-08-09 | post-change `:example:jmh` | PYTORCH (planned) steadyState | 31.370 ± 2.874 |
+| 2026-08-09 | post-change `:example:jmh` | PYTORCH (unplanned) steadyState | 31.343 ± 1.500 |
+
+Verdict: every post-change ExecuTorch steady-state center (18.7–19.3 ms/op) sits at or slightly
+below the pre-change baseline (19.049 / 19.401 ms/op) and within its reported error bars
+(~±1.1 ms/op). The counters do not move steady-state throughput; the hot-path overhead premise of
+this design holds. A second post-change run corroborates: 18.525 ± 9.986 / 18.589 ± 6.644
+(planned) and 18.816 ± 0.886 / 19.373 ± 0.487 (unplanned), same verdict.
