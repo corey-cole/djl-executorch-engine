@@ -1,3 +1,7 @@
+> **Historical record — not current guidance.**
+> Written 2026-07. Kept for the reasoning it captures; details may have been superseded by later
+> work. For current guidance see [docs/README.md](../README.md).
+
 # ExecuTorch Runtime — Engine Consumption Handover (Repo B)
 
 > **What this is:** a cold-start hand-off for the agent working in the **DJL ExecuTorch engine**
@@ -128,8 +132,6 @@ FetchContent_MakeAvailable(et_runtime)
 set(ET_INSTALL "${et_runtime_SOURCE_DIR}/executorch-runtime-${ET_RUNTIME_ET_VERSION}-logging-linux-x86_64")
 find_package(executorch CONFIG REQUIRED PATHS "${ET_INSTALL}/lib/cmake/ExecuTorch")
 # link the JNI shim (a SHARED lib) against the `executorch` target
-# ⚠ but the XNNPACK backend and the kernel/ops archives register via STATIC INITIALIZERS and
-#    MUST be whole-archive'd at this final .so link, or they GC away — see §6 "Whole-archive".
 ```
 
 ### 5b. From-source fallback (C8) — **the ⚠ change is here**
@@ -158,30 +160,6 @@ gh attestation verify executorch-runtime-1.3.1-logging-linux-x86_64.tar.gz \
 
 - **Tarball is exactly the C2 members** — no `bin/`, no `share/`, no dotfiles. The `find_package` target is
   `executorch`; consume it into a **SHARED** library (the whole point of the PIC guarantee).
-- **⚠ Whole-archive the backend + kernel/ops archives at the JNI `.so` link (engine-side responsibility).**
-  The tarball ships **relocatable static archives** — `--whole-archive`/`-force_load` is a property of the
-  *final* link that produces `libexecutorch_djl.so`, so it cannot be baked into a `.a` and Repo A cannot do
-  it for you. `libxnnpack_backend.a`, `libportable_ops_lib.a`, `liboptimized_native_cpu_ops_lib.a`,
-  `libquantized_ops_lib.a` (and friends) are **pure static-initializer registration TUs**
-  (`RegisterCodegenUnboxedKernelsEverything.cpp`, XNNPACK backend registration). Nothing references their
-  symbols, so a normal archive link — especially with `--gc-sections` — drops them and you get
-  **backend-not-found / unregistered-operator** errors at *load/execute* time even though everything
-  compiled and linked cleanly. The shipped upstream `executorch-config.cmake` exposes these as plain target
-  names in `EXECUTORCH_LIBRARIES` with **no** `--whole-archive` wrapping, so linking `${EXECUTORCH_LIBRARIES}`
-  — or just the `executorch` target — does **not** protect you. Wrap them explicitly at the JNI link:
-  ```cmake
-  target_link_libraries(executorch_djl PRIVATE
-    executorch
-    -Wl,--whole-archive
-      xnnpack_backend portable_ops_lib optimized_native_cpu_ops_lib quantized_ops_lib
-    -Wl,--no-whole-archive)
-  # Apple: -Wl,-force_load,<path/to/libxnnpack_backend.a> per archive instead of --whole-archive.
-  ```
-  Wrap only the registration archives you actually need for the shipped variant (at minimum
-  `xnnpack_backend` + the portable/optimized ops lib); over-wrapping just inflates the `.so`. This is the
-  same fix already applied on the JNI path — it re-emerges here because a setuptools/CMake extension links
-  differently. Repo A's PIC gate links only the `executorch` target and never loads a model, so it will
-  **not** catch a whole-archive regression for you.
 - **glibc ≥ 2.28 floor** — comes from the `torch==2.12.0+cpu` wheel used to build. Consumers must be on
   glibc ≥ 2.28 (RHEL8 / AlmaLinux 8 / Ubuntu 20.04+).
 - **BUILDINFO `cmake_flags`** records the exact effective build flags (including `-DCMAKE_BUILD_TYPE=Release`)

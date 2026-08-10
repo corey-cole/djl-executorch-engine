@@ -1,3 +1,7 @@
+> **Historical record — not current guidance.**
+> Written 2026-08-05. Kept for the reasoning it captures; details may have been superseded by later
+> work. For current guidance see [docs/README.md](../README.md).
+
 # ExecuTorch host-buffer contract: W4 + W7 + W8 implementation record
 
 Date: 2026-08-05. Plain record of what was requested, what was delivered, and
@@ -10,7 +14,7 @@ still needs to run are appended at the end.
 The user approved the plan titled "W4 + W7 + W8: XNNPACK over-read harness,
 unplanned-input staging, USDT probes" and asked for it to be executed step by
 step, with each step verified before the next. In substance, three work items
-against the ExecuTorch host-buffer contract (`docs/executorch-host-buffer-contract-brief.md`):
+against the ExecuTorch host-buffer contract (`../executorch-host-buffer-contract-brief.md`):
 
 - **W7** — grow-only, 64-byte-aligned, 128-byte-padded per-slot staging in
   `EtRuntime::forward` for inputs whose `is_memory_planned()` is false, so
@@ -107,7 +111,7 @@ All work committed on top of `a1a8ff1` in five commits:
    faulted. CMake target added inside `if(ET_BUILD_QA)` in
    `native/CMakeLists.txt`.
 
-10. **`docs/executorch-host-buffer-contract-brief.md`** — §1 status table
+10. **`../executorch-host-buffer-contract-brief.md`** — §1 status table
     updated (W4 "complete (manual runs pending — see §3/W4)", W7 complete, W8
     complete, fixture-prerequisite row updated), §3/W7's "two gaps" note
     closed, and the full run recipe added to §3/W4's Deliverables.
@@ -283,7 +287,7 @@ route does not license dropping the staging padding (§3/W4 of the brief).
 ## Independent review, 2026-08-05
 
 Review of the five commits above against the requirements in
-`docs/executorch-host-buffer-contract-brief.md`. Read the code rather than this
+`../executorch-host-buffer-contract-brief.md`. Read the code rather than this
 record; built a reproducer; re-ran the harnesses. **Nothing below is fixed as of
 this writing.**
 

@@ -1,3 +1,7 @@
+> **Historical record — not current guidance.**
+> Written 2026-07-18. Kept for the reasoning it captures; details may have been superseded by later
+> work. For current guidance see [docs/README.md](../README.md).
+
 # Windows `/MT` adoption — measured findings
 
 Spike run 2026-07-18 against runtime pin `v1.3.1-8`, on `winbox`: **VS 18 Community**,
