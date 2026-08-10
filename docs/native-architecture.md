@@ -19,8 +19,10 @@ It owns the module, the method metadata snapshot, and the input staging slots; i
 performs the staging copy, and exposes results as borrowed views. Its public surface is
 `native/core/et_runtime.h` — `InputDesc`, `OutputView`, `MethodMeta`, `ForwardResult`, `EtRuntime`,
 plus the two free functions that read and set the intra-op thread count. Supporting headers
-alongside it: `staging.h` (the slot allocator), `et_probes.h` (USDT + in-process probes),
-`dtype_size.h`, `array_size_limits.h`.
+alongside it: `staging.h` (the slot allocator), `et_probes.h` (USDT + in-process probes), and
+`dtype_size.h`. One more, `native/jni/array_size_limits.h`, lives in `jni/` but is deliberately free
+of `<jni.h>` so the Catch2 units can pin the `jsize` output boundary without a JNIEnv — which is why
+`native/CMakeLists.txt` adds `native/jni` to `et_runtime_test`'s include path.
 
 **`native/jni/`** is the only part that includes `jni.h`. `executorch_djl_jni.cpp` holds the
 `Java_org_measly_executorch_jni_EtNative_*` entry points; `et_logging.cpp` is a PAL bridge that
@@ -77,14 +79,23 @@ One `forward()` call moves data like this:
 **The input borrow is not zero-copy end to end.** This is the claim most worth getting right,
 because the engine borrows honestly and ExecuTorch then does whatever the `.pte` tells it to.
 `Method::set_input` branches on `TensorInfo::is_memory_planned()`: when it is true — the export
-default, `MemoryPlanningPass(alloc_graph_input=True)`, and true for **every `.pte` in this
-repository** — ExecuTorch `memcpy`s the input into its own planned arena and our pointer is borrowed
-only for the duration of that copy. The borrow is honoured, via `share_tensor_data`, only for models
-exported with `alloc_graph_input=False`. Describing the input path as zero-copy without that
-qualification is wrong, and was wrong in this repository's own docs until it was audited. The flag
-is plumbed all the way to Java (`EtMethodMeta.inputMemoryPlanned`) and logged at model load, so it
-is observable per input rather than something to infer. The full contract, both directions, with the
-ExecuTorch source references:
+default, `MemoryPlanningPass(alloc_graph_input=True)`, and so the case for **any model a user brings
+unless they went out of their way** — ExecuTorch `memcpy`s the input into its own planned arena and
+our pointer is borrowed only for the duration of that copy. The borrow is honoured, via
+`share_tensor_data`, only for models exported with `alloc_graph_input=False`. Describing the input
+path as zero-copy without that qualification is wrong, and was wrong in this repository's own docs
+until it was audited.
+
+Both cases occur here, which is why §4 is not describing dead code. The models this repository ships
+and exports for real work are planned — `native/spike/add.pte`, the MobileNetV2 export in
+`example/`. The unplanned fixtures exist specifically to exercise the borrow path:
+`native/spike/add_unplanned.pte` (the same add model, exported by `export_add_unplanned.py` with
+`MemoryPlanningPass(alloc_graph_input=False)`, consumed by `et_runtime_test` and — through
+`build_qa.sh` — by `et_leak_harness`), `clamp5.pte` and `lin129.pte` from `export_w4_models.py`,
+and a `mobilenet_v2_unplanned.pte` that `tools/scripts/export_mobilenet.py` generates alongside
+the planned one. Reading which one you have is not guesswork: the flag is plumbed all the way to
+Java (`EtMethodMeta.inputMemoryPlanned`) and logged per input at model load. The full contract, both
+directions, with the ExecuTorch source references:
 [executorch-host-buffer-contract-brief.md](executorch-host-buffer-contract-brief.md).
 
 Two load-time rejections shape everything downstream, both in `EtRuntime`'s constructor. A method
