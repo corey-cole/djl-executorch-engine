@@ -13,6 +13,21 @@ using measly::et::EtRuntime;
 using measly::et::InputDesc;
 using measly::et::MethodMeta;
 
+// Class refs, field IDs and method IDs cached once in JNI_OnLoad. Lookups are relatively expensive
+// and FindClass is unsafe with an exception pending, so nothing here is resolved per call. The
+// jclass values are global refs (see cacheGlobalClass) because a local ref would not survive the
+// return from JNI_OnLoad.
+//
+// DANGER: the descriptor strings passed to GetFieldID/GetMethodID below are string literals and no
+// compiler on either side checks them. Change a Java field or constructor without updating its
+// descriptor here and the lookup returns null. Every one of them is null-checked and fails
+// JNI_OnLoad with JNI_ERR, which surfaces as an UnsatisfiedLinkError when EtNative's static
+// initializer runs System.load -- a RUNTIME failure at class init, not a build failure. A local
+// `./gradlew test` hides it only because Java and the shim get rebuilt from the same tree; the real
+// exposure is a staged per-platform binary (the .dll, or a resource .so someone did not rebuild)
+// that is a revision behind the Java classes. Treat the Java declaration and the literal here as a
+// single edit. Not hypothetical: adding EtMethodMeta.plannedArenaBytes required changing
+// "(I[I[Z)V" to "(I[I[ZJ)V" (commit 717eda2).
 static jclass g_etTensorClass = nullptr;
 static jfieldID g_fShape = nullptr;
 static jfieldID g_fScalarType = nullptr;
@@ -27,6 +42,17 @@ static jmethodID g_byteBufferWrap = nullptr;
 
 static jclass g_runtimeExceptionClass = nullptr;
 static jclass g_illegalArgumentExceptionClass = nullptr;
+
+// Exception translation. Both helpers only SCHEDULE a Java exception; neither returns control to
+// the JVM, so every caller must return immediately afterwards. Continuing to make JNI calls with an
+// exception pending is undefined behaviour.
+//
+// The two obtain their class differently, on purpose. throwJava is called from catch blocks where a
+// Java exception may already be pending, and FindClass would then itself fail and hand a null
+// jclass to ThrowNew -- hence the global ref cached at JNI_OnLoad. throwIllegalArgument is called
+// from argument checks before anything of ours can have thrown, so a per-call FindClass is
+// affordable there. (forward() also throws IllegalArgumentException directly off the cached
+// g_illegalArgumentExceptionClass for the direct-buffer check; the two spellings are equivalent.)
 
 // Translate a C++ exception into a Java RuntimeException. Call from a catch block.
 // The class is cached at JNI_OnLoad: a per-call FindClass here would itself be UB when an
@@ -122,6 +148,17 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   return JNI_VERSION_1_6;
 }
 
+// Handle convention for every entry point below. A `jlong handle` is a reinterpret_cast of an
+// EtRuntime* whose ownership lives on the Java side: loadModule news it and hands the pointer over,
+// destroy deletes it. There is no registry and no validation here -- a handle that was already
+// destroyed, was never returned by loadModule, or is 0 because the block was closed, is dereferenced
+// blind. That is a use-after-free or a null deref inside native code, not a Java exception.
+//
+// Java-side discipline is therefore the whole safety story, and it is only partial by design:
+// EtSymbolBlock.close() zeroes its handle field under statsLock and toStats() re-reads it under the
+// same monitor, so the stats poll can never race a destroy. forwardInternal deliberately stays off
+// that monitor to keep the hot path lock-free, which is exactly why "do not close a model with a
+// forward in flight" is a documented caller contract rather than something enforced.
 extern "C" JNIEXPORT jlong JNICALL
 Java_org_measly_executorch_jni_EtNative_loadModule(
     JNIEnv* env, jclass, jstring jpath, jint jworkspaceSharingMode) {
@@ -179,8 +216,19 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
 
   jsize nIn = env->GetArrayLength(jinputs);
   std::vector<InputDesc> inputs(nIn);
-  // The direct ByteBuffers (jinputs elements) stay live for the whole call, so the
-  // addresses below remain valid through rt->forward().
+  // The direct ByteBuffers reached through jinputs must stay live for the whole call:
+  // GetDirectBufferAddress hands back a raw pointer into JVM-managed off-heap memory, and that
+  // memory is only reachable through the DirectByteBuffer object. Both consumers read it inside
+  // rt->forward() -- a memory-planned input is memcpy'd by ExecuTorch at set_input (the export
+  // default), an unplanned one is memcpy'd into our staging slot first -- so the addresses must stay
+  // valid until forward() returns. They do, because jinputs is a parameter local ref alive for the
+  // whole frame and its elements are reachable from it. That reachability is what makes the
+  // DeleteLocalRef calls at the bottom of this loop safe.
+  //
+  // Each GetObjectArrayElement / GetObjectField below mints a LOCAL reference, and a frame is only
+  // guaranteed 16 free local slots by the JNI spec (real JVMs grant far more, which is what lets an
+  // omission here go unnoticed). Three refs per input would exhaust that guarantee at six inputs, so
+  // the loop releases all three before iterating. Keep it that way if you add another ref.
   for (jsize i = 0; i < nIn; ++i) {
     jobject jt = env->GetObjectArrayElement(jinputs, i);
     if (jt == nullptr) {
@@ -271,6 +319,12 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
   }
 }
 
+// Frees the runtime and its arena. A handle of 0 is safe -- `delete` on a null pointer is a defined
+// no-op -- so the Java-side `if (handle != 0)` guard is about not double-freeing, not about 0
+// itself. Nothing here makes destroy idempotent for a NON-zero handle: calling it twice is a double
+// free, which is why EtSymbolBlock.close() zeroes the field inside the same synchronized block.
+// The catch exists because ~EtRuntime runs ExecuTorch teardown; a throwing destructor is reported
+// rather than swallowed, but the memory is already gone by then either way.
 extern "C" JNIEXPORT void JNICALL
 Java_org_measly_executorch_jni_EtNative_destroy(JNIEnv* env, jclass, jlong handle) {
   try {
@@ -296,6 +350,10 @@ Java_org_measly_executorch_jni_EtNative_intraOpThreads(JNIEnv* env, jclass) {
   return static_cast<jint>(measly::et::intraOpThreads());
 }
 
+// Total capacity of the input staging slots, for the stats path. Two distinct zero-ish results the
+// caller must not conflate: a genuine 0 means every input is memory-planned (the export default)
+// and nothing is ever staged, whereas -1 is the error return after an exception was scheduled.
+// EtSymbolBlock.toStats() also reports -1 for a closed block, so -1 uniformly means "unavailable".
 extern "C" JNIEXPORT jlong JNICALL
 Java_org_measly_executorch_jni_EtNative_stagingBytes(JNIEnv* env, jclass, jlong handle) {
   auto* rt = reinterpret_cast<EtRuntime*>(handle);

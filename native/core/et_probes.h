@@ -1,3 +1,14 @@
+// Observability for the input staging path: a USDT/DTrace probe plus an in-process handler slot the
+// unit tests install to assert on the same events.
+//
+// They exist because staging is invisible from Java -- it happens entirely inside the native
+// allocator, below the JNI boundary -- and a staging_grow on the hot path means a slot was
+// under-sized at load. That is a bug, and the probe is what makes it observable from a bpftrace
+// one-liner on a running JVM instead of only under the leak harness.
+//
+// Only the USDT half compiles out off Linux/GCC (the DTRACE_PROBE* macros become no-ops above). The
+// probe_dispatch call is always compiled in on every platform; with no handler installed it costs a
+// relaxed atomic load and a not-taken branch, which is why it is acceptable on the hot path.
 #pragma once
 #include <atomic>
 #include <cstdint>

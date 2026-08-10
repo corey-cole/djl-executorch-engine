@@ -1,6 +1,11 @@
 #ifndef MEASLY_ET_LOG_LEVEL_H
 #define MEASLY_ET_LOG_LEVEL_H
 
+// The single translation between ExecuTorch's PAL log levels and the level codes we hand to Java.
+// The integers are ours, not ExecuTorch's, so this table is the only definition of them on the
+// native side and EtNative.nativeLog is the only one on the Java side. Note the mapping is lossy in
+// both directions -- 'F' collapses onto ERROR and '?' is reported as WARN -- so it is not
+// invertible; do not add a reverse function expecting a round trip.
 namespace measly::et {
 
 // slf4j level codes shared across the JNI boundary with EtNative.nativeLog.
