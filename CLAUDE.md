@@ -17,7 +17,17 @@ Supported platforms: `linux-x86_64`, `linux-aarch64` and `windows-x86_64` (all s
 - `LibUtils` resolves and loads the native library: `EXECUTORCH_LIBRARY_PATH` env override wins; otherwise the `.so`/`.dll` is extracted from the classpath (`/native/<platform>/`) into a **content-addressed cache** (`~/.cache/executorch-djl/<sha256>/` on Linux, `%LOCALAPPDATA%\executorch-djl\<sha256>\` on Windows) and `System.load`ed. Windows can't delete a loaded DLL, hence the stable per-content dir. Keep `LibUtils.libName` in sync with `nativeLibName` in `build.gradle.kts`.
 
 **Native layer** (`native/`)
-- `core/et_runtime.{h,cpp}` — a **JNIEnv-free** C++ core (`measly::et::EtRuntime`) that wraps the ExecuTorch `Module`. Deliberately free of any JVM dependency so it can be linked by the shim, the Catch2 unit tests, and the leak harness alike. Borrowed input pointers, single-copy out (into a heap `byte[]`, so outputs are *not* direct buffers). **The input borrow is not zero-copy end to end:** ExecuTorch's `Method::set_input` copies into its own arena for any input where `is_memory_planned()` is true — the export default, and true for every `.pte` in this repo — and honors the borrow only for models exported with `alloc_graph_input=False`. See `docs/executorch-host-buffer-contract-brief.md`.
+- `core/et_runtime.{h,cpp}` — a **JNIEnv-free** C++ core (`measly::et::EtRuntime`) that wraps the
+  ExecuTorch `Module`. Deliberately free of any JVM dependency so it can be linked by the shim, the
+  Catch2 unit tests, and the leak harness alike. Borrowed input pointers, single-copy out (into a
+  heap `byte[]`, so outputs are *not* direct buffers). **The input borrow is not zero-copy end to
+  end:** ExecuTorch's `Method::set_input` copies into its own arena for any input where
+  `is_memory_planned()` is true — the export default, `MemoryPlanningPass(alloc_graph_input=True)`,
+  and so the case for any model a user brings unless they went out of their way — and honors the
+  borrow only for models exported with `alloc_graph_input=False`. This repo ships a handful of such
+  unplanned fixtures deliberately, to exercise the borrow path: `native/spike/add_unplanned.pte`,
+  `clamp5.pte`, `lin129.pte`, and `example/build/models/mobilenet_v2_unplanned.pte`. See
+  `docs/native-architecture.md` §3 and `docs/executorch-host-buffer-contract-brief.md`.
 - `jni/executorch_djl_jni.cpp` + `jni/et_logging.cpp` — the JNI shim (`executorch_djl` shared library). `et_logging.cpp` is a PAL bridge that forwards native `ET_LOG` output to slf4j via `EtNative.nativeLog` (level codes: 0=debug 1=info 2=warn 3=error).
 - `harness/` — `et_timing_harness` (Release benchmark) and `et_leak_harness` (ASan/LSan). `test/et_runtime_test.cpp` — Catch2 units. These link only the JNIEnv-free core, so QA/bench configures need no JDK.
 
@@ -153,4 +163,10 @@ Shell-level tests for the build machinery live in `native/tests/` (e.g. `cmake_r
 - `weight_cache_enabled` is deliberately **not** exposed. `XnnpackBackend::execute()` holds a second process-global mutex (`weights_cache_mutex_`) for the whole delegate call whenever a model uses the cache, which would undo everything `workspaceSharingMode=disabled` buys. It is off in our pin (`EXECUTORCH_XNNPACK_ENABLE_WEIGHT_CACHE=OFF`), which is what makes the `disabled` numbers above real — treat a pin bump that flips it as a performance regression. To enable it anyway no rebuild is needed: the macro guards only the *default*, and `XNNWeightsCache` is compiled into the shipped `libxnnpack_backend.a`. Set `weight_cache_enabled` (a **bool**) in the same `LoadBackendOptionsMap` built in `native/core/et_runtime.cpp`, and keep those models off the hot path.
 - `EtRuntime`'s constructor calls `Module::load_forward()` unconditionally so the workspace sharing mode (and any XNNPACK delegate) is resolved at construction, not deferred to the first `forward()`. This applies to every XNNPACK-delegated model, not only ones that set the new option: model loading is slower and the first inference is faster, an invalid sharing mode now fails at load rather than at first predict, and in `native/harness/et_timing_harness.cpp` this shifts measured cost from `cold_ms` into `load_ms` (steady-state throughput is unaffected since warmup is discarded there).
 - The `native/spike/` directory holds throwaway spike/smoke files (`EtNative.java`, `cpp_smoke.cpp`, `add.pte`), not production code.
-- Design docs live in `docs/superpowers/specs/` and `docs/superpowers/plans/`; the top-level `djl-executorch-engine-design.md` is the overall design writeup.
+- `docs/README.md` is the documentation index. Current reference material (`docs/building.md`,
+  `docs/native-architecture.md`, `docs/benchmarking.md`, `docs/ci-native-build.md`,
+  `docs/executorch-build-notes.md`, `docs/executorch-host-buffer-contract-brief.md`) lives directly
+  under `docs/`; point-in-time records (handovers, work-in-progress notes, superseded research) live
+  under `docs/research/`, kept for their reasoning but not current guidance. Design docs live in
+  `docs/superpowers/specs/` and `docs/superpowers/plans/`; the top-level
+  `djl-executorch-engine-design.md` is the overall design writeup.
