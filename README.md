@@ -4,8 +4,8 @@ As of its most recent version (0.36.0), [DJL](https://djl.ai/) can only load PyT
 through the TorchScript API, which PyTorch deprecated several point releases ago. The successor is
 the [ExecuTorch](https://executorch.ai/) backend — a lightweight, cross-language runtime built for
 edge deployment, producing `.pte` files. This project supplies ExecuTorch as a DJL engine, so models
-exported with the current API run under DJL's `Criteria`/`Predictor`/`Translator` programming model
-with no changes to calling code.
+exported with the current API run under DJL's familiar `Criteria`/`Predictor`/`Translator`
+programming model.
 
 It is registered as a *separate* engine (`optEngine("ExecuTorch")`) rather than a replacement for
 DJL's PyTorch engine, which means both can be present in one process and a codebase can migrate off
@@ -230,7 +230,7 @@ Unavailable values are excluded from the rollup totals rather than summed as neg
   `forward()` still in flight: the native handle goes away underneath the running call.
 - **The XNNPACK weight cache is deliberately not exposed.** Enabling it makes
   `XnnpackBackend::execute()` hold a second process-global mutex for the whole delegate call, which
-  would undo everything `workspaceSharingMode=disabled` buys. It is compiled off in the pinned
+  would undo everything `workspaceSharingMode=disabled` buys. It is off by default in the pinned
   runtime.
 - **The XNNPACK delegate workspace is not counted in the reported native footprint.**
   `plannedArenaBytes` is ExecuTorch's planned activation arena only, so a delegated model's real
