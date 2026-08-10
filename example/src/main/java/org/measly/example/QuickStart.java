@@ -5,6 +5,7 @@ import ai.djl.ndarray.NDArray;
 import ai.djl.ndarray.NDList;
 import ai.djl.repository.zoo.Criteria;
 import ai.djl.repository.zoo.ZooModel;
+import ai.djl.translate.Batchifier;
 import ai.djl.translate.Translator;
 import ai.djl.translate.TranslatorContext;
 import java.nio.file.Path;
@@ -26,6 +27,24 @@ public final class QuickStart {
 
     /** Turns a {@code float[]} into the model's input list and its output back into a float. */
     private static final class AddTranslator implements Translator<float[], Float> {
+        // EtNDArray does not support NDArrays.stack (used by the default STACK batchifier),
+        // so we provide a no-op batchifier. This example always predicts one input at a time.
+        private static final Batchifier BATCHIFIER =
+                new Batchifier() {
+                    @Override
+                    public NDList batchify(NDList[] inputs) {
+                        if (inputs.length != 1) {
+                            throw new UnsupportedOperationException("Batch size 1 only");
+                        }
+                        return inputs[0];
+                    }
+
+                    @Override
+                    public NDList[] unbatchify(NDList inputs) {
+                        return new NDList[] {inputs};
+                    }
+                };
+
         @Override
         public NDList processInput(TranslatorContext ctx, float[] input) {
             // One NDArray per model input. The add model takes two 1-element float32 tensors.
@@ -40,23 +59,8 @@ public final class QuickStart {
         }
 
         @Override
-        public ai.djl.translate.Batchifier getBatchifier() {
-            // EtNDArray does not support NDArrays.stack (used by the default STACK batchifier),
-            // so we provide a no-op batchifier. This example always predicts one input at a time.
-            return new ai.djl.translate.Batchifier() {
-                @Override
-                public NDList batchify(NDList[] inputs) {
-                    if (inputs.length != 1) {
-                        throw new UnsupportedOperationException("Batch size 1 only");
-                    }
-                    return inputs[0];
-                }
-
-                @Override
-                public NDList[] unbatchify(NDList inputs) {
-                    return new NDList[] {inputs};
-                }
-            };
+        public Batchifier getBatchifier() {
+            return BATCHIFIER;
         }
     }
 
