@@ -1,5 +1,5 @@
 > **Open research — no decision made, nothing implemented.**
-> Written 2026-08. Explores a possible direction; it is not a plan and nothing here is committed to.
+> Written 2026-07-25. Explores a possible direction; it is not a plan and nothing here is committed to.
 > For current guidance see [docs/README.md](../README.md).
 
 # Panama research sketch: dual JNI + FFM front-ends
