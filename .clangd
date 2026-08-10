@@ -1,7 +1,7 @@
 # Point clangd at a compile database that no build script ever touches.
 #
 # Generate or refresh it with:
-#   ./native/gen_clangd_db.sh
+#   ./native/gen_clangd_db.sh          (see "Editor setup (clangd)" in docs/building.md)
 #
 # Why not native/build: that tree is the shim build's, and native/build.sh `rm -rf`s it on every
 # run. Worse, the blessed build path (native/local_build_wrapper.sh) runs in a container, so the

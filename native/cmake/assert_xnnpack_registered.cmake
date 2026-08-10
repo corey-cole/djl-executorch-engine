@@ -8,7 +8,7 @@
 # to prevent this (see native/CMakeLists.txt link site), but that guarantee lives in the
 # *runtime tarball* we download and can regress out from under us (e.g. a re-rolled Repo A
 # tarball whose config drops the INTERFACE_LINK_OPTIONS wrap). This turns that regression
-# into a build failure instead of a runtime one. See docs/handover-to-engine-2.md §6.
+# into a build failure instead of a runtime one. See docs/research/handover-to-engine-2.md §6.
 #
 # Invoked via: cmake -DSO=<lib> -DNM=<nm> -P assert_xnnpack_registered.cmake
 
@@ -38,7 +38,7 @@ if(_reg_pos EQUAL -1)
     "The xnnpack_backend archive was not whole-archive'd at the final link, so the "
     "backend will fail to register at model-load time ('backend not found').\n"
     "Check that the downloaded runtime's ExecuTorchTargets.cmake still self-whole-archives "
-    "xnnpack_backend (see docs/handover-to-engine-2.md §6).")
+    "xnnpack_backend (see docs/research/handover-to-engine-2.md §6).")
 endif()
 
 # 2) Defense in depth: the XNNPACK microkernels themselves must be present, not just the
@@ -50,7 +50,7 @@ if(_xnn_count LESS 100)
   message(FATAL_ERROR
     "XNNPACK microkernels look dropped from ${SO}: only ${_xnn_count} defined 'xnn_*' text "
     "symbols (expected hundreds). The XNNPACK archive was not linked whole. "
-    "See docs/handover-to-engine-2.md §6.")
+    "See docs/research/handover-to-engine-2.md §6.")
 endif()
 
 message(STATUS "XNNPACK post-link assertion OK: backend registration present, ${_xnn_count} xnn_* text symbols")

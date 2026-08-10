@@ -7,7 +7,10 @@ public final class EtDataTypes {
 
     private EtDataTypes() {}
 
-    /** @return the ExecuTorch ScalarType code for {@code dataType}. */
+    /**
+     * @param dataType the DJL data type to convert
+     * @return the ExecuTorch ScalarType code for {@code dataType}.
+     */
     public static int toScalarType(DataType dataType) {
         switch (dataType) {
             case UINT8:   return 0;  // Byte
@@ -23,7 +26,10 @@ public final class EtDataTypes {
         }
     }
 
-    /** @return the DJL {@link DataType} for an ExecuTorch ScalarType code. */
+    /**
+     * @param scalarType the ExecuTorch ScalarType code to convert
+     * @return the DJL {@link DataType} for an ExecuTorch ScalarType code.
+     */
     public static DataType fromScalarType(int scalarType) {
         switch (scalarType) {
             case 0:  return DataType.UINT8;

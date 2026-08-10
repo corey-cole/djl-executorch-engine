@@ -1,20 +1,22 @@
 # ExecuTorch Engine for DJL
 
-As of the most recent version (0.36.0), DJL only supports the TorchScript export API.  This API has been deprecated for several point release versions
-of PyTorch.  One of the export APIs present in PyTorch is the [ExecuTorch](https://executorch.ai/) backend.  This is a lightweight integration layer
-that was built to be cross-language and is intended for edge model deployment.
+As of its most recent version (0.36.0), [DJL](https://djl.ai/) can only load PyTorch models exported
+through the TorchScript API, which PyTorch deprecated several point releases ago.  The successor to TorchScript
+is the Dynamo API which can support multiple pluggable backends.  One of these backends is 
+the [ExecuTorch](https://executorch.ai/) backend — a lightweight, cross-language runtime built for
+edge deployment, producing `.pte` files. This project supplies ExecuTorch as a DJL engine, so models
+exported with the current API run under DJL's familiar `Criteria`/`Predictor`/`Translator`
+programming model.
 
-The goal of this project is to provide an ExecuTorch engine for DJL such that PyTorch based models can make use of the newer export APIs.
-As a separate engine, it also allows for slow migration from TorchScript/PyTorch to this new backend.
+It is registered as a *separate* engine (`optEngine("ExecuTorch")`) rather than a replacement for
+DJL's PyTorch engine, which means both can be present in one process and a codebase can migrate off
+TorchScript model by model instead of in one cut. The engine is **CPU-only** — inference runs on
+the portable kernels plus the XNNPACK delegate — and implements a **deliberately small slice of
+DJL's `NDArray` surface**: enough to marshal inputs and outputs across the JNI boundary, not a
+general tensor library. Arithmetic, broadcasting and stacking on `EtNDArray` are unsupported; do
+that work before you hand data to the translator.
 
-## Building and testing
-
-> **Status:** desktop **linux-x86_64**, **linux-aarch64** and **windows-x86_64**, and a work in progress. These steps
-> build what exists today — the ExecuTorch runtime, our JNI shim, and the JVM + native test suites.
-> The Docker prerequisite below applies to the Linux build only; Windows builds with MSVC 2022 and
-> no container.
-
-### Supported platforms
+## Supported platforms
 
 | Platform | Artifact | Runtime variant | QA |
 |---|---|---|---|
@@ -27,7 +29,10 @@ on first load to a content-addressed cache — `%LOCALAPPDATA%\executorch-djl\<s
 `$XDG_CACHE_HOME` (or `~/.cache`) `/executorch-djl/<sha256>/` elsewhere. Set `EXECUTORCH_LIBRARY_PATH` to
 load a specific library instead and bypass extraction entirely.
 
-### Declaring the dependency
+Windows is built with MSVC 2022 against the `logging` runtime variant; `bare` and `devtools` are
+Linux-only benchmarking builds (see `native/build_variants.sh`).
+
+## Add the dependency
 
 The native jars are published as Gradle variants with per-platform capabilities, so Gradle consumers
 should request the platform by capability rather than by classifier:
@@ -56,98 +61,196 @@ classifier form alongside the main (classifier-less) dependency:
 
 Arm64 hosts use the `linux-aarch64` classifier (and capability) instead.
 
-Windows is built with MSVC 2022 against the `logging` runtime variant; `bare` and `devtools` are
-Linux-only benchmarking builds (see `native/build_variants.sh`).
+## Quickstart
 
-### Prerequisites
+Loading a `.pte` is ordinary DJL: name the engine, point `Criteria` at the model directory, supply a
+`Translator`, and predict.
 
-- **Docker** — the native library is built inside a `manylinux_2_28` container. ExecuTorch 1.3
-  pins `torch==2.12.0`, whose wheel needs **glibc ≥ 2.28**, so the artifact's floor is glibc 2.28
-  (covers RHEL/Rocky 8+, Ubuntu 20.04+, Debian 11+).
-- No ExecuTorch checkout needed — CMake downloads the pinned runtime. Network access is required for
-  the tarball fetch (and Catch2 in QA).
-- **JDK 17** on the host for Gradle. (The native build fetches its own JDK *headers* — you do not
-  need a JDK inside the container.)
+```java
+/** Turns a {@code float[]} into the model's input list and its output back into a float. */
+private static final class AddTranslator implements Translator<float[], Float> {
+    // EtNDArray does not support NDArrays.stack (used by the default STACK batchifier),
+    // so we provide a no-op batchifier. This example always predicts one input at a time.
+    private static final Batchifier BATCHIFIER =
+            new Batchifier() {
+                @Override
+                public NDList batchify(NDList[] inputs) {
+                    if (inputs.length != 1) {
+                        throw new UnsupportedOperationException("Batch size 1 only");
+                    }
+                    return inputs[0];
+                }
 
-### 1. Build the native library
+                @Override
+                public NDList[] unbatchify(NDList inputs) {
+                    return new NDList[] {inputs};
+                }
+            };
 
-The engine loads a native `libexecutorch_djl.so` that is **built from source, not committed**. The
-ExecuTorch **runtime** it links against is **not built here** — CMake downloads a hash-pinned,
-attested tarball published by [`executorch-runtime-dist`](https://github.com/measly-java-learning/executorch-runtime-dist)
-(`native/cmake/EtRuntimePin.cmake`). Build the shim with the container wrapper:
+    @Override
+    public NDList processInput(TranslatorContext ctx, float[] input) {
+        // One NDArray per model input. The add model takes two 1-element float32 tensors.
+        NDArray a = ctx.getNDManager().create(new float[] {input[0]});
+        NDArray b = ctx.getNDManager().create(new float[] {input[1]});
+        return new NDList(a, b);
+    }
 
-```bash
-./native/local_build_wrapper.sh
+    @Override
+    public Float processOutput(TranslatorContext ctx, NDList list) {
+        return list.singletonOrThrow().toFloatArray()[0];
+    }
+
+    @Override
+    public Batchifier getBatchifier() {
+        return BATCHIFIER;
+    }
+}
+
+public static void main(String[] args) throws Exception {
+    Path modelDir = Paths.get(args.length > 0 ? args[0] : "native/spike");
+    String modelName = args.length > 1 ? args[1] : "add";
+
+    Criteria<float[], Float> criteria =
+            Criteria.builder()
+                    .setTypes(float[].class, Float.class)
+                    .optEngine("ExecuTorch") // this engine, by name
+                    .optModelPath(modelDir)
+                    .optModelName(modelName)
+                    .optTranslator(new AddTranslator())
+                    .build();
+
+    // One ZooModel and one Predictor per thread: forward() is not safe to share.
+    try (ZooModel<float[], Float> model = criteria.loadModel();
+            Predictor<float[], Float> predictor = model.newPredictor()) {
+        System.out.println("2 + 3 = " + predictor.predict(new float[] {2f, 3f}));
+    }
+}
 ```
 
-The wrapper launches a `manylinux_2_28` container and runs the build **inside it**, so the staged
-`.so` keeps its **glibc-2.28 floor** (RHEL8+). Inside the container, CMake `FetchContent`s the pinned
-`logging` runtime, compiles the shim, and stages it into `src/main/resources/native/linux-x86_64/`.
-It is fast — there is no ExecuTorch build.
+The `getBatchifier()` override is not optional decoration. DJL's default batchifier is `STACK`,
+which calls `NDArrays.stack()` — an operation `EtNDArray` does not implement — so a translator
+without it fails at the first `predict()`.
 
-**Local fast path (do NOT ship):** to iterate quickly you can run `./native/build.sh` directly on the
-host (no Docker). The resulting `.so` links against a host-glibc runtime and **breaks the 2.28 floor**
-— fine for your own `./gradlew test`, never for a release.
+The full file is [`example/src/main/java/org/measly/example/QuickStart.java`](example/src/main/java/org/measly/example/QuickStart.java);
+run it with `./gradlew :example:runQuickStart`.
 
-**Escape hatch / custom runtime:** set `ET_INSTALL=/path/to/et-install` to link an existing runtime
-tree (e.g. one you built from source per `docs/executorch-build-notes.md`); CMake skips the download.
+## Configuration and tuning
 
-When the pinned runtime provides the first-party custom ops (the `logging` linux-x86_64
-tarball ships an `etnp::lstm` op), the shim auto-detects the tarball's `ETNPExtras.cmake` and
-whole-archives the op in. The Windows tarball has no such extras, so the op is simply absent there.
+### `ai.djl.executorch.num_threads`
 
-**Verifying runtime provenance (optional, local):** CI verifies every pinned tarball with a build
-attestation. To check by hand:
-```bash
-gh attestation verify <downloaded-tarball> --repo measly-java-learning/executorch-runtime-dist
+Sizes ExecuTorch's intra-op (XNNPACK) threadpool, either as a JVM system property or via
+`EtEngine.setIntraOpThreads(n)`. The pool is **process-global and write-once**: the value is applied
+and sealed at the first model load, and a later attempt to change it throws
+`IllegalStateException` rather than silently being ignored. Read the value the native pool actually
+adopted with `EtEngine.getIntraOpThreads()` — the
+runtime may clamp a request. Absent the setting, ExecuTorch's own default applies: the
+performance-core count as derived by cpuinfo, which is not the same as `nproc`. There is
+deliberately no environment variable — nothing in the v1.3.1 threadpool, pthreadpool, or XNNPACK
+init reads one, and `OMP_NUM_THREADS` is inert.
+
+### `workspaceSharingMode`
+
+Selects how the XNNPACK delegate shares its scratch workspace. Set it per model on the criteria, or
+JVM-wide with the `ai.djl.executorch.workspace_sharing_mode` system property, which supplies the
+default for models that do not name one:
+
+```java
+Criteria.builder()
+        .optEngine("ExecuTorch")
+        .optOption("workspaceSharingMode", "disabled")   // or "per_model", "global"
+        // ...
+        .build();
 ```
 
-### 2. Run the tests
+- `disabled` — a private workspace per delegate instance. The most memory, and the only mode under
+  which independent caller threads scale.
+- `per_model` — one workspace shared by all delegates within a model.
+- `global` — one workspace for the whole process, guarded by a process-global mutex. This is the
+  ExecuTorch default for our pin, and therefore the effective default if you set neither the option
+  nor the property.
 
-The JVM integration tests load the native `.so`, so **build it first (step 1)**. Then:
+Unlike `num_threads` this is neither process-global nor write-once: ExecuTorch resolves it per
+delegate at load time, so modes compose freely and load order is irrelevant. An unrecognised
+*option* fails the model load; an unrecognised *property* logs a warning and is ignored.
 
-```bash
-./gradlew test        # unit + native integration tests
-./gradlew leakTest    # JVM-side memory-leak stress test
+> **Note:** Under the default `global` mode, adding caller threads usually makes things *slower*,
+> not faster. An XNNPACK-delegated model already parallelises inside a single `forward()` on the
+> shared intra-op pool, and concurrent delegate calls then serialise on the process-global workspace
+> mutex — so you pay for N threads' memory and get one thread's throughput. Tune
+> `ai.djl.executorch.num_threads` before you add caller threads. Measured on a 4-core/8-thread host
+> with MobileNetV2:
+>
+> | Caller threads | Throughput (`global`) |
+> |---|---|
+> | 1 | 462 forwards/s |
+> | 4 | 305 forwards/s |
+> | 8 | 147 forwards/s |
+>
+> Peak RSS over that sweep went from 33 MB to 224 MB — so the eight-thread configuration costs
+> roughly seven times the memory to deliver under a third of the throughput.
+>
+> Those figures are conditional on that mutex. With `workspaceSharingMode=disabled` each model gets
+> a private workspace and caller threads do scale. Achieved parallelism at one intra-op thread, at
+> 1/2/4/8 caller threads:
+>
+> | Sharing mode | 1 | 2 | 4 | 8 |
+> |---|---|---|---|---|
+> | `global` | 1.12 | 1.12 | 1.12 | 1.17 |
+> | `disabled` | 1.12 | 2.23 | 4.35 | 7.13 |
+>
+> Ratios on larger hosts are unmeasured.
+
+## Monitoring
+
+`EtEngineStats.snapshot()` returns an immutable `EtStatsSnapshot`: effective configuration, process
+totals, and per-model detail for every live model. It is a cold-path read designed for a scheduled
+poll or a health endpoint, and it never throws — a value that cannot be read degrades rather than
+propagating a failure out of a monitoring call.
+
+```java
+EtStatsSnapshot stats = EtEngineStats.snapshot();
+System.out.println(stats.getModelsLive() + " live, " + stats.getIntraOpThreads() + " threads");
+stats.getModels().forEach(m -> System.out.println(m.getName() + ": " + m.getForwardCount()));
 ```
 
-### 3. Native QA and benchmarking (optional)
+The same snapshot is exposed over JMX as an MXBean under the object name
+`org.measly.executorch:type=EtEngineStats`, auto-registered at the first model load. Set
+`ai.djl.executorch.jmx_enabled=false` to opt out; registration failures are logged and swallowed
+rather than breaking the application.
 
-`native/build_qa.sh` (AddressSanitizer/LeakSanitizer Catch2 units + leak harness), `native/bench.sh`
-(Release timing harness), and `native/build_variants.sh` (times all three runtime variants) each
-fetch the runtime via CMake (or set `ET_INSTALL` for the escape hatch). Run them in the **same
-`manylinux_2_28` container** as the shim build so the toolchain matches — pass the script to the
-wrapper:
+Byte-valued fields follow one convention throughout: **`-1` means unavailable** (the model is
+closed, or the native library could not be reached) and **`0` means genuinely zero**. The
+distinction matters most for `stagingBytes`, which is legitimately `0` whenever every model input is
+memory-planned — the ExecuTorch export default, and true of very nearly every `.pte` in practice.
+Unavailable values are excluded from the rollup totals rather than summed as negatives.
 
-```bash
-./native/local_build_wrapper.sh native/build_qa.sh
-./native/local_build_wrapper.sh native/bench.sh
-ITERS=2000 ./native/local_build_wrapper.sh native/build_variants.sh
-```
+## Limitations
 
-Running them directly on the host works but is unsupported: the runtime toolchain won't match, and
-a `native/bench`/`native/asan` tree left over from a container run has a different source root — the
-scripts wipe their own tree to avoid that collision, but the host toolchain mismatch remains. The
-wrapper is the blessed path.
+- **One `Model`/`Predictor` per thread.** `EtSymbolBlock.forward()` is not thread-safe on the same
+  model. Share nothing; give each thread its own `ZooModel`. In particular do not put a shared model
+  behind a `ThreadLocal` `Predictor` — that shares the model. And never `close()` a model with a
+  `forward()` still in flight: the native handle goes away underneath the running call.
+- **The XNNPACK weight cache is deliberately not exposed.** Enabling it makes
+  `XnnpackBackend::execute()` hold a second process-global mutex for the whole delegate call, which
+  would undo everything `workspaceSharingMode=disabled` buys. It is off by default in the pinned
+  runtime.
+- **The XNNPACK delegate workspace is not counted in the reported native footprint.**
+  `plannedArenaBytes` is ExecuTorch's planned activation arena only, so a delegated model's real
+  native usage is higher than the reported figure by the size of its workspace — which under
+  `disabled` scales with the number of live models.
+- **`NDArray` support is minimal**, as described above; and the engine is CPU-only, with no CUDA,
+  Metal, or NPU delegates.
 
-### Container file ownership (known gap)
+## Building from source
 
-The container builds run as **root**, so anything written into the bind-mounted repo ends up
-root-owned on the host. `native/build.sh` mitigates this for **its own** outputs — when the wrapper
-passes `HOST_UID`/`HOST_GID`, an `EXIT` trap `chown`s them back to the invoking user
-(`native/build` and the staged `src/main/resources/native/linux-*`).
+The Java side is an ordinary Gradle build on JDK 17, but the engine also needs a native JNI shim
+that is **built from source, not committed** — the JVM integration tests will not run until it
+exists. The ExecuTorch runtime the shim links against is *not* compiled here either: CMake downloads
+a hash-pinned, build-attested tarball, so no ExecuTorch checkout is required, only network access.
+On Linux the shim is built inside a `manylinux_2_28` container to hold the glibc 2.28 floor that
+ExecuTorch's `torch` dependency imposes; on Windows it is built directly with MSVC 2022.
 
-The sibling scripts do **not** yet do this, so they leave root-owned directories behind:
-
-- `native/bench.sh` → `native/bench/`
-- `native/build_variants.sh` → `native/bench-results/` (and drives `bench.sh` → `native/bench/`)
-- `native/build_qa.sh` → `native/asan/`
-
-Until these grow the same trap, fix ownership by hand after running them, e.g.:
-
-```bash
-sudo chown -R "$(id -u):$(id -g)" native/bench native/bench-results native/asan
-```
+See [docs/building.md](docs/building.md).
 
 ## Third-party licenses
 

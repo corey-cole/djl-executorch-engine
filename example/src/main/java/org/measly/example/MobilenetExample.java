@@ -15,6 +15,11 @@ import java.util.List;
 public final class MobilenetExample {
     private MobilenetExample() {}
 
+    /**
+     * @param args optional single argument naming a {@link Variant}; defaults to {@code
+     *     ET_HYBRID} when absent
+     * @throws Exception propagated from model loading, prediction, or resource I/O
+     */
     public static void main(String[] args) throws Exception {
         Variant variant;
         try {

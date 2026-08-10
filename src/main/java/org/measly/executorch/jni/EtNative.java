@@ -26,6 +26,12 @@ public final class EtNative {
      */
     public static native long loadModule(String ptePath, int workspaceSharingMode);
 
+    /**
+     * Reads the static I/O metadata ExecuTorch captured for {@code forward} at load time.
+     *
+     * @param handle the native handle
+     * @return per-input scalar types, memory-planned flags, and the planned arena size
+     */
     public static native EtMethodMeta methodMeta(long handle);
 
     /**
@@ -39,14 +45,33 @@ public final class EtNative {
      */
     public static native long stagingBytes(long handle);
 
+    /**
+     * Runs the model's {@code forward} method on {@code inputs}.
+     *
+     * @param handle the native handle
+     * @param inputs one {@link EtTensor} per declared input, in position order
+     * @return one {@link EtTensor} per model output, each a heap-buffer single copy out of
+     *     ExecuTorch's arena
+     */
     public static native EtTensor[] forward(long handle, EtTensor[] inputs);
 
+    /**
+     * Releases the native module and its arena. Idempotent on the Java side is not guaranteed;
+     * callers must not pass this handle to any other native method afterward.
+     *
+     * @param handle the native handle
+     */
     public static native void destroy(long handle);
 
-    /** Sizes ExecuTorch's intra-op (XNNPACK) pool; returns the count in effect after the attempt. */
+    /**
+     * Sets the process-global intra-op (XNNPACK) thread pool size.
+     *
+     * @param n requested thread count; must be at least 1
+     * @return the count in effect after the attempt, which may differ from {@code n}
+     */
     public static native int setIntraOpThreads(int n);
 
-    /** Current intra-op pool size as reported by the native pool. */
+    /** @return the current intra-op pool size as reported by the native pool */
     public static native int intraOpThreads();
 
     /**

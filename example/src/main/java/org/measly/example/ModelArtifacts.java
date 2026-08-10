@@ -8,12 +8,21 @@ import java.nio.file.Paths;
 public final class ModelArtifacts {
     private ModelArtifacts() {}
 
-    /** Directory holding generated artifacts; overridable via -Dexample.models.dir. */
+    /**
+     * Directory holding generated artifacts; overridable via -Dexample.models.dir.
+     *
+     * @return the configured or default artifacts directory
+     */
     public static Path dir() {
         return Paths.get(System.getProperty("example.models.dir", "build/models"));
     }
 
-    /** Returns the artifact path if present, else throws pointing at the export task. */
+    /**
+     * Returns the artifact path if present, else throws pointing at the export task.
+     *
+     * @param name artifact file name, resolved under {@link #dir()}
+     * @return the resolved, existing artifact path
+     */
     public static Path require(String name) {
         Path p = dir().resolve(name);
         if (!Files.exists(p)) {

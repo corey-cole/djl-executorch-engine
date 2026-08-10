@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 /** ExecuTorch implementation of {@link Engine}. CPU-only, limited NDArray support. */
 public final class EtEngine extends Engine {
 
+    /** The DJL engine name this plugin registers: {@value}. */
     public static final String ENGINE_NAME = "ExecuTorch";
     static final int RANK = 10;
     static final String EXECUTORCH_VERSION = "1.3.1"; // pinned ExecuTorch runtime version
@@ -149,6 +150,8 @@ public final class EtEngine extends Engine {
      * Effective intra-op pool size as reported by the native pool (get_thread_count), not the
      * requested value -- on a 40-core host the difference is the point. Triggers the native
      * library load.
+     *
+     * @return the pool size the native runtime is actually using
      */
     public static int getIntraOpThreads() {
         return EtNative.intraOpThreads();

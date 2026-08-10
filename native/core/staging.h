@@ -37,6 +37,15 @@ inline void stagingFree(void* p) {
 }  // namespace detail
 
 // Grow-only, 64-byte-aligned slot buffer. Ensure() never shrinks; steady state is zero allocations.
+//
+// The slot knows nothing about kStagingPadding: ensure() sizes exactly what it is asked for, and it
+// is every caller's job to ask for tensor bytes PLUS the padding so XNNPACK's over-read lands in
+// slack. Both call sites in et_runtime.cpp do (load-time sizing and the forward() regrow guard);
+// a new caller that forgets is an out-of-bounds read that no assertion here will catch.
+//
+// The 64-byte alignment is not about XNNPACK -- it is what makes the rounding legal: POSIX
+// aligned_alloc requires the size be a multiple of the alignment, which is why ensure() rounds up
+// to a multiple of 64 rather than allocating `needed` directly.
 class StagingSlot {
  public:
   StagingSlot() = default;

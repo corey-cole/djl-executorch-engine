@@ -25,6 +25,16 @@ application {
     mainClass = "org.measly.example.MobilenetExample"
 }
 
+// The README quickstart, runnable. workingDir is the repo root so the default model path
+// (native/spike/add.pte) resolves from a fresh clone with no export step.
+tasks.register<JavaExec>("runQuickStart") {
+    group = "application"
+    description = "Runs the README quickstart against native/spike/add.pte."
+    mainClass = "org.measly.example.QuickStart"
+    classpath = sourceSets["main"].runtimeClasspath
+    workingDir = rootProject.projectDir
+}
+
 tasks.test { useJUnitPlatform() }
 
 // Model artifacts are generated on demand into this directory (see the exportModels task, Task 3).

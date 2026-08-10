@@ -1,7 +1,7 @@
 # Research Brief: The ExecuTorch Host-Buffer Contract
 
 **Status:** Proposal for feasibility assessment, opened 2026-08-04. This brief
-originated from reading `docs/iree-lessons-learned/2026-08-04-borrowed-host-buffers-findings.md`
+originated from reading `docs/research/iree-lessons-learned/2026-08-04-borrowed-host-buffers-findings.md`
 — the completed zero-copy spike on the sibling `djl-iree-engine` — and asking
 which of its findings transfer here. Several do. The most important one
 **inverts**, and that inversion is the reason this brief exists rather than a
@@ -704,7 +704,7 @@ cd /tmp/et-w5-baseline
 
 # input A/B: same MobileNet, planned vs unplanned export (the invisible input copy)
 # ET_NATIVE (not ET_HYBRID): the fat jar's META-INF/services keeps only the ExecuTorch
-# provider (jmhJar duplicatesStrategy=EXCLUDE — see docs/iree-lessons-learned §3), so a
+# provider (jmhJar duplicatesStrategy=EXCLUDE — see docs/research/iree-lessons-learned §3), so a
 # PyTorch-backed arm cannot load from java -jar. The A/B delta is the export mode alone;
 # ET_NATIVE also keeps the fork LibTorch-free.
 EXECUTORCH_LIBRARY_PATH=/tmp/et-pre-w6.so systemd-run --user --scope -p MemoryMax=4G taskset -c 0-3 \
@@ -832,7 +832,7 @@ likely to ship.
 
 **Provenance note.** The grow-only per-slot staging pattern comes from a
 `djl-iree-engine` session that is **not** captured in
-`docs/iree-lessons-learned/` — neither the brief nor the findings doc there
+`docs/research/iree-lessons-learned/` — neither the brief nor the findings doc there
 mentions it (grep for "grow", "staging buffer", "per-slot"). It is recorded
 here as a design this repo adopts on the reasoning below, not as a result
 inherited with evidence attached. If the IREE measurement behind it matters
@@ -1290,7 +1290,7 @@ oomd kill cannot take the shell. Always pair with `timeout` (a memory cap does
 not stop a hang) and `taskset` (which lowers `nproc`-derived job counts, and is
 not a safety mechanism by itself). `ulimit -v` is incompatible with ASan, whose
 shadow memory reserves ~16 TB of address space. Full rationale and fallbacks:
-`docs/iree-lessons-learned/borrowed-host-buffers-brief.md` §7.
+`docs/research/iree-lessons-learned/borrowed-host-buffers-brief.md` §7.
 
 Two project-specific notes:
 
@@ -1618,7 +1618,7 @@ XNNPACK citations are relative to
   the quantized sub-route of Route B is safe on AVX and therefore useless as a
   probe.
 
-- `docs/iree-lessons-learned/2026-08-04-borrowed-host-buffers-findings.md` — the
+- `docs/research/iree-lessons-learned/2026-08-04-borrowed-host-buffers-findings.md` — the
   sibling spike this brief derives from; §4 there holds the JDK direct-buffer
   alignment histogram (`addr % 64 ∈ {0,16,32,48}`, ~40% at 0), which is reusable
   here as an observation but not as a guarantee — the JVM promises 8-byte

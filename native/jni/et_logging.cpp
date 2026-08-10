@@ -1,3 +1,17 @@
+// ExecuTorch PAL logging bridge: forwards native ET_LOG output to slf4j via EtNative.nativeLog.
+//
+// ExecuTorch calls the PAL emitter from arbitrary native threads, including intra-op pool threads
+// the JVM has never seen, so nothing here may assume a JNIEnv already exists -- the sink attaches
+// to the JVM itself when GetEnv reports JNI_EDETACHED.
+//
+// The level codes crossing to Java are ours, not ExecuTorch's: 0=debug 1=info 2=warn 3=error, with
+// the mapping from ExecuTorch's PAL level characters living in et_log_level.h. Keep that table and
+// EtNative.nativeLog in sync.
+//
+// A log call must never fail an inference and must never perturb the caller's exception state.
+// Every failure path -- no VM, attach refused, an exception already pending, NewStringUTF OOM --
+// falls back to the PAL emitter that was installed before us (or stderr), so the message is
+// downgraded rather than lost, and any exception this file provoked is cleared before returning.
 #include "et_logging.h"
 
 #include <cstdio>
