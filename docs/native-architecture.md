@@ -185,7 +185,7 @@ of exactly zero. A `staging_grow` on the hot path means a slot was under-sized a
 bug. `staging_input` is the routine observability: it reports, per input, how many bytes crossed and
 which path it took.
 
-Only the USDT half compiles out off Linux/GCC. The in-process dispatch is compiled in everywhere and
+Only the USDT half compiles out when not on Linux/GCC. The in-process dispatch is compiled in everywhere and
 costs a relaxed atomic load and a not-taken branch when no handler is installed, which is what makes
 it acceptable on the hot path.
 

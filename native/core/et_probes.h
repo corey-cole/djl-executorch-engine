@@ -6,7 +6,7 @@
 // under-sized at load. That is a bug, and the probe is what makes it observable from a bpftrace
 // one-liner on a running JVM instead of only under the leak harness.
 //
-// Only the USDT half compiles out off Linux/GCC (the DTRACE_PROBE* macros become no-ops above). The
+// Only the USDT half compiles out when not on Linux/GCC (the DTRACE_PROBE* macros become no-ops above). The
 // probe_dispatch call is always compiled in on every platform; with no handler installed it costs a
 // relaxed atomic load and a not-taken branch, which is why it is acceptable on the hot path.
 #pragma once
