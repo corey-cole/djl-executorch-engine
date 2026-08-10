@@ -139,8 +139,9 @@ run it with `./gradlew :example:runQuickStart`.
 
 Sizes ExecuTorch's intra-op (XNNPACK) threadpool, either as a JVM system property or via
 `EtEngine.setIntraOpThreads(n)`. The pool is **process-global and write-once**: the value is applied
-and sealed at the first model load, and a later attempt to change it is refused rather than silently
-ignored. Read the value the native pool actually adopted with `EtEngine.getIntraOpThreads()` — the
+and sealed at the first model load, and a later attempt to change it throws
+`IllegalStateException` rather than silently being ignored. Read the value the native pool actually
+adopted with `EtEngine.getIntraOpThreads()` — the
 runtime may clamp a request. Absent the setting, ExecuTorch's own default applies: the
 performance-core count as derived by cpuinfo, which is not the same as `nproc`. There is
 deliberately no environment variable — nothing in the v1.3.1 threadpool, pthreadpool, or XNNPACK

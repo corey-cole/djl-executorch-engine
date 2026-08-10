@@ -38,9 +38,15 @@ The wrapper launches a `manylinux_2_28` container and runs the build **inside it
 pinned `logging` runtime, compiles the shim, and stages it into
 `src/main/resources/native/linux-x86_64/`. It is fast — there is no ExecuTorch build.
 
-**Local fast path (do NOT ship):** to iterate quickly you can run `./native/build.sh` directly on
-the host (no Docker). The resulting `.so` links against a host-glibc runtime and **breaks the 2.28
-floor** — fine for your own `./gradlew test`, never for a release.
+**There is no host fast path on Linux.** `native/build.sh` is what `local_build_wrapper.sh` invokes
+*inside* the container, not a way to skip Docker — its non-Windows branch unconditionally assumes a
+manylinux_2_28 image (it extracts a Corretto RPM the wrapper's bind-mount stages at
+`/workspace/amazon-corretto-linux-jdk.rpm`, calls `rpm2archive`, absent on Debian/Ubuntu, and
+expects `/opt/python/cp312-cp312/bin` on PATH). Running it directly on a bare Linux host fails
+outright (e.g. `mkdir /opt/corretto: Permission denied`, or a missing `/workspace/...` RPM); it
+does not merely produce a `.so` that breaks the glibc-2.28 floor. `local_build_wrapper.sh` is the
+only supported path on Linux. (On Windows, `build.sh` *is* run directly on the host — see
+[Windows](#4-windows) below — because there is no equivalent container image for that platform.)
 
 **Escape hatch / custom runtime:** set `ET_INSTALL=/path/to/et-install` to link an existing runtime
 tree (e.g. one you built from source per `docs/executorch-build-notes.md`); CMake then skips the

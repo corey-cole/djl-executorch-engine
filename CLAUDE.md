@@ -26,8 +26,10 @@ Supported platforms: `linux-x86_64`, `linux-aarch64` and `windows-x86_64` (all s
   and so the case for any model a user brings unless they went out of their way — and honors the
   borrow only for models exported with `alloc_graph_input=False`. This repo ships a handful of such
   unplanned fixtures deliberately, to exercise the borrow path: `native/spike/add_unplanned.pte`,
-  `clamp5.pte`, `lin129.pte`, and `example/build/models/mobilenet_v2_unplanned.pte`. See
-  `docs/native-architecture.md` §3 and `docs/executorch-host-buffer-contract-brief.md`.
+  `clamp5.pte`, and `lin129.pte`. `example/build/models/mobilenet_v2_unplanned.pte` exercises the
+  same path but is not shipped — it's a gitignored build output that
+  `tools/scripts/export_mobilenet.py` generates on demand. See `docs/native-architecture.md` §3 and
+  `docs/executorch-host-buffer-contract-brief.md`.
 - `jni/executorch_djl_jni.cpp` + `jni/et_logging.cpp` — the JNI shim (`executorch_djl` shared library). `et_logging.cpp` is a PAL bridge that forwards native `ET_LOG` output to slf4j via `EtNative.nativeLog` (level codes: 0=debug 1=info 2=warn 3=error).
 - `harness/` — `et_timing_harness` (Release benchmark) and `et_leak_harness` (ASan/LSan). `test/et_runtime_test.cpp` — Catch2 units. These link only the JNIEnv-free core, so QA/bench configures need no JDK.
 
@@ -68,11 +70,18 @@ ExecuTorch 1.3 pins `torch==2.12.0`, whose wheel needs **glibc ≥ 2.28**. So th
 ### Native shim (do this first)
 
 ```bash
-./native/local_build_wrapper.sh          # BLESSED: builds inside manylinux_2_28, keeps glibc-2.28 floor
-./native/build.sh                          # LOCAL FAST PATH — host build, breaks the floor, do NOT ship
+./native/local_build_wrapper.sh          # the only Linux path: builds inside manylinux_2_28, keeps glibc-2.28 floor
 ```
 
-The wrapper stages the `.so` into `src/main/resources/native/linux-x86_64/`. The runtime is fetched by CMake during the run — no ExecuTorch checkout needed (network access required).
+`local_build_wrapper.sh` is not optional on Linux — `native/build.sh` is what it invokes *inside*
+the container, not a host fast path. `build.sh`'s non-Windows branch is unconditionally
+container-only: it extracts a Corretto RPM staged by the wrapper's bind-mount at
+`/workspace/amazon-corretto-linux-jdk.rpm`, calls `rpm2archive` (absent on Debian/Ubuntu), and
+expects `/opt/python/cp312-cp312/bin` on PATH — all manylinux-image assumptions. Running it
+directly on a Linux host fails outright (`mkdir /opt/corretto: Permission denied`, or missing
+`/workspace/...`), it does not merely produce a glibc-floor-breaking `.so`. The wrapper stages the
+`.so` into `src/main/resources/native/linux-x86_64/`. The runtime is fetched by CMake during the
+run — no ExecuTorch checkout needed (network access required).
 
 #### Windows build
 

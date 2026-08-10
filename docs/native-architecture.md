@@ -146,12 +146,14 @@ ways. Conflating them is the easy mistake.
 `extension::threadpool` singleton, which sizes itself to the performance-core count and reads no
 environment variable, so `setIntraOpThreads` is the only control surface there is. It is applied and
 sealed at the first model load: `EtRuntime`'s constructor sets a global flag — even when that
-constructor goes on to throw — and `setIntraOpThreads` refuses any later reset, logging and
-returning the count already in effect. The refusal is not conservatism. XNNPACK captures the
-`pthreadpool_t` when it creates a runtime, and `_unsafe_reset_threadpool` destroys the old pool
-object, so a late reset is a **use-after-free on the next `forward()`**, not merely a race.
-`setIntraOpThreads` returns the count in effect *after* the attempt, so callers compare rather than
-checking a status.
+constructor goes on to throw — and the native `measly::et::setIntraOpThreads` refuses any later
+reset, logging and returning the count already in effect. The refusal is not conservatism. XNNPACK
+captures the `pthreadpool_t` when it creates a runtime, and `_unsafe_reset_threadpool` destroys the
+old pool object, so a late reset is a **use-after-free on the next `forward()`**, not merely a race.
+The native function returns the count in effect *after* the attempt, so callers compare rather than
+checking a status. **The Java-layer `EtEngine.setIntraOpThreads` does not follow this return-value
+convention** — it throws `IllegalStateException` on a late reset instead of returning a value to
+compare; see `README.md`'s "Configuration and tuning" section.
 
 **Workspace sharing is the opposite in every respect.** It is a per-load backend option:
 `EtRuntime`'s constructor builds a `LoadBackendOptionsMap` with `workspace_sharing_mode` under the
