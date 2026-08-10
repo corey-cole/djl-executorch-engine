@@ -25,6 +25,11 @@ public final class LibUtils {
     // Not unit-tested: drives System.load, the EXECUTORCH_LIBRARY_PATH env override, and classpath
     // extraction, all of which need the real native library and JVM state. platform(), libName() and
     // cacheRoot() are the unit-tested seams.
+    /**
+     * Loads the native shim, resolving it via {@code EXECUTORCH_LIBRARY_PATH} if set, else
+     * extracting the matching platform resource into the content-addressed cache and loading it
+     * from there. Idempotent: a second call on an already-loaded JVM is a no-op.
+     */
     public static synchronized void loadLibrary() {
         if (loaded) {
             return;

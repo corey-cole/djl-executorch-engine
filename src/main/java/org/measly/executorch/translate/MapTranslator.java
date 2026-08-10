@@ -22,6 +22,10 @@ public class MapTranslator implements Translator<Map<String, Number>, double[]> 
     private final List<ParamSpec> paramSpecs; // position-ordered
     private final Set<String> expectedNames;
 
+    /**
+     * @param paramSpecs the model's scalar parameters, in the position order {@code processInput}
+     *     will emit them; defensively copied
+     */
     public MapTranslator(List<ParamSpec> paramSpecs) {
         this.paramSpecs = List.copyOf(paramSpecs);
         this.expectedNames = new LinkedHashSet<>();
@@ -30,10 +34,25 @@ public class MapTranslator implements Translator<Map<String, Number>, double[]> 
         }
     }
 
+    /**
+     * Builds a translator from a {@code model_spec.json} file.
+     *
+     * @param jsonFile path to the spec file
+     * @return a translator configured with that spec's parameters
+     * @throws IOException if the file cannot be read or parsed
+     */
     public static MapTranslator fromSpec(Path jsonFile) throws IOException {
         return new MapTranslator(ModelSpec.parse(jsonFile));
     }
 
+    /**
+     * Builds a translator from the {@code model_spec.json} conventionally placed alongside a
+     * model's artifacts.
+     *
+     * @param modelDir directory containing {@code model_spec.json}
+     * @return a translator configured with that spec's parameters
+     * @throws IOException if the file cannot be read or parsed
+     */
     public static MapTranslator fromModelPath(Path modelDir) throws IOException {
         return fromSpec(modelDir.resolve("model_spec.json"));
     }

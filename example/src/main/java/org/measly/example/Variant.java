@@ -13,8 +13,13 @@ import java.util.function.Function;
  * ET_NATIVE}. That keeps an {@code ET_NATIVE}-only path (its own JMH fork) free of LibTorch.
  */
 public enum Variant {
+    /** ExecuTorch engine with the PyTorch-backed image translator. */
     ET_HYBRID("ExecuTorch", MobilenetTranslator::new),
+
+    /** LibTorch/PyTorch engine baseline, same translator. */
     PYTORCH("PyTorch", MobilenetTranslator::new),
+
+    /** ExecuTorch engine with a pure-Java translator, so the arm never loads LibTorch. */
     ET_NATIVE("ExecuTorch", PlainJavaMobilenetTranslator::new);
 
     final String engine;

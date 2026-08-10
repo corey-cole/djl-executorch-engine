@@ -2,6 +2,7 @@ package org.measly.executorch.jni;
 
 /** Static I/O metadata for a loaded module's "forward" method. */
 public final class EtMethodMeta {
+    /** Number of inputs the {@code forward} method declares. */
     public final int numInputs;
     /** Per-input ExecuTorch ScalarType code; {@code -1} for a non-tensor input. Treat as read-only. */
     public final int[] inputScalarTypes;
@@ -23,6 +24,12 @@ public final class EtMethodMeta {
      */
     public final long plannedArenaBytes;
 
+    /**
+     * @param numInputs number of declared inputs
+     * @param inputScalarTypes per-input ScalarType code, {@code -1} for a non-tensor input
+     * @param inputMemoryPlanned per-input memory-planned flag
+     * @param plannedArenaBytes ExecuTorch's planned activation arena in bytes
+     */
     public EtMethodMeta(
             int numInputs,
             int[] inputScalarTypes,

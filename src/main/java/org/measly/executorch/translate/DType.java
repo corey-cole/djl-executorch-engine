@@ -6,18 +6,21 @@ import ai.djl.ndarray.types.Shape;
 
 /** Scalar parameter dtype: maps a Number to a typed scalar NDArray with strict coercion. */
 public enum DType {
+    /** IEEE-754 single precision. */
     FLOAT32 {
         @Override
         NDArray createScalar(NDManager m, Number v, long[] shape) {
             return m.create(new float[] {v.floatValue()}, new Shape(shape));
         }
     },
+    /** IEEE-754 double precision. */
     FLOAT64 {
         @Override
         NDArray createScalar(NDManager m, Number v, long[] shape) {
             return m.create(new double[] {v.doubleValue()}, new Shape(shape));
         }
     },
+    /** 32-bit signed integer; a value outside its range is rejected rather than truncated. */
     INT32 {
         @Override
         NDArray createScalar(NDManager m, Number v, long[] shape) {
@@ -28,6 +31,7 @@ public enum DType {
             return m.create(new int[] {(int) l}, new Shape(shape));
         }
     },
+    /** 64-bit signed integer. */
     INT64 {
         @Override
         NDArray createScalar(NDManager m, Number v, long[] shape) {
@@ -55,6 +59,14 @@ public enum DType {
         return v.longValue();
     }
 
+    /**
+     * Maps a dtype name to its constant.
+     *
+     * @param name one of {@code float32}, {@code float64}, {@code int32}, {@code int64}, with or
+     *     without a {@code torch.} prefix
+     * @return the matching constant
+     * @throws IllegalArgumentException if the name is not recognised
+     */
     public static DType from(String name) {
         switch (name) {
             case "float32":
