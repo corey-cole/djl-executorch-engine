@@ -39,7 +39,10 @@ public class MapTranslator implements Translator<Map<String, Number>, double[]> 
      *
      * @param jsonFile path to the spec file
      * @return a translator configured with that spec's parameters
-     * @throws IOException if the file cannot be read or parsed
+     * @throws IOException if the file cannot be opened or read
+     * @throws IllegalArgumentException if the spec is malformed or invalid — bad JSON syntax, a
+     *     missing {@code name}/{@code dtype}/{@code shape}, a duplicate position, or a non-scalar
+     *     shape
      */
     public static MapTranslator fromSpec(Path jsonFile) throws IOException {
         return new MapTranslator(ModelSpec.parse(jsonFile));
@@ -51,7 +54,10 @@ public class MapTranslator implements Translator<Map<String, Number>, double[]> 
      *
      * @param modelDir directory containing {@code model_spec.json}
      * @return a translator configured with that spec's parameters
-     * @throws IOException if the file cannot be read or parsed
+     * @throws IOException if the file cannot be opened or read
+     * @throws IllegalArgumentException if the spec is malformed or invalid — bad JSON syntax, a
+     *     missing {@code name}/{@code dtype}/{@code shape}, a duplicate position, or a non-scalar
+     *     shape
      */
     public static MapTranslator fromModelPath(Path modelDir) throws IOException {
         return fromSpec(modelDir.resolve("model_spec.json"));
