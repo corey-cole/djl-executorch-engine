@@ -20,9 +20,17 @@ using measly::et::MethodMeta;
 //
 // DANGER: the descriptor strings passed to GetFieldID/GetMethodID below are string literals and no
 // compiler on either side checks them. Change a Java field or constructor without updating its
-// descriptor here and the lookup returns null. Every one of them is null-checked and fails
-// JNI_OnLoad with JNI_ERR, which surfaces as an UnsatisfiedLinkError when EtNative's static
-// initializer runs System.load -- a RUNTIME failure at class init, not a build failure. A local
+// descriptor here and the lookup returns null. For the six IDs cached into the globals below --
+// g_fShape, g_fScalarType, g_fData, g_ctor, g_metaCtor, g_byteBufferWrap -- null fails JNI_OnLoad
+// with JNI_ERR, which surfaces as an UnsatisfiedLinkError when EtNative's static initializer runs
+// System.load: a RUNTIME failure at class init, not a build failure.
+//
+// The seventh descriptor in JNI_OnLoad is the dangerous one. The "nativeLog" lookup for the logging
+// bridge is null-checked and then deliberately IGNORED -- the pending exception is cleared and the
+// load is allowed to succeed, because logging must never fail a model load. So a descriptor drift
+// on EtNative.nativeLog produces no error anywhere: the bridge is simply never installed and native
+// ET_LOG output goes silently dead while everything else keeps working. If native logging has
+// vanished for no apparent reason, suspect that literal first. A local
 // `./gradlew test` hides it only because Java and the shim get rebuilt from the same tree; the real
 // exposure is a staged per-platform binary (the .dll, or a resource .so someone did not rebuild)
 // that is a revision behind the Java classes. Treat the Java declaration and the literal here as a
@@ -323,8 +331,11 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
 // no-op -- so the Java-side `if (handle != 0)` guard is about not double-freeing, not about 0
 // itself. Nothing here makes destroy idempotent for a NON-zero handle: calling it twice is a double
 // free, which is why EtSymbolBlock.close() zeroes the field inside the same synchronized block.
-// The catch exists because ~EtRuntime runs ExecuTorch teardown; a throwing destructor is reported
-// rather than swallowed, but the memory is already gone by then either way.
+// The catch below is defensive only, and does NOT make this entry point safe against a failing
+// teardown. ~EtRuntime is `= default` over a pimpl whose members all have non-throwing destructors,
+// so it is implicitly noexcept: an exception escaping ExecuTorch teardown calls std::terminate and
+// never reaches the handler. Nor does the catch help against a stale or wild handle, which is
+// undefined behaviour rather than a throw. Do not read it as a recovery path.
 extern "C" JNIEXPORT void JNICALL
 Java_org_measly_executorch_jni_EtNative_destroy(JNIEnv* env, jclass, jlong handle) {
   try {
