@@ -64,5 +64,9 @@ jobs:
           context: docker
           file: "docker/${{ matrix.combo.platform }}.Dockerfile"
           tags: ${{ matrix.combo.container }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Scope per platform, or both rows share the default `buildkit` scope and one arch's
+          # cache index shadows the other's (see #38). The scope string
+          # MUST match the `${{ matrix.platform }}` scope in native-build-job.yml — editing the two
+          # together keeps the warm job populating what the build job reads.
+          cache-from: type=gha,scope=${{ matrix.combo.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.combo.platform }}
