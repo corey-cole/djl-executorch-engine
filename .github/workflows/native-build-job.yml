@@ -58,8 +58,12 @@ jobs:
           file: "docker/${{ matrix.platform }}.Dockerfile"
           tags: ${{ matrix.image }}
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Scope per platform, matching the `${{ matrix.combo.platform }}` scope in
+          # warm-build-image.yml — the two MUST resolve to the same string or the warm job
+          # populates a scope this job never reads. No `cache-to` here: only the default branch's
+          # cache is readable by other runs, so a PR run writing to its own ref scope would burn
+          # quota nothing can read. warm-build-image.yml is the intended writer.
+          cache-from: type=gha,scope=${{ matrix.platform }}
 
       # This is very similar to how `local_build_wrapper.sh` executes build
       # which enables testing outside of GHA
