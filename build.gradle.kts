@@ -46,6 +46,11 @@ tasks.withType<Test>().configureEach {
         "executorchLibraryPath",
         providers.environmentVariable("EXECUTORCH_LIBRARY_PATH").orElse("")
     )
+    // -Xcheck:jni is the JVM's JNI-contract checker: JNI calls made with a pending exception, null
+    // array arguments. It is on the umbrella rather than on tasks.test because tasks.test excludes
+    // eight tags, and oomTest -- excluded -- is the task that drives the allocation-failure paths
+    // this class of defect lives on. Costs nothing: it runs against the plain shipping library.
+    jvmArgs("-Xcheck:jni")
 }
 
 tasks.register<Test>("leakTest") {
