@@ -61,3 +61,32 @@ jobs:
             fail-on-error: false
             language: Java
             label: jacoco
+
+  ubsan-jvm-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: build-executorch-shim
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: 17
+
+      # Deliberately NOT into src/main/resources/native/: the gate reaches this library through
+      # EXECUTORCH_LIBRARY_PATH, and staging it would make it the default for every other job.
+      - name: Download the UBSan-instrumented shim
+        uses: actions/download-artifact@v8
+        with:
+          name: executorch-ubsan-linux-x86_64
+          path: ubsan-lib
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run the JVM suite against the instrumented shim
+        env:
+          ET_UBSAN_MODE: test
+          BUILD_DIR: ubsan-lib
+        run: ./native/ubsan_gate.sh
