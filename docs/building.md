@@ -108,6 +108,15 @@ first** (see [Building the native shim](#3-building-the-native-shim) above). The
 ./gradlew build        # full build incl. jacoco coverage report
 ```
 
+Every `Test` task runs with `-Xcheck:jni`, the JVM's JNI-contract checker. The flag is attached to
+the test-task umbrella in `build.gradle.kts` (`tasks.withType<Test>().configureEach`) rather than to
+`tasks.test`, because `tasks.test` excludes eight tags including `oom`; `oomTest`, which drives the
+allocation-failure paths this checker exists to police, is among the excluded. A JNI contract
+violation surfaces as a `WARNING in native method:` line or a VM abort rather than a test failure.
+`JniCheckFlagTest` and `JniCheckFlagTaggedTest` prove the flag is attached — the tagged subclass
+carries the assertion into the eight tag-filtered tasks — so deleting either silently removes the
+proof.
+
 ## 6. Native QA and benchmarking (optional)
 
 `native/build_qa.sh` (AddressSanitizer/LeakSanitizer Catch2 units + leak harness), `native/bench.sh`
