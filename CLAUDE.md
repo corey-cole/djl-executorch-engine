@@ -102,7 +102,7 @@ Key ABI constraint: the build passes `-DCMAKE_BUILD_TYPE=Release` on Windows bec
 ./gradlew build       # full build incl. jacoco coverage report
 ```
 
-Every `Test` task runs with `-Xcheck:jni`, the JVM's JNI-contract checker. The flag is attached to
+Every root-project `Test` task runs with `-Xcheck:jni`, the JVM's JNI-contract checker. The flag is attached to
 the test-task umbrella in `build.gradle.kts` (`tasks.withType<Test>().configureEach`) rather than to
 `tasks.test`, because `tasks.test` excludes eight tags including `oom` — and `oomTest`, the task
 that drives the allocation-failure paths this checker polices, is one of the excluded ones. A JNI
