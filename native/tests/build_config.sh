@@ -21,4 +21,25 @@ grep -q 'ET_INSTALL=/tmp/xi\b'     <<<"${out}" || fail "ET_INSTALL passthrough m
 grep -qE 'SKIP_ET_BUILD|EXECUTORCH_ENABLE_LOGGING|torch==2\.12|avx512vnni' native/build.sh \
   && fail "Stage-A remnants still present in build.sh"
 
+# Requirement assertions must fail BY NAME, not as a confusing failure ten steps later. These drive
+# the JAVA_HOME and ninja assertions; they are behavioural (run the script, read what it says) and
+# host-independent, since each one removes a requirement rather than depending on what this host has.
+rc=0
+out="$(JAVA_HOME=/nonexistent bash native/build.sh 2>&1)" || rc=$?
+test "${rc}" -ne 0 || fail "build.sh must fail when the JDK headers are absent"
+grep -q 'jni_md.h\|JAVA_HOME' <<<"${out}" || fail "JDK failure must name what is missing"
+grep -q 'local_build_wrapper.sh' <<<"${out}" || fail "JDK failure must point at the wrapper"
+
+# Ninja must still be absent AFTER the JDK assertion passes, so supply a real JDK root derived
+# host-independently from `java`; if the host has no java, the ninja path cannot be exercised
+# (build.sh asserts JDK first) and the subtest is skipped.
+JDK_ROOT="$(readlink -f "$(command -v java 2>/dev/null)" 2>/dev/null)" \
+  && JDK_ROOT="$(dirname "$(dirname "${JDK_ROOT}")")"
+if [ -n "${JDK_ROOT:-}" ] && [ -f "${JDK_ROOT}/include/linux/jni_md.h" ]; then
+  rc=0
+  out="$(JAVA_HOME="${JDK_ROOT}" PATH=/nonexistent-bin /bin/bash native/build.sh 2>&1)" || rc=$?
+  test "${rc}" -ne 0 || fail "build.sh must fail when ninja is absent"
+  grep -q 'ninja not on PATH' <<<"${out}" || fail "toolchain failure must name ninja"
+fi
+
 echo "PASS: build.sh config"

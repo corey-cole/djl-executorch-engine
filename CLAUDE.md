@@ -70,18 +70,18 @@ ExecuTorch 1.3 pins `torch==2.12.0`, whose wheel needs **glibc ≥ 2.28**. So th
 ### Native shim (do this first)
 
 ```bash
-./native/local_build_wrapper.sh          # the only Linux path: builds inside manylinux_2_28, keeps glibc-2.28 floor
+./native/local_build_wrapper.sh          # the blessed Linux path: runs the pinned engine-build image, keeps glibc-2.28 floor
 ```
 
-`local_build_wrapper.sh` is not optional on Linux — `native/build.sh` is what it invokes *inside*
-the container, not a host fast path. `build.sh`'s non-Windows branch is unconditionally
-container-only: it extracts a Corretto RPM staged by the wrapper's bind-mount at
-`/workspace/amazon-corretto-linux-jdk.rpm`, calls `rpm2archive` (absent on Debian/Ubuntu), and
-expects `/opt/python/cp312-cp312/bin` on PATH — all manylinux-image assumptions. Running it
-directly on a Linux host fails outright (`mkdir /opt/corretto: Permission denied`, or missing
-`/workspace/...`), it does not merely produce a glibc-floor-breaking `.so`. The wrapper stages the
-`.so` into `src/main/resources/native/linux-x86_64/`. The runtime is fetched by CMake during the
-run — no ExecuTorch checkout needed (network access required).
+`local_build_wrapper.sh` runs the **pinned shared engine-build image** — a `manylinux_2_28`
+derivative whose digest lives in `.engine-build-image` — rather than building one. It is the
+**blessed** Linux path because it holds the glibc-2.28 floor. `native/build.sh`, what the wrapper
+invokes *inside* the container, no longer installs anything: it **asserts** its toolchain (JDK
+headers via `JAVA_HOME`, `ninja` on PATH). On a suitably equipped Linux host, `native/build.sh`
+directly now **works** — but the artifact links host glibc and **breaks the floor**, so that is
+for local `./gradlew test` only, never a release. The wrapper stages the `.so` into
+`src/main/resources/native/linux-x86_64/`. The runtime is fetched by CMake during the run — no
+ExecuTorch checkout needed (network access required).
 
 #### Windows build
 

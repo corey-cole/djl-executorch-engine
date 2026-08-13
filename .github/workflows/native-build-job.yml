@@ -15,23 +15,14 @@ jobs:
         include:
           - platform: linux-x86_64
             runner: ubuntu-latest
-            image: djl-executorch-engine-build:linux-x86_64
-            corretto-jdk-url: https://corretto.aws/downloads/latest/amazon-corretto-8-x64-linux-jdk.rpm
           - platform: linux-aarch64
             runner: ubuntu-24.04-arm
-            image: djl-executorch-engine-build:linux-aarch64
-            corretto-jdk-url: https://corretto.aws/downloads/latest/amazon-corretto-8-aarch64-linux-jdk.rpm
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     steps:
       - name: Checkout djl-executorch-engine repository
         uses: actions/checkout@v7
-
-      # Use a generic name for the RPM file
-      - name: Download Corretto JDK 8 RPM
-        run: |
-            curl -L -o amazon-corretto-linux-jdk.rpm ${{ matrix.corretto-jdk-url }}
 
       # Provenance gate: prove the pinned runtime tarball was built by Repo A's CI before we link
       # against it. URL_HASH in native/CMakeLists.txt covers integrity; this covers provenance.
@@ -45,34 +36,24 @@ jobs:
           gh attestation verify runtime.tgz --repo measly-java-learning/executorch-runtime-dist
           rm -f runtime.tgz
 
-      # The toolchain image: manylinux_2_28 at a dated tag plus the packages the base does not ship
-      # (systemtap-sdt-devel for the W8 USDT probes, the matching libasan for QA), pinned to exact
-      # NEVRAs. Built here rather than pulled from a registry -- warm-build-image.yml keeps the
-      # layers in the GHA cache on `main`, so this is normally a cache hit and never a dnf
-      # round-trip. `load: true` puts the image in the local daemon for the docker run steps below.
-      - uses: docker/setup-buildx-action@v4.2.0
-      - name: Build the pinned toolchain image
-        uses: docker/build-push-action@v7.3.0
-        with:
-          context: docker
-          file: "docker/${{ matrix.platform }}.Dockerfile"
-          tags: ${{ matrix.image }}
-          load: true
-          # Scope per platform, matching the `${{ matrix.combo.platform }}` scope in
-          # warm-build-image.yml — the two MUST resolve to the same string or the warm job
-          # populates a scope this job never reads. No `cache-to` here: only the default branch's
-          # cache is readable by other runs, so a PR run writing to its own ref scope would burn
-          # quota nothing can read. warm-build-image.yml is the intended writer.
-          cache-from: type=gha,scope=${{ matrix.platform }}
+      # The shared toolchain image, published by measly-java-learning/base-docker-images. It is a
+      # public manifest list covering amd64 and arm64, so both matrix rows use one reference and the
+      # pull needs no credentials. The digest is read from .engine-build-image rather than written
+      # here, so a bump is one line that this workflow and native/local_build_wrapper.sh both pick up.
+      - name: Resolve the pinned build image
+        run: |
+          image="$(cat .engine-build-image)"
+          test -n "${image}" || { echo "empty .engine-build-image" >&2; exit 1; }
+          echo "ET_BUILD_IMAGE=${image}" >> "$GITHUB_ENV"
+          echo "Build image: ${image}"
 
-      # This is very similar to how `local_build_wrapper.sh` executes build
-      # which enables testing outside of GHA
+      # Runs the same pinned image as native/local_build_wrapper.sh, so CI matches local builds.
       - name: Build the libexecutorch_djl shim
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
-            ${{ matrix.image }} \
+            ${{ env.ET_BUILD_IMAGE }} \
             /bin/bash /workspace/native/build.sh
       
       - name: QA the libexecutorch_djl shim
@@ -80,7 +61,7 @@ jobs:
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
-            ${{ matrix.image }} \
+            ${{ env.ET_BUILD_IMAGE }} \
             /bin/bash /workspace/native/build_qa.sh
  
       # Make the shim available to the next job
