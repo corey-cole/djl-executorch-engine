@@ -37,6 +37,41 @@ endif()
 option(ET_BUILD_QA "Build native QA targets (Catch2 units + leak harness)" OFF)
 option(ET_BUILD_BENCH "Build the Release timing harness (no sanitizers)" OFF)
 
+option(ET_UBSAN "Build with UndefinedBehaviorSanitizer" OFF)
+
+# The check set, as a cache variable so a one-off run can narrow it without editing this file. Two
+# additions over GCC's `undefined` umbrella, which excludes both: float-cast-overflow and
+# float-divide-by-zero, each reachable in element-count and scale arithmetic. vptr comes off below --
+# it needs every TU holding a polymorphic object instrumented, and is the check most likely to
+# misfire against the prebuilt runtime, which is not instrumented.
+set(ET_UBSAN_CHECKS "undefined,float-cast-overflow,float-divide-by-zero"
+    CACHE STRING "UBSan check set passed to -fsanitize=")
+
+# UBSan composes with ASan, so this stacks on the -fsanitize=address flags build_qa.sh passes. It is
+# per-TU and local -- each check is an inline test emitted at the operation, with no cross-module
+# state -- so linking the uninstrumented prebuilt runtime produces no false positives and hides
+# nothing in our own code.
+#
+# -fno-sanitize-recover is what makes this a gate rather than a log: UBSan's default is
+# print-and-continue, under which CI stays green while diagnostics scroll past.
+#
+# GCC has no ignorelist: -fsanitize-ignorelist and -fsanitize-blacklist are unrecognized, and
+# UBSAN_OPTIONS=suppressions= does not suppress these checks. To silence one, use
+# __attribute__((no_sanitize("undefined"))) on the function, a per-TU
+# set_source_files_properties COMPILE_OPTIONS override, or -fno-sanitize=<check> here -- each with a
+# comment naming what was given up and why.
+if(ET_UBSAN)
+  if(WIN32)
+    message(FATAL_ERROR "ET_UBSAN is unsupported on Windows: MSVC has no UndefinedBehaviorSanitizer")
+  endif()
+  add_compile_options(
+      -fsanitize=${ET_UBSAN_CHECKS}
+      -fno-sanitize=vptr
+      -fno-sanitize-recover=undefined
+      -fno-omit-frame-pointer -g)
+  add_link_options(-fsanitize=${ET_UBSAN_CHECKS})
+endif()
+
 # --- Runtime resolution: escape hatch (ET_INSTALL set) OR FetchContent the pinned tarball. ---
 # The ExecuTorch runtime is NOT built here; it is downloaded (hash-pinned + attested by Repo A).
 # See docs/executorch-build-notes.md. ET_PRINT_RESOLUTION is a host-test seam: it prints the
