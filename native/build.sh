@@ -2,7 +2,7 @@
 set -ex # Fail on error, print commands to log
 
 # shellcheck source=native/container_env.sh
-. "$(dirname "${BASH_SOURCE[0]}")/container_env.sh"
+. "${BASH_SOURCE[0]%/*}/container_env.sh"
 
 # Host fork. Under Git-Bash on Windows `uname -s` is MINGW64_NT-* or MSYS_NT-*. The caller must have
 # already activated the MSVC dev shell (see .github/workflows/native-build-job.yml); this script does

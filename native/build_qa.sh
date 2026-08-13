@@ -15,7 +15,7 @@
 set -euo pipefail
 
 # shellcheck source=native/container_env.sh
-. "$(dirname "${BASH_SOURCE[0]}")/container_env.sh"
+. "${BASH_SOURCE[0]%/*}/container_env.sh"
 
 # Run from the repo root regardless of where this script is invoked from.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

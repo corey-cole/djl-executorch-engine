@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # shellcheck source=native/container_env.sh
-. "$(dirname "${BASH_SOURCE[0]}")/container_env.sh"
+. "${BASH_SOURCE[0]%/*}/container_env.sh"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
