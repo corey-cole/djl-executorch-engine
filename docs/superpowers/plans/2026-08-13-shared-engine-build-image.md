@@ -16,8 +16,8 @@
   `ghcr.io/measly-java-learning/engine-build@sha256:725884538caa4f7f8444847e34b3928bb90089da95d5b77ce560aa2e624f905b`
 - **Digest, never a tag.** `:main` moves on every publish; the `sha-<short>-amd64` / `-arm64` tags are manifest-list children and must not be referenced.
 - **No login, no buildx, no image build.** The package is public and pulls anonymously. Any `docker/setup-buildx-action`, `docker/build-push-action`, `cache-from: type=gha`, or `cache-to: type=gha` reintroduced into this repo is a regression of #38.
-- **Image-supplied environment**, to be read and never hardcoded: `MEASLY_DJL_PINNED_IMAGE=1`, `MEASLY_DJL_TOOLSET_VER=14`, `MEASLY_DJL_TOOLSET_NEVRA=14.2.1-11.el8_10`, `MEASLY_DJL_NINJA_VERSION=1.13.0.git.kitware.jobserver-pipe-1`, `JAVA_HOME=/opt/corretto-jdk`.
-- **`MEASLY_DJL_NINJA_VERSION` is the string `ninja --version` reports**, not the pip metadata version (`1.13.0`). Compare against reported output only.
+- **Do not verify the image.** `engine-build.Dockerfile` asserts its own ninja version, both sanitizer NEVRAs, their agreement with its gcc, and `/usr/include/sys/sdt.h` — at build time, so a failure publishes nothing. We pin an immutable digest, so a digest that resolves passed all of it. Consumer-side re-checks of those values are forbidden: they prove nothing and rot.
+- **`MEASLY_DJL_PINNED_IMAGE` gates exactly one thing**: the glibc-floor warning. It gates no assertion. `JAVA_HOME` is consumed normally. The other `MEASLY_DJL_*` variables are unused by this repo.
 - **The Windows job and both scripts' Windows branches are untouched** by every task in this plan.
 - **The `/workspace` mount path stays.** `native/build.sh` hardcodes `cd /workspace`; the contract doc's `/src` example is arbitrary and must not be copied.
 - **Bare pin file.** `.engine-build-image` holds exactly one line and is read with `cat` plus a non-empty check — no comment-stripping pipeline.
@@ -87,7 +87,7 @@ git commit -m "build: pin the shared engine-build image and stop building one lo
 - Test: `native/tests/build_config.sh`
 
 **Interfaces:**
-- Consumes: `JAVA_HOME` (required on any Linux host); `MEASLY_DJL_PINNED_IMAGE` and `MEASLY_DJL_NINJA_VERSION` (used only to switch on the in-image version-equality check).
+- Consumes: `JAVA_HOME` (required on any Linux host); `MEASLY_DJL_PINNED_IMAGE` (only to suppress the glibc-floor warning).
 - Produces: a missing requirement exits non-zero with a message naming the requirement and pointing at `local_build_wrapper.sh`. A host build still succeeds when the tools are present, with a glibc-floor warning. `PRINT_BUILD_CONFIG=1` behaviour is unchanged.
 
 - [ ] **Step 1: Write the failing test**
@@ -145,12 +145,6 @@ else
   echo "--- Toolchain (asserted, never installed) ---"
   command -v ninja >/dev/null 2>&1 \
     || { echo "ninja not on PATH: install it, or build via ./native/local_build_wrapper.sh"; exit 1; }
-  # In the pinned image a version mismatch means a broken image, so equality is checked there and
-  # only there; on a host any ninja will do. Compare what ninja REPORTS, not pip metadata: the
-  # Kitware jobserver-pipe wheel is `1.13.0` to pip but prints `1.13.0.git.kitware.jobserver-pipe-1`.
-  if [ "${MEASLY_DJL_PINNED_IMAGE:-}" = "1" ] && [ "$(ninja --version)" != "${MEASLY_DJL_NINJA_VERSION}" ]; then
-    echo "ninja reports $(ninja --version), image declares ${MEASLY_DJL_NINJA_VERSION}"; exit 1
-  fi
   # Building outside the image is supported but does NOT hold the glibc-2.28 floor -- the artifact
   # links host glibc. Fine for local ./gradlew test, never for a release (see CLAUDE.md).
   if [ "${MEASLY_DJL_PINNED_IMAGE:-}" != "1" ]; then
@@ -182,61 +176,35 @@ git commit -m "build: assert the toolchain instead of installing it"
 - Test: `native/tests/ci_workflow.sh`
 
 **Interfaces:**
-- Consumes: `MEASLY_DJL_PINNED_IMAGE`, `MEASLY_DJL_TOOLSET_VER`, `MEASLY_DJL_TOOLSET_NEVRA`.
+- Consumes: nothing from the image environment.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Write the failing test**
+**No test of its own.** The one assertion here is a presence check whose payoff is a better message; a grep proving it exists would be ceremony. Task 6 runs QA against the real image.
 
-Append to `native/tests/ci_workflow.sh`, after the Task 1 block:
+- [ ] **Step 1: Replace the dnf block**
 
-```bash
-# build_qa.sh is the only thing asserting <sys/sdt.h>. Drop that assertion and a toolchain without
-# systemtap-sdt-devel surfaces as `fatal error: sys/sdt.h: No such file` inside et_probes.h instead.
-grep -q '/usr/include/sys/sdt.h' native/build_qa.sh \
-  || fail "build_qa.sh must assert <sys/sdt.h> is present"
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `bash native/tests/ci_workflow.sh`
-Expected: `FAIL: build_qa.sh must assert <sys/sdt.h> is present`
-
-- [ ] **Step 3: Replace the dnf block**
-
-In `native/build_qa.sh`, replace the `if command -v dnf …` block (lines 63-68) with the following. Note there is **no permission guard**: a host with a working `-fsanitize=address` toolchain and `<sys/sdt.h>` can run QA, and if its libasan is missing or mismatched the ASan link fails and says so — remediating it here was the actual mistake.
+In `native/build_qa.sh`, replace the `if command -v dnf …` block (lines 63-68) with the following. There is **no permission guard and no NEVRA check**: a host with a working `-fsanitize=address` toolchain and `<sys/sdt.h>` can run QA, and if its libasan is missing or mismatched the ASan link fails and says so.
 
 ```bash
-  # QA requirements are asserted, never installed. <sys/sdt.h> ships in systemtap-sdt-devel and is
-  # required by native/core/et_probes.h for its USDT tracepoints; assert it here so a missing header
-  # fails by name instead of as a fatal error mid-compile.
+  # <sys/sdt.h> ships in systemtap-sdt-devel and native/core/et_probes.h requires it. Assert it so a
+  # missing header fails here by name rather than as a fatal error part-way through the compile.
   test -e /usr/include/sys/sdt.h || {
     echo "missing /usr/include/sys/sdt.h (systemtap-sdt-devel): native/core/et_probes.h needs it;"
     echo "install it, or run QA via ./native/local_build_wrapper.sh native/build_qa.sh"; exit 1; }
-
-  # Pinned image only. A libasan from a different toolset revision than the gcc that emitted the
-  # instrumentation produces confusing ASan link errors, so the image holds both to one revision and
-  # this asserts it held. Read both values from the environment: a hardcoded NEVRA is how a script
-  # and its image come to disagree. Skipped on a host, where rpm need not exist and a different ASan
-  # runtime is legitimate -- there the -fsanitize=address link is the check.
-  if [ "${MEASLY_DJL_PINNED_IMAGE:-}" = "1" ]; then
-    ASAN_PKG="gcc-toolset-${MEASLY_DJL_TOOLSET_VER}-libasan-devel-${MEASLY_DJL_TOOLSET_NEVRA}"
-    rpm -q "${ASAN_PKG}" >/dev/null \
-      || { echo "libasan NEVRA not installed as pinned: ${ASAN_PKG}"; exit 1; }
-  fi
 ```
 
 Also update the script's header comment (lines 11-14): CI runs this in the shared engine-build image, not "the SAME manylinux_2_28 container".
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 2: Check the script still parses**
 
-Run: `bash native/tests/ci_workflow.sh`
-Expected: `PASS: ci workflow`
+Run: `bash -n native/build_qa.sh && bash native/tests/ci_workflow.sh`
+Expected: no syntax error, then `PASS: ci workflow`
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add native/build_qa.sh native/tests/ci_workflow.sh
-git commit -m "build: assert the pinned image's ASan runtime and sdt.h in QA"
+git add native/build_qa.sh
+git commit -m "build: assert sdt.h in QA instead of installing an ASan runtime"
 ```
 
 ---

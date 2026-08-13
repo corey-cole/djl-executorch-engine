@@ -43,7 +43,7 @@ which the image supersedes:
 | --- | --- | --- |
 | `build.sh:73-74` | `export PATH=/opt/python/cp312-cp312/bin:…`; `pip install ninja` | ninja is at `/usr/local/bin/ninja`, version `MEASLY_DJL_NINJA_VERSION` |
 | `build.sh:53-63` | `cp /workspace/amazon-corretto-linux-jdk.rpm`; `rpm2archive`; untar into `/opt/corretto` | `JAVA_HOME` is set and its headers are present; **`/opt/corretto` is already populated by the image**, so this is a live collision, not mere redundancy |
-| `build_qa.sh:64-68` | `dnf install -y gcc-toolset-N-libasan-devel \|\| true` | baked at `MEASLY_DJL_TOOLSET_NEVRA`, assertable with `rpm -q` |
+| `build_qa.sh:64-68` | `dnf install -y gcc-toolset-N-libasan-devel \|\| true` | baked and asserted by the image itself |
 | `docker/*.Dockerfile` | asserts `/usr/include/sys/sdt.h` at image-build time | `systemtap-sdt-devel-4.9-3.el8` is baked; the assertion must move into a script or it is lost |
 
 So the scripts are edited, not merely verified.
@@ -70,12 +70,17 @@ Two caveats attach to such a build, and neither is the script's business to enfo
 So each requirement gets an assertion that fails **by name** and says how to satisfy it, pointing at
 `native/local_build_wrapper.sh` as the blessed route. Nothing is installed.
 
-`MEASLY_DJL_PINNED_IMAGE=1` is not a permission gate. It selects **extra strictness**: inside the
-image, the declared versions are also checked for equality (`MEASLY_DJL_NINJA_VERSION`,
-`MEASLY_DJL_TOOLSET_NEVRA`), because there a mismatch means a broken image rather than an unusual
-host. Outside the image those variables are unset, so the equality checks are skipped while the
-presence assertions still apply. This is exactly the contract's stated intent: inside the image, a
-missing tool is a broken image and must fail loudly rather than be installed at run time.
+**The scripts do not verify the image.** `engine-build.Dockerfile`'s final `RUN` already asserts
+`ninja --version` against `MEASLY_DJL_NINJA_VERSION`, `rpm -q` on the libasan and libubsan NEVRAs,
+gcc-revision equality between them, and `/usr/include/sys/sdt.h`. Those assertions run at image
+build time, so a failure yields **no image at all** — there is no such thing as a published-but-broken
+`engine-build`. Since we pin by digest, and a digest is immutable, a digest that resolves is by
+construction one that passed. A consumer-side re-check of those versions proves nothing and costs a
+maintenance point every time a value moves.
+
+So `MEASLY_DJL_PINNED_IMAGE` is used for exactly one thing: suppressing the glibc-floor warning
+below. It gates no assertion. The presence assertions that remain exist for the **host** path — the
+case nothing else covers — where their value is a failure that names what is missing.
 
 The Windows branch never had pip/dnf/RPM logic and is untouched throughout.
 
@@ -130,11 +135,8 @@ pulled, not built, and is arch-agnostic.
 - **JDK**: assert `JAVA_HOME` is set and `$JAVA_HOME/include/linux/jni_md.h` exists, failing with
   both the resolved path and a pointer to the wrapper. The `rpm2archive` extraction block is
   deleted; the image supplies `JAVA_HOME`, and a host build supplies its own.
-- **Ninja**: the `pip install ninja` and `cp312` PATH export are deleted. Assert `ninja` resolves.
-  **Only when `MEASLY_DJL_PINNED_IMAGE=1`**, additionally assert `ninja --version` **reports**
-  `MEASLY_DJL_NINJA_VERSION` — the contract warns this string
-  (`1.13.0.git.kitware.jobserver-pipe-1`) differs from the pip metadata version (`1.13.0`), so the
-  comparison is against reported output only. On a host, any ninja is acceptable.
+- **Ninja**: the `pip install ninja` and `cp312` PATH export are deleted. Assert `ninja` resolves —
+  and nothing more. Its version is the image's assertion to make, not ours.
 - **Floor warning**: on Linux outside the image, print a warning that the artifact links host glibc
   and so breaks the 2.28 floor — usable for local testing, never for a release. A warning, not an
   error (§3).
@@ -146,20 +148,17 @@ publication, CMake configure/build, staging, and licence copying.
 
 ### 4.6 `native/build_qa.sh`, Linux branch
 
-The `dnf install … || true` block is replaced by assertions:
+The `dnf install … || true` block is replaced by a single assertion:
 
-- `test -e /usr/include/sys/sdt.h` — required on any Linux host, not just in the image. It is the
-  assertion the deleted Dockerfile carried, and it must land somewhere or a future pin bump that
-  drops `systemtap-sdt-devel` reappears as
-  `native/core/et_probes.h:5:10: fatal error: sys/sdt.h: No such file or directory`, the exact
-  failure the Dockerfile comment documents. The message names the package that provides it.
-- **Only when `MEASLY_DJL_PINNED_IMAGE=1`**:
-  `rpm -q "gcc-toolset-${MEASLY_DJL_TOOLSET_VER}-libasan-devel-${MEASLY_DJL_TOOLSET_NEVRA}"`,
-  reading both values from the environment rather than hardcoding them (the contract's
-  troubleshooting section calls out hardcoding as the cause of a script/image disagreement). This
-  check is image-specific by construction: `rpm` need not exist on a host, and a host's ASan runtime
-  legitimately differs. On a host, the compiler's own `-fsanitize=address` link is the check — if
-  libasan is missing or mismatched, the link fails and says so.
+- `test -e /usr/include/sys/sdt.h`, with a message naming `systemtap-sdt-devel`. Its value is on a
+  host, where the alternative is
+  `native/core/et_probes.h:5:10: fatal error: sys/sdt.h: No such file or directory` from a compile
+  three steps later.
+
+No `rpm -q` NEVRA check. The image asserts both sanitizer NEVRAs and their agreement with its own
+gcc at build time, and on a host `rpm` need not exist and a different ASan runtime is legitimate —
+there the `-fsanitize=address` link is itself the check, failing loudly if libasan is missing or
+mismatched.
 
 No permission guard, matching `build.sh`. The Windows branch is untouched.
 
