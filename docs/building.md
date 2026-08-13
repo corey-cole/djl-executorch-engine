@@ -119,7 +119,7 @@ proof.
 
 ## 6. Native QA and benchmarking (optional)
 
-`native/build_qa.sh` (AddressSanitizer/LeakSanitizer Catch2 units + leak harness), `native/bench.sh`
+`native/build_qa.sh` (Catch2 units + leak harness under ASan **and** UBSan), `native/bench.sh`
 (Release timing harness), and `native/build_variants.sh` (times all three runtime variants) each
 fetch the runtime via CMake (or set `ET_INSTALL` for the escape hatch). Run them in the **same
 pinned engine-build image** as the shim build so the toolchain matches — pass the script to the
@@ -136,24 +136,17 @@ a `native/bench`/`native/asan` tree left over from a container run has a differe
 the scripts wipe their own tree to avoid that collision, but the host toolchain mismatch remains.
 The wrapper is the blessed path.
 
-## 7. Container file ownership (known gap)
+`build_qa.sh` builds the QA tree under **both** ASan and UBSan, so the Catch2 units and the leak
+harness run under UndefinedBehaviorSanitizer too. UBSan is a gate, not a log: UB **aborts** the run
+rather than printing, so a QA failure may be a `runtime error:` line rather than a failed
+assertion — treat either as a finding. The check set lives in the `ET_UBSAN_CHECKS` CMake cache
+variable (`undefined,float-cast-overflow,float-divide-by-zero`, minus `vptr`) and can be narrowed
+for a one-off run. GCC has no ignorelist, so the way to exempt a function is
+`__attribute__((no_sanitize("undefined")))` (or a per-TU compile-option override).
+`implicit-signed-integer-truncation` is clang-only and therefore uncovered by this gate.
 
-The container builds run as **root**, so anything written into the bind-mounted repo ends up
-root-owned on the host. `native/build.sh` mitigates this for **its own** outputs — when the wrapper
-passes `HOST_UID`/`HOST_GID`, an `EXIT` trap `chown`s them back to the invoking user
-(`native/build` and the staged `src/main/resources/native/linux-*`).
-
-The sibling scripts do **not** yet do this, so they leave root-owned directories behind:
-
-- `native/bench.sh` → `native/bench/`
-- `native/build_variants.sh` → `native/bench-results/` (and drives `bench.sh` → `native/bench/`)
-- `native/build_qa.sh` → `native/asan/`
-
-Until these grow the same trap, fix ownership by hand after running them, e.g.:
-
-```bash
-sudo chown -R "$(id -u):$(id -g)" native/bench native/bench-results native/asan
-```
+The same gate runs in CI on both Linux arches — `native-build-job.yml` calls `build_qa.sh` in its
+`linux-x86_64` and `linux-aarch64` rows — and UBSan adds compile and run time to both.
 
 ## 8. Verifying runtime provenance (optional, local)
 

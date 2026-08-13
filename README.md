@@ -20,8 +20,8 @@ that work before you hand data to the translator.
 
 | Platform | Artifact | Runtime variant | QA |
 |---|---|---|---|
-| `linux-x86_64` | `libexecutorch_djl.so` | `logging` | Catch2 + ASan/LSan leak harness |
-| `linux-aarch64` | `libexecutorch_djl.so` | `logging` | Catch2 + ASan/LSan leak harness |
+| `linux-x86_64` | `libexecutorch_djl.so` | `logging` | Catch2 + leak harness under ASan + UBSan |
+| `linux-aarch64` | `libexecutorch_djl.so` | `logging` | Catch2 + leak harness under ASan + UBSan |
 | `windows-x86_64` | `executorch_djl.dll` | `logging` | Catch2 (MSVC has no LeakSanitizer) |
 
 The native library ships in a per-platform classifier jar (`<artifact>-<platform>.jar`) and is extracted
