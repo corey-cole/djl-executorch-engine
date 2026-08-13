@@ -28,6 +28,7 @@
 - Create: `native/container_env.sh`
 - Modify: `native/build.sh:12-19` (the inline `cleanup` trap)
 - Modify: `native/build_qa.sh` (register the QA tree, Linux branch only)
+- Modify: `native/bench.sh`, `native/build_variants.sh` (register their output trees)
 
 **Interfaces:**
 - Produces: `et_chown_outputs_on_exit <path>...` — registers paths and installs an EXIT trap that chowns them to `HOST_UID:HOST_GID`, and is a no-op when `HOST_UID` is unset (i.e. every host run). Every later task in this plan depends on it, because `native/asan` is otherwise root-owned after each containerised QA run.
@@ -96,12 +97,29 @@ and after `NATIVE_BUILD_DIR` is assigned:
 
 with the same `. "$(dirname "${BASH_SOURCE[0]}")/container_env.sh"` source line near the top. The Windows branch must not register anything — there is no container there.
 
-- [ ] **Step 4: Verify ownership comes back without `sudo`**
+- [ ] **Step 4: Wire the two remaining offenders**
 
-Start from a clean slate so the test is real:
+`bench.sh` and `build_variants.sh` leave `native/bench/` and `native/bench-results/` root-owned for
+the same reason. They are outside this gate's path, but each is one source line plus one registration
+call now that the helper exists, and doing them here is what lets Task 4 delete the manual-`chown`
+note outright instead of rewriting it into a narrower one that is still a trap:
 
 ```bash
-sudo rm -rf native/asan native/build
+  et_chown_outputs_on_exit native/bench native/bench-results
+```
+
+(in `bench.sh`; `build_variants.sh` registers whichever trees it writes — check its outputs rather
+than assuming they match).
+
+- [ ] **Step 5: Verify ownership comes back without `sudo`**
+
+Start from a clean slate so the test is real. The existing trees are root-owned from earlier runs, so
+the host cannot delete them — but the container can, because it runs as root. Use it rather than
+reaching for `sudo`, which needs an interactive password and fails in a scripted run:
+
+```bash
+docker run --rm -v "$PWD":/workspace -w /workspace "$(cat .engine-build-image)" \
+  rm -rf native/asan native/build
 ./native/local_build_wrapper.sh native/build_qa.sh
 stat -c '%U %n' native/asan
 ```
@@ -115,10 +133,10 @@ stat -c '%U %n' native/build src/main/resources/native/linux-x86_64
 
 Expected: both owned by you.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add native/container_env.sh native/build.sh native/build_qa.sh
+git add native/container_env.sh native/build.sh native/build_qa.sh native/bench.sh native/build_variants.sh
 git commit -m "build: hand container outputs back via a shared container_env.sh"
 ```
 
@@ -303,9 +321,11 @@ git commit -m "fix: <the specific undefined behaviour UBSan reported>"
 ### Task 4: Confirm the shipping build is untouched, then document
 
 **Files:**
-- Modify: `CLAUDE.md` (the native QA section), `docs/building.md` (the native QA section)
+- Modify: `CLAUDE.md` (the native QA section **and** the "Container file-ownership gap" note at ~line 155), `docs/building.md` (the native QA section **and** the `sudo chown` block at ~line 155)
 
 **Interfaces:** none.
+
+**Delete the ownership workaround, do not narrow it.** `CLAUDE.md:155` and `docs/building.md:155` both instruct the reader to run `sudo chown -R …` after `bench.sh` / `build_variants.sh` / `build_qa.sh`. After Task 1 every one of those scripts hands its outputs back on exit, so the instruction is not merely out of date — it tells the reader to do something that cannot work in a scripted run and is unnecessary in an interactive one.
 
 - [ ] **Step 1: Prove nothing instrumented reaches the shipping artifact**
 
