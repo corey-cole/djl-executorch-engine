@@ -39,7 +39,7 @@ if [ -n "${JDK_ROOT:-}" ] && [ -f "${JDK_ROOT}/include/linux/jni_md.h" ]; then
   rc=0
   out="$(JAVA_HOME="${JDK_ROOT}" PATH=/nonexistent-bin /bin/bash native/build.sh 2>&1)" || rc=$?
   test "${rc}" -ne 0 || fail "build.sh must fail when ninja is absent"
-  grep -q 'ninja' <<<"${out}" || fail "toolchain failure must name ninja"
+  grep -q 'ninja not on PATH' <<<"${out}" || fail "toolchain failure must name ninja"
 fi
 
 echo "PASS: build.sh config"

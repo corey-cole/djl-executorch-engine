@@ -8,15 +8,15 @@
 ## 1. Prerequisites
 
 - **Docker** — the Linux native library is built inside the pinned shared engine-build image, a
-  `manylinux_2_28` derivative (see [The glibc floor](#2-the-glibc-floor-and-why-the-container-is-not-optional)
+  `manylinux_2_28` derivative (see [The glibc floor](#2-the-glibc-floor-and-why-the-container-is-required-for-a-release)
   below). Docker is needed for a **pull** of that image's pinned digest, not to build it — the
   first build pays the pull.
-- **JDK 17** on the host for Gradle. (The native build fetches its own JDK *headers* for JNI — you
-  do not need a JDK inside the container.)
+- **JDK 17** on the host for Gradle. (The native build uses the JDK *headers* from JAVA_HOME for JNI —
+  the shared image bakes JAVA_HOME; a host build points build.sh at any JDK.)
 - No ExecuTorch checkout is needed — CMake `FetchContent`s the pinned runtime tarball. Network
   access is required for that fetch (and for Catch2 in the native QA build).
 
-## 2. The glibc floor, and why the container is not optional
+## 2. The glibc floor, and why the container is required for a release
 
 ExecuTorch 1.3 pins `torch==2.12.0`, whose wheel needs **glibc ≥ 2.28**. So the shipped `.so` must
 be built inside a `manylinux_2_28` container to keep that floor (covers RHEL/Rocky 8+,

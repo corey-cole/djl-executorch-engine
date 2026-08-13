@@ -24,8 +24,9 @@ the shim only *links* the prebuilt `xnnpack_backend` from the tarball — so the
 
 ## JDK headers only (never link libjvm)
 The shim is a JNI library loaded *by* the JVM; it needs only `jni.h` + `jni_md.h`, never `libjvm`/`libjawt`.
-The manylinux image lacks `cpio`, so we extract the Corretto RPM via `rpm2archive` → `.tgz` → `tar`
-(not `rpm2cpio | cpio`) and derive `JAVA_HOME` from the extracted `jni.h`.
+The engine-build image bakes `JAVA_HOME` (e.g. `/opt/corretto-jdk`) and its headers, so the shim
+compiles against `$JAVA_HOME/include` and its platform `jni_md.h`. The earlier rpm2archive/Corretto-RPM
+extraction route was removed with the shared-image migration.
 
 ## flatcc / install-destination gotcha
 Repo A carries a workaround for an ExecuTorch install-destination bug (`pytorch/executorch#20709`);
