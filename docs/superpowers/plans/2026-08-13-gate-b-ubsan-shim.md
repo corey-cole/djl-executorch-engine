@@ -69,10 +69,11 @@ docker run --rm -v "$PWD":/workspace -w /workspace "$(cat .engine-build-image)" 
   bash -c 'rm -rf native/ubsan && cmake -S native -B native/ubsan -G "Unix Makefiles" -DET_UBSAN=ON \
     -DCMAKE_BUILD_TYPE=Debug && cmake --build native/ubsan --target executorch_djl -j"$(nproc)"'
 ldd native/ubsan/libexecutorch_djl.so | grep -i ubsan
-nm -D --defined-only native/ubsan/libexecutorch_djl.so | grep -c ubsan
 ```
 
-Expected: `ldd` prints **nothing** for ubsan (grep exits 1), and `nm` reports a **nonzero** count of defined ubsan symbols. Together those mean the runtime is present and statically linked.
+Expected: `ldd` prints **nothing** for ubsan (grep exits 1). The dynamic dependency is gone, so a stock JVM can `dlopen` the library.
+
+**Do not add a `nm -D … | grep -c ubsan` symbol count here.** It does not discriminate in either direction: `nm -D` reads the *dynamic* symbol table, so a statically-linked runtime under hidden visibility legitimately counts zero, and a nonzero count would only show the UBSan *runtime* was linked — instrumentation of our translation unit comes from the `-fsanitize=` compile flags, a different mechanism. The sibling repo carried this check in its plan and dropped it before shipping. Task 3's deliberate probe is the only real proof.
 
 - [ ] **Step 4: Commit**
 
@@ -299,17 +300,21 @@ omits `ET_BUILD_QA` and that `EXECUTORCH_LIBRARY_PATH` actually pointed at `nati
 
 - [ ] **Step 3: If Step 2 passed, diagnose before proceeding**
 
-Only if Step 2 did **not** fail. A pass means the JVM loaded something uninstrumented, so find out
-what:
+Only if Step 2 did **not** fail. A pass means either the shim was not instrumented or the JVM loaded a
+different library. Separate the two by making the probe unmissable — build the tree and check the
+compile line actually carried the sanitizer flags:
 
 ```bash
-ldd native/ubsan/libexecutorch_djl.so | grep -i ubsan   # expect no output (static)
-nm -D --defined-only native/ubsan/libexecutorch_djl.so | grep -c ubsan   # expect nonzero
+grep -m1 "executorch_djl_jni" native/ubsan/CMakeFiles/executorch_djl.dir/link.txt 2>/dev/null
+docker run --rm -v "$PWD":/workspace -w /workspace "$(cat .engine-build-image)" \
+  bash -c 'grep -rn "fsanitize" native/ubsan/CMakeFiles/executorch_djl.dir/flags.make'
 ```
 
-A zero symbol count means the configure skipped the shim's instrumentation. A nonzero count with a
-passing suite means `EXECUTORCH_LIBRARY_PATH` did not reach the test JVM, so the staged library was
-loaded instead — check that the gate script exported it and that no task overrode it.
+No `-fsanitize=` in `flags.make` means the `ET_UBSAN` block did not apply to this target — check that
+the configure omitted `ET_BUILD_QA`, since the shim is skipped entirely under it. If the flags *are*
+present, the instrumentation is real and the suite loaded something else: confirm the gate script
+exported `EXECUTORCH_LIBRARY_PATH` and that `LibUtils` reported that path rather than a cache
+extraction.
 
 - [ ] **Step 4: Revert the probe**
 
@@ -483,12 +488,15 @@ commands the script prints. Note that it runs in CI on `linux-x86_64` only.
 
 ```bash
 ./native/local_build_wrapper.sh
-nm -D --defined-only src/main/resources/native/linux-x86_64/libexecutorch_djl.so | grep -c ubsan
 ./gradlew clean build
+./gradlew test
 ```
 
-Expected: the count is **0** and the build succeeds. `ET_UBSAN` defaults OFF and `build.sh` never
-sets it, but this is the assertion that the two trees really are independent.
+Expected: all three succeed. A symbol count on the shipped `.so` would be the wrong instrument here
+for the reason given in Task 1 — it can read zero on an instrumented library. What actually
+establishes independence is that `ET_UBSAN` defaults OFF, `build.sh` never sets it, the two trees are
+different directories (`native/build` vs `native/ubsan`), and the gate stages nothing. The functional
+check is that the ordinary build and suite still pass against the ordinary library.
 
 - [ ] **Step 3: Full regression**
 
