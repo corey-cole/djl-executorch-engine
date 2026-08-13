@@ -10,7 +10,7 @@
 #
 # CI env vars: ET_RUNTIME_VARIANT (default logging), ET_INSTALL (escape hatch). The QA targets are
 # JVM-free and the shared native/CMakeLists.txt skips the JNI shim under -DET_BUILD_QA=ON, so NO
-# JAVA_HOME/JDK is needed. In GitHub Actions, run this in the SAME manylinux_2_28 container as
+# JAVA_HOME/JDK is needed. In GitHub Actions, run this in the shared engine-build image as
 # native/build.sh (matching gcc-toolset toolchain).
 set -euo pipefail
 
@@ -60,12 +60,11 @@ if [ "${ET_HOST_OS}" = "windows" ]; then
   ./native/asan/et_runtime_test.exe --order decl
   echo "--- Leak harness SKIPPED: no LeakSanitizer under MSVC (Linux-only coverage) ---"
 else
-  # QA is the only ASan consumer; install the toolset's ASan runtime here (moved out of build.sh).
-  if command -v dnf >/dev/null 2>&1; then
-    echo "--- Installing ASan runtime (dnf), may appear to hang ---"
-    TOOLSET_VER="$(gcc -dumpversion | cut -d. -f1)"
-    dnf install -y -q "gcc-toolset-${TOOLSET_VER}-libasan-devel" || true
-  fi
+  # <sys/sdt.h> ships in systemtap-sdt-devel and native/core/et_probes.h requires it. Assert it so a
+  # missing header fails here by name rather than as a fatal error part-way through the compile.
+  test -e /usr/include/sys/sdt.h || {
+    echo "missing /usr/include/sys/sdt.h (systemtap-sdt-devel): native/core/et_probes.h needs it;"
+    echo "install it, or run QA via ./native/local_build_wrapper.sh native/build_qa.sh"; exit 1; }
 
   JOBS="${JOBS:-$(nproc)}"
   # Drop the tree only if it was configured for a different source root (container vs host); a same-root
