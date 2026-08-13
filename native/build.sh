@@ -33,10 +33,10 @@ if [ -n "${PRINT_BUILD_CONFIG:-}" ]; then
   exit 0
 fi
 
-# This script expects:
-# 1. To be running inside the platform's manylinux_2_28 image (quay.io/pypa/manylinux_2_28_x86_64
-#    or manylinux_2_28_aarch64; glibc-2.28 floor for the shipped .so)
-# 2. The Corretto RPM downloaded to /workspace
+# This script expects a toolchain — supplied by the pinned engine-build image via
+# ./native/local_build_wrapper.sh, or by the host (JAVA_HOME, ninja, gcc/g++, cmake). It asserts
+# requirements; it never installs them. Building outside the image does not hold the glibc-2.28
+# floor (a warning is printed; see the toolchain block below).
 # The runtime tarball is fetched by CMake during the shim configure (also inside the container,
 # so the fetched runtime is linked on glibc 2.28).
 
@@ -50,16 +50,13 @@ if [ "${ET_HOST_OS}" = "windows" ]; then
     || { echo "JDK headers not found under JAVA_HOME=${JAVA_HOME} (expected include/win32/jni_md.h)"; exit 1; }
   echo "JAVA_HOME=${JAVA_HOME}"
 else
-  echo "--- Extracting Corretto JDK headers (headers-only; we never link libjvm) ---"
-  JDK_EXTRACT=/opt/corretto
-  mkdir -p "${JDK_EXTRACT}"
-  cp /workspace/amazon-corretto-linux-jdk.rpm /tmp/corretto.rpm
-  rpm2archive /tmp/corretto.rpm            # -> /tmp/corretto.rpm.tgz (no cpio in this image)
-  tar -C "${JDK_EXTRACT}" -xzf /tmp/corretto.rpm.tgz
-  JNI_H="$(find "${JDK_EXTRACT}" -path '*/include/jni.h' | head -1)"
-  export JAVA_HOME="${JNI_H%/include/jni.h}"
+  # Headers only; we never link libjvm. JAVA_HOME comes from the pinned image or from the host --
+  # either way it is supplied, never installed here.
+  echo "--- JDK headers ---"
+  test -n "${JAVA_HOME:-}" \
+    || { echo "JAVA_HOME is unset: point it at any JDK, or build via ./native/local_build_wrapper.sh"; exit 1; }
   test -f "${JAVA_HOME}/include/linux/jni_md.h" \
-    || { echo "JDK headers not found under JAVA_HOME=${JAVA_HOME}"; exit 1; }
+    || { echo "no JDK headers under JAVA_HOME=${JAVA_HOME} (want include/linux/jni_md.h); or build via ./native/local_build_wrapper.sh"; exit 1; }
   echo "JAVA_HOME=${JAVA_HOME}"
 fi
 
@@ -69,10 +66,15 @@ if [ "${ET_HOST_OS}" = "windows" ]; then
   command -v ninja >/dev/null 2>&1 || { echo "ninja not on PATH: activate the VS dev shell first"; exit 1; }
   cl 2>&1 | head -1; cmake --version; ninja --version
 else
-  echo "--- Setting up Ninja (the shim configures with -G Ninja) ---"
-  export PATH="/opt/python/cp312-cp312/bin:${PATH}"
-  pip install ninja
-  echo "--- Toolchain Versions ---"
+  echo "--- Toolchain (asserted, never installed) ---"
+  command -v ninja >/dev/null 2>&1 \
+    || { echo "ninja not on PATH: install it, or build via ./native/local_build_wrapper.sh"; exit 1; }
+  # Building outside the image is supported but does NOT hold the glibc-2.28 floor -- the artifact
+  # links host glibc. Fine for local ./gradlew test, never for a release (see CLAUDE.md).
+  if [ "${MEASLY_DJL_PINNED_IMAGE:-}" != "1" ]; then
+    echo "WARNING: not the pinned engine-build image -- this .so links host glibc and breaks the" >&2
+    echo "         2.28 floor. Local testing only; release builds go through local_build_wrapper.sh." >&2
+  fi
   gcc --version; g++ --version; cmake --version; ninja --version
 fi
 
