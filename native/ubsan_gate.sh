@@ -67,7 +67,12 @@ if [ "${MODE}" = "build" ] || [ "${MODE}" = "all" ]; then
   # A dynamic libubsan dependency means -static-libubsan did not apply and System.load would fail.
   # Assert here so the failure names its own cause: the build may happen in a container and the load
   # on a host hours later, in a different job.
-  if ldd "${BUILD_DIR}/libexecutorch_djl.so" | grep -qi ubsan; then
+  if ! _ldd_out="$(ldd "${BUILD_DIR}/libexecutorch_djl.so" 2>&1)"; then
+    echo "FAIL: ldd cannot read ${BUILD_DIR}/libexecutorch_djl.so;" >&2
+    echo "      the build did not produce the instrumented shim" >&2
+    exit 1
+  fi
+  if printf '%s\n' "${_ldd_out}" | grep -qi ubsan; then
     echo "FAIL: ${BUILD_DIR}/libexecutorch_djl.so has a dynamic libubsan dependency;" >&2
     echo "      -static-libubsan did not apply (native/CMakeLists.txt)" >&2
     exit 1
@@ -90,8 +95,23 @@ if [ -n "${MEASLY_DJL_PINNED_IMAGE:-}" ]; then
   exit 1
 fi
 
-_java_major="$("${JAVA_HOME:-/usr}/bin/java" -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')"
-if [ "${_java_major:-0}" -lt 17 ]; then
+# Refuse the JVM phase with a legible message rather than letting Gradle fail obscurely. The
+# probe avoids a java|head pipeline (head exits after line 1; java can then SIGPIPE, and
+# pipefail would abort the assignment silently).
+_java_bin="${JAVA_HOME:-/usr}/bin/java"
+if [ ! -x "${_java_bin}" ]; then
+  echo "no java at ${_java_bin}; the JVM phase needs JDK 17+. Set JAVA_HOME and rerun." >&2
+  exit 1
+fi
+_java_version="$("${_java_bin}" -version 2>&1 || true)"
+_java_major="$(sed -nE -e 's/.*"1\.([0-9]+).*/\1/p' -e 's/.*"([1-9][0-9]*).*/\1/p' <<<"${_java_version}")"
+case "${_java_major}" in
+  ''|*[!0-9]*)
+    echo "could not parse the java version (\"${_java_version}\"); Gradle 9.6.1 and this project need JDK 17+." >&2
+    exit 1
+    ;;
+esac
+if [ "${_java_major}" -lt 17 ]; then
   echo "JAVA_HOME points at Java ${_java_major}; Gradle 9.6.1 and this project need 17+." >&2
   exit 1
 fi
