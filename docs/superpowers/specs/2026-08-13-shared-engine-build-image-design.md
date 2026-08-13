@@ -48,22 +48,36 @@ which the image supersedes:
 
 So the scripts are edited, not merely verified.
 
-## 3. No non-image Linux fallback
+## 3. Assert requirements; never remediate
 
-`build.sh`'s Linux branch has never been runnable outside the container. It assumes `rpm2archive`
-(absent on Debian/Ubuntu), `dnf`, `/opt/python/cp312-cp312` on PATH, and write access to
-`/opt/corretto`. On an Ubuntu workstation or a stock GitHub runner it does not degrade — it dies,
-historically with `mkdir /opt/corretto: Permission denied`. Both this project's development
-workstation and its CI runners are Ubuntu, so the "keep the install paths as a fallback" option
-preserves nothing that has ever worked.
+What was wrong with the old scripts is not that they ran outside the image — it is that they tried
+to **fix** their environment: `pip install ninja`, extract a JDK from an RPM, `dnf install` the
+sanitizer runtime. Remediation inside a build script hides drift, and in practice it only ever
+worked where the packages were already at hand (the manylinux base). All of it is deleted.
 
-Therefore: inside the image, **assert**; on Linux outside it, **fail immediately** with a message
-naming `native/local_build_wrapper.sh`. Deleting the install paths removes code that only ever ran
-where the packages were already present. The Windows branch never had pip/dnf/RPM logic and is
-untouched throughout.
+Deleting it is **not** the same as refusing to build outside the image. A host that genuinely has
+the toolchain — ninja, cmake, a C++17 compiler, JDK headers, and for QA the matching ASan runtime
+and `<sys/sdt.h>` — can build the shim, and that is a legitimate local workflow. The scripts must
+not stand in its way.
 
-`MEASLY_DJL_PINNED_IMAGE=1` is the branch signal, per the contract: inside the image a missing tool
-is a broken image and must fail loudly rather than be installed at run time.
+Two caveats attach to such a build, and neither is the script's business to enforce by refusal:
+
+- The artifact will link against host glibc and so **breaks the 2.28 floor**. That makes it fine
+  for local `./gradlew test` and never fine for a release — the existing framing in CLAUDE.md. The
+  script warns; the release path is the wrapper.
+- The toolchain is whatever the host has, so a failure is the host's to diagnose.
+
+So each requirement gets an assertion that fails **by name** and says how to satisfy it, pointing at
+`native/local_build_wrapper.sh` as the blessed route. Nothing is installed.
+
+`MEASLY_DJL_PINNED_IMAGE=1` is not a permission gate. It selects **extra strictness**: inside the
+image, the declared versions are also checked for equality (`MEASLY_DJL_NINJA_VERSION`,
+`MEASLY_DJL_TOOLSET_NEVRA`), because there a mismatch means a broken image rather than an unusual
+host. Outside the image those variables are unset, so the equality checks are skipped while the
+presence assertions still apply. This is exactly the contract's stated intent: inside the image, a
+missing tool is a broken image and must fail loudly rather than be installed at run time.
+
+The Windows branch never had pip/dnf/RPM logic and is untouched throughout.
 
 ## 4. Design
 
@@ -113,33 +127,41 @@ pulled, not built, and is arch-agnostic.
 
 ### 4.5 `native/build.sh`, Linux branch
 
-- **Guard**, placed *after* the `PRINT_BUILD_CONFIG` early-exit so that diagnostic keeps working on
-  any host: on Linux, `MEASLY_DJL_PINNED_IMAGE != 1` exits with a message naming
-  `native/local_build_wrapper.sh` and `docs/building.md`.
-- **JDK**: assert `JAVA_HOME` is set and `$JAVA_HOME/include/linux/jni_md.h` exists. The
-  `rpm2archive` extraction block is deleted.
-- **Ninja**: the `pip install ninja` and `cp312` PATH export are deleted. Assert `ninja` resolves
-  and that `ninja --version` **reports** `MEASLY_DJL_NINJA_VERSION` — the contract warns this
-  string (`1.13.0.git.kitware.jobserver-pipe-1`) differs from the pip metadata version
-  (`1.13.0`), so the comparison is against reported output only.
+- **JDK**: assert `JAVA_HOME` is set and `$JAVA_HOME/include/linux/jni_md.h` exists, failing with
+  both the resolved path and a pointer to the wrapper. The `rpm2archive` extraction block is
+  deleted; the image supplies `JAVA_HOME`, and a host build supplies its own.
+- **Ninja**: the `pip install ninja` and `cp312` PATH export are deleted. Assert `ninja` resolves.
+  **Only when `MEASLY_DJL_PINNED_IMAGE=1`**, additionally assert `ninja --version` **reports**
+  `MEASLY_DJL_NINJA_VERSION` — the contract warns this string
+  (`1.13.0.git.kitware.jobserver-pipe-1`) differs from the pip metadata version (`1.13.0`), so the
+  comparison is against reported output only. On a host, any ninja is acceptable.
+- **Floor warning**: on Linux outside the image, print a warning that the artifact links host glibc
+  and so breaks the 2.28 floor — usable for local testing, never for a release. A warning, not an
+  error (§3).
+
+There is no permission guard. The `PRINT_BUILD_CONFIG` early-exit keeps working as before.
 
 Unchanged: `cd /workspace`, `JOBS`, the `HOST_UID` chown trap, the `GITHUB_ENV` `JAVA_HOME`
 publication, CMake configure/build, staging, and licence copying.
 
 ### 4.6 `native/build_qa.sh`, Linux branch
 
-The `dnf install … || true` block is replaced by two assertions, both reading values from the
-environment rather than hardcoding them (the contract's troubleshooting section calls out
-hardcoding as the cause of a script/image disagreement):
+The `dnf install … || true` block is replaced by assertions:
 
-- `rpm -q "gcc-toolset-${MEASLY_DJL_TOOLSET_VER}-libasan-devel-${MEASLY_DJL_TOOLSET_NEVRA}"`
-- `test -e /usr/include/sys/sdt.h` — the assertion the deleted Dockerfile carried. It must land
-  somewhere or a future pin bump that drops `systemtap-sdt-devel` reappears as
+- `test -e /usr/include/sys/sdt.h` — required on any Linux host, not just in the image. It is the
+  assertion the deleted Dockerfile carried, and it must land somewhere or a future pin bump that
+  drops `systemtap-sdt-devel` reappears as
   `native/core/et_probes.h:5:10: fatal error: sys/sdt.h: No such file or directory`, the exact
-  failure the Dockerfile comment documents.
+  failure the Dockerfile comment documents. The message names the package that provides it.
+- **Only when `MEASLY_DJL_PINNED_IMAGE=1`**:
+  `rpm -q "gcc-toolset-${MEASLY_DJL_TOOLSET_VER}-libasan-devel-${MEASLY_DJL_TOOLSET_NEVRA}"`,
+  reading both values from the environment rather than hardcoding them (the contract's
+  troubleshooting section calls out hardcoding as the cause of a script/image disagreement). This
+  check is image-specific by construction: `rpm` need not exist on a host, and a host's ASan runtime
+  legitimately differs. On a host, the compiler's own `-fsanitize=address` link is the check — if
+  libasan is missing or mismatched, the link fails and says so.
 
-The same non-image guard as `build.sh` applies, inside the Linux branch only. The Windows branch is
-untouched.
+No permission guard, matching `build.sh`. The Windows branch is untouched.
 
 ### 4.7 `native/tests/ci_workflow.sh`
 

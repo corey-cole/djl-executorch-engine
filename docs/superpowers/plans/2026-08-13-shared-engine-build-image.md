@@ -80,102 +80,104 @@ git commit -m "build: pin the shared engine-build image and stop building one lo
 
 ---
 
-### Task 2: `native/build.sh` asserts the image instead of installing
+### Task 2: `native/build.sh` asserts its requirements instead of installing them
 
 **Files:**
-- Modify: `native/build.sh:52-64` (JDK), `native/build.sh:71-77` (ninja), plus a new guard after line 34
+- Modify: `native/build.sh:52-64` (JDK), `native/build.sh:71-77` (ninja)
 - Test: `native/tests/build_config.sh`
 
 **Interfaces:**
-- Consumes: `MEASLY_DJL_PINNED_IMAGE`, `MEASLY_DJL_NINJA_VERSION`, `JAVA_HOME` from the image environment.
-- Produces: on Linux outside the image, exit status 1 and a message containing `local_build_wrapper.sh`. `PRINT_BUILD_CONFIG=1` still exits 0 anywhere — Task 3 and `native/tests/build_config.sh` both depend on that ordering.
+- Consumes: `JAVA_HOME` (required on any Linux host); `MEASLY_DJL_PINNED_IMAGE` and `MEASLY_DJL_NINJA_VERSION` (used only to switch on the in-image version-equality check).
+- Produces: a missing requirement exits non-zero with a message naming the requirement and pointing at `local_build_wrapper.sh`. A host build still succeeds when the tools are present, with a glibc-floor warning. `PRINT_BUILD_CONFIG=1` behaviour is unchanged.
 
 - [ ] **Step 1: Write the failing test**
 
 Append to `native/tests/build_config.sh`, before the final `echo "PASS: ..."`:
 
 ```bash
-# The guard must sit AFTER the PRINT_BUILD_CONFIG early exit: that diagnostic is host-runnable by
-# design (every assertion above this line depends on it), while the build proper is image-only.
+# Requirement assertions must fail BY NAME, not as a confusing failure ten steps later. These drive
+# the JAVA_HOME and ninja assertions; they are behavioural (run the script, read what it says) and
+# host-independent, since each one removes a requirement rather than depending on what this host has.
 rc=0
-out="$(MEASLY_DJL_PINNED_IMAGE= bash native/build.sh 2>&1)" || rc=$?
-test "${rc}" -ne 0 || fail "build.sh must refuse to run outside the pinned image"
-grep -q 'local_build_wrapper.sh' <<<"${out}" || fail "guard message must name the wrapper"
+out="$(JAVA_HOME=/nonexistent bash native/build.sh 2>&1)" || rc=$?
+test "${rc}" -ne 0 || fail "build.sh must fail when the JDK headers are absent"
+grep -q 'jni_md.h\|JAVA_HOME' <<<"${out}" || fail "JDK failure must name what is missing"
+grep -q 'local_build_wrapper.sh' <<<"${out}" || fail "JDK failure must point at the wrapper"
+
+rc=0
+out="$(PATH=/nonexistent-bin bash native/build.sh 2>&1)" || rc=$?
+test "${rc}" -ne 0 || fail "build.sh must fail when ninja is absent"
+grep -q 'ninja' <<<"${out}" || fail "toolchain failure must name ninja"
 ```
 
-This is behavioural — it runs the script and checks what it does. Do **not** add greps for the removed `pip install ninja` / `rpm2archive` lines: those assert the shape of the diff, and Task 6's real build is what proves nothing gets installed.
+Behavioural, not shape. Do **not** add greps for the removed `pip install ninja` / `rpm2archive` lines.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `bash native/tests/build_config.sh`
-Expected: FAIL — either `build.sh must refuse to run outside the pinned image`, or the script hangs/errors deep in the Corretto step. If it errors rather than failing cleanly, that *is* the current broken-outside-the-image behaviour this task replaces.
+Expected: FAIL — today the script gets as far as the Corretto RPM step and dies on `cp: cannot stat '/workspace/amazon-corretto-linux-jdk.rpm'` or a `/opt/corretto` permission error, so the message assertions fail. That failure mode *is* what this task replaces.
 
-- [ ] **Step 3: Add the guard**
+- [ ] **Step 3: Replace the JDK block**
 
-In `native/build.sh`, immediately after the `PRINT_BUILD_CONFIG` block that ends with `fi` (line 34):
-
-```bash
-# The shared engine-build image is the ONLY supported Linux build environment, and always was:
-# everything below assumes its toolchain (ninja on PATH, JAVA_HOME at the baked Corretto headers,
-# gcc-toolset). MEASLY_DJL_PINNED_IMAGE=1 is the image's own signal -- see
-# base-docker-images/docs/consuming-engine-build.md. Outside it, fail here by name instead of three
-# steps later with `mkdir /opt/corretto: Permission denied`. Deliberately placed AFTER the
-# PRINT_BUILD_CONFIG exit so that host-side diagnostic keeps working anywhere.
-if [ "${ET_HOST_OS}" = "linux" ] && [ "${MEASLY_DJL_PINNED_IMAGE:-}" != "1" ]; then
-  echo "native/build.sh: Linux builds run inside the pinned engine-build image." >&2
-  echo "  Run: ./native/local_build_wrapper.sh          (see docs/building.md)" >&2
-  exit 1
-fi
-```
-
-- [ ] **Step 4: Replace the JDK block**
-
-Replace the `else` branch of the JDK `if` (lines 52-64, the `JDK_EXTRACT`/`rpm2archive`/`find` block) with:
+There is **no permission guard** — a host with the tools may build (spec §3). Replace the `else` branch of the JDK `if` (lines 52-64, the `JDK_EXTRACT`/`rpm2archive`/`find` block) with:
 
 ```bash
 else
-  echo "--- Using the image's baked Corretto JDK headers (headers-only; we never link libjvm) ---"
-  test -n "${JAVA_HOME:-}" || { echo "JAVA_HOME unset: the pinned image must provide it"; exit 1; }
+  # Headers only; we never link libjvm. The pinned image sets JAVA_HOME to its baked Corretto 8; a
+  # host build supplies its own JDK. This script does NOT install one -- extracting an RPM here was
+  # remediation, which hides drift and only ever worked on the manylinux base.
+  echo "--- JDK headers ---"
+  test -n "${JAVA_HOME:-}" \
+    || { echo "JAVA_HOME is unset: point it at any JDK, or build via ./native/local_build_wrapper.sh"; exit 1; }
   test -f "${JAVA_HOME}/include/linux/jni_md.h" \
-    || { echo "JDK headers not found under JAVA_HOME=${JAVA_HOME}"; exit 1; }
+    || { echo "no JDK headers under JAVA_HOME=${JAVA_HOME} (want include/linux/jni_md.h); or build via ./native/local_build_wrapper.sh"; exit 1; }
   echo "JAVA_HOME=${JAVA_HOME}"
 fi
 ```
 
-Update the "This script expects:" comment above it (lines 36-41): it no longer expects a Corretto RPM in `/workspace`; it expects the pinned image.
+Update the "This script expects:" comment above it (lines 36-41): it no longer expects a Corretto RPM in `/workspace`. It expects a toolchain — supplied by the pinned image via `local_build_wrapper.sh`, or by the host.
 
-- [ ] **Step 5: Replace the ninja block**
+- [ ] **Step 4: Replace the ninja block**
 
 Replace the `else` branch of the toolchain `if` (lines 71-77) with:
 
 ```bash
 else
-  echo "--- Toolchain Versions (all baked into the pinned image; nothing is installed here) ---"
-  command -v ninja >/dev/null 2>&1 || { echo "ninja not on PATH: broken image"; exit 1; }
-  # Compare against what ninja REPORTS, not pip metadata: the Kitware jobserver-pipe wheel the image
-  # installs is `1.13.0` to pip but prints `1.13.0.git.kitware.jobserver-pipe-1`.
-  if [ -n "${MEASLY_DJL_NINJA_VERSION:-}" ] && [ "$(ninja --version)" != "${MEASLY_DJL_NINJA_VERSION}" ]; then
+  echo "--- Toolchain (asserted, never installed) ---"
+  command -v ninja >/dev/null 2>&1 \
+    || { echo "ninja not on PATH: install it, or build via ./native/local_build_wrapper.sh"; exit 1; }
+  # Inside the pinned image a version mismatch means a BROKEN IMAGE, so check equality there and only
+  # there -- on a host, whatever ninja you have is your business. Compare against what ninja REPORTS,
+  # not pip metadata: the Kitware jobserver-pipe wheel is `1.13.0` to pip but prints
+  # `1.13.0.git.kitware.jobserver-pipe-1`.
+  if [ "${MEASLY_DJL_PINNED_IMAGE:-}" = "1" ] && [ "$(ninja --version)" != "${MEASLY_DJL_NINJA_VERSION}" ]; then
     echo "ninja reports $(ninja --version), image declares ${MEASLY_DJL_NINJA_VERSION}"; exit 1
+  fi
+  # Building outside the image is supported but does NOT hold the glibc-2.28 floor -- the artifact
+  # links host glibc. Fine for local ./gradlew test, never for a release (see CLAUDE.md).
+  if [ "${MEASLY_DJL_PINNED_IMAGE:-}" != "1" ]; then
+    echo "WARNING: not the pinned engine-build image -- this .so links host glibc and breaks the" >&2
+    echo "         2.28 floor. Local testing only; release builds go through local_build_wrapper.sh." >&2
   fi
   gcc --version; g++ --version; cmake --version; ninja --version
 fi
 ```
 
-- [ ] **Step 6: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `bash native/tests/build_config.sh`
 Expected: `PASS: build.sh config`
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add native/build.sh native/tests/build_config.sh
-git commit -m "build: assert the pinned image's toolchain instead of installing one"
+git commit -m "build: assert the toolchain instead of installing it"
 ```
 
 ---
 
-### Task 3: `native/build_qa.sh` asserts the image instead of dnf-installing
+### Task 3: `native/build_qa.sh` asserts its QA requirements
 
 **Files:**
 - Modify: `native/build_qa.sh:63-68`
@@ -183,51 +185,48 @@ git commit -m "build: assert the pinned image's toolchain instead of installing 
 
 **Interfaces:**
 - Consumes: `MEASLY_DJL_PINNED_IMAGE`, `MEASLY_DJL_TOOLSET_VER`, `MEASLY_DJL_TOOLSET_NEVRA`.
-- Produces: on Linux outside the image, exit status 1 and a message containing `local_build_wrapper.sh`.
+- Produces: nothing consumed by later tasks.
 
 - [ ] **Step 1: Write the failing test**
 
 Append to `native/tests/ci_workflow.sh`, after the Task 1 block:
 
 ```bash
-QA="native/build_qa.sh"
-rc=0
-out="$(MEASLY_DJL_PINNED_IMAGE= bash "${QA}" 2>&1)" || rc=$?
-test "${rc}" -ne 0 || fail "build_qa.sh must refuse to run outside the pinned image"
-grep -q 'local_build_wrapper.sh' <<<"${out}" || fail "QA guard message must name the wrapper"
-
-# The one grep worth keeping in this task, and only because it guards a rehomed invariant rather
-# than the shape of this diff: the deleted docker/ Dockerfiles asserted <sys/sdt.h> at image-build
-# time. If that assertion is dropped from here too, nothing notices until a pin bump silently
-# resurfaces `fatal error: sys/sdt.h: No such file` inside native/core/et_probes.h.
-grep -q '/usr/include/sys/sdt.h' "${QA}" || fail "build_qa.sh must assert <sys/sdt.h> is present"
+# The <sys/sdt.h> assertion is a rehomed invariant, not the shape of this diff: the deleted docker/
+# Dockerfiles asserted it at image-build time, and if it is dropped from here too nothing notices
+# until a pin bump resurfaces `fatal error: sys/sdt.h: No such file` inside native/core/et_probes.h.
+grep -q '/usr/include/sys/sdt.h' native/build_qa.sh \
+  || fail "build_qa.sh must assert <sys/sdt.h> is present"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `bash native/tests/ci_workflow.sh`
-Expected: FAIL — `build_qa.sh must refuse to run outside the pinned image` if `dnf` is absent on the host (the current `|| true` swallows it and the script runs on), or a `sys/sdt.h` failure.
+Expected: `FAIL: build_qa.sh must assert <sys/sdt.h> is present`
 
 - [ ] **Step 3: Replace the dnf block**
 
-In `native/build_qa.sh`, replace the `if command -v dnf …` block (lines 63-68) with:
+In `native/build_qa.sh`, replace the `if command -v dnf …` block (lines 63-68) with the following. Note there is **no permission guard**: a host with a working `-fsanitize=address` toolchain and `<sys/sdt.h>` can run QA, and if its libasan is missing or mismatched the ASan link fails and says so — remediating it here was the actual mistake.
 
 ```bash
-  # Everything QA needs is baked into the pinned image, so assert rather than install: a missing
-  # tool here means a broken image, not a package to fetch. Reading the NEVRA from the environment
-  # rather than hardcoding it is what keeps this script and the image from disagreeing after a bump.
-  if [ "${MEASLY_DJL_PINNED_IMAGE:-}" != "1" ]; then
-    echo "native/build_qa.sh: Linux QA runs inside the pinned engine-build image." >&2
-    echo "  Run: ./native/local_build_wrapper.sh native/build_qa.sh   (see docs/building.md)" >&2
-    exit 1
+  # QA requirements are asserted, never installed. <sys/sdt.h> comes from systemtap-sdt-devel and is
+  # needed by native/core/et_probes.h (the W8 USDT tracepoints); the deleted docker/ Dockerfiles
+  # asserted it at image-build time, so it lives here now and fails by name rather than as a fatal
+  # error inside et_probes.h.
+  test -e /usr/include/sys/sdt.h || {
+    echo "missing /usr/include/sys/sdt.h (systemtap-sdt-devel): native/core/et_probes.h needs it;"
+    echo "install it, or run QA via ./native/local_build_wrapper.sh native/build_qa.sh"; exit 1; }
+
+  # Inside the pinned image only: a libasan from a different toolset revision than the gcc that
+  # emitted the instrumentation is the classic source of confusing ASan link errors, so the image
+  # holds both to one revision and we assert it held. Both values are read from the environment --
+  # hardcoding the NEVRA is exactly how a script and its image come to disagree after a bump. On a
+  # host this is skipped: rpm need not exist, and a host's own ASan runtime is legitimately different.
+  if [ "${MEASLY_DJL_PINNED_IMAGE:-}" = "1" ]; then
+    ASAN_PKG="gcc-toolset-${MEASLY_DJL_TOOLSET_VER}-libasan-devel-${MEASLY_DJL_TOOLSET_NEVRA}"
+    rpm -q "${ASAN_PKG}" >/dev/null \
+      || { echo "libasan NEVRA not installed as pinned: ${ASAN_PKG}"; exit 1; }
   fi
-  ASAN_PKG="gcc-toolset-${MEASLY_DJL_TOOLSET_VER}-libasan-devel-${MEASLY_DJL_TOOLSET_NEVRA}"
-  rpm -q "${ASAN_PKG}" >/dev/null \
-    || { echo "libasan NEVRA not installed as pinned: ${ASAN_PKG}"; exit 1; }
-  # <sys/sdt.h> for native/core/et_probes.h (the W8 USDT tracepoints). The deleted docker/
-  # Dockerfiles asserted this at image-build time; it lives here now so a pin bump that drops
-  # systemtap-sdt-devel fails by name instead of as `fatal error: sys/sdt.h: No such file`.
-  test -e /usr/include/sys/sdt.h || { echo "/usr/include/sys/sdt.h missing: broken image"; exit 1; }
 ```
 
 Also update the script's header comment (lines 11-14): CI runs this in the shared engine-build image, not "the SAME manylinux_2_28 container".
@@ -373,13 +372,13 @@ Expected: `FAIL: docs still reference the deleted per-platform Dockerfiles` (CLA
 - [ ] **Step 3: Update `docs/building.md`**
 
 - Prerequisites (lines 5-10): Docker is still required, but for a **pull**, not a build. First build pays a pull of the pinned digest.
-- The wrapper description (lines 36-46): it runs the shared image; `build.sh`'s Linux branch now refuses to run outside it with a message naming the wrapper, replacing the old permission-error failure mode.
+- The wrapper description (lines 36-46): it runs the shared image. **This is a behaviour change to document, not just a mechanism swap** — `build.sh` no longer installs anything, so a host build is now possible where the host already has ninja, cmake, a C++17 compiler and JDK headers. Say plainly what such a build costs: it links host glibc and breaks the 2.28 floor, so it is for local testing only and never for a release. The wrapper remains the blessed path.
 - Add a short "Bumping the toolchain image" section: the digest lives in `.engine-build-image`; a bump is a one-line change; digests are per-run, not per-commit, so take the digest from the `Publish Engine Images` run you intend to consume; point at `base-docker-images/docs/consuming-engine-build.md` for what the image guarantees and for `gh attestation verify`.
 - Line 102 (native QA section): same image, same wrapper.
 
 - [ ] **Step 4: Update `CLAUDE.md` and `README.md`**
 
-- `CLAUDE.md`, "Native shim (do this first)": `local_build_wrapper.sh` runs the pinned shared image rather than building one; keep the existing point that `build.sh` is not a host fast path, but restate the reason as the `MEASLY_DJL_PINNED_IMAGE` guard rather than the RPM/`rpm2archive` specifics, which no longer exist.
+- `CLAUDE.md`, "Native shim (do this first)": `local_build_wrapper.sh` runs the pinned shared image rather than building one. **The "`build.sh` is container-only, there is no host fast path" claim must be rewritten, not merely reworded** — it was true because the script extracted an RPM and shelled out to `dnf`, and after Task 2 neither exists. The accurate replacement: the wrapper is the blessed path because it holds the glibc floor; `build.sh` on a suitably equipped host now works but yields a floor-breaking artifact.
 - `README.md:250`: the `manylinux_2_28` sentence gains the shared-image reference — the floor is unchanged because the shared image is itself a manylinux_2_28 derivative.
 
 - [ ] **Step 5: Run tests to verify they pass**
