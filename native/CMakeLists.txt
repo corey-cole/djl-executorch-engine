@@ -52,8 +52,11 @@ set(ET_UBSAN_CHECKS "undefined,float-cast-overflow,float-divide-by-zero"
 # state -- so linking the uninstrumented prebuilt runtime produces no false positives and hides
 # nothing in our own code.
 #
-# -fno-sanitize-recover is what makes this a gate rather than a log: UBSan's default is
-# print-and-continue, under which CI stays green while diagnostics scroll past.
+# -fno-sanitize-recover=undefined is what makes this a gate rather than a log for the undefined
+# umbrella: UBSan's default is print-and-continue, under which CI stays green while diagnostics
+# scroll past. The two float checks (float-cast-overflow, float-divide-by-zero) are outside GCC's
+# undefined group, so this flag does NOT stop them -- their abort relies on
+# UBSAN_OPTIONS=halt_on_error=1 exported by build_qa.sh. Do not drop that export as redundant.
 #
 # GCC has no ignorelist: -fsanitize-ignorelist and -fsanitize-blacklist are unrecognized, and
 # UBSAN_OPTIONS=suppressions= does not suppress these checks. To silence one, use

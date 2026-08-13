@@ -148,7 +148,7 @@ for a one-off run. GCC has no ignorelist, so the way to exempt a function is
 The same gate runs in CI on both Linux arches — `native-build-job.yml` calls `build_qa.sh` in its
 `linux-x86_64` and `linux-aarch64` rows — and UBSan adds compile and run time to both.
 
-## 8. Verifying runtime provenance (optional, local)
+## 7. Verifying runtime provenance (optional, local)
 
 CI verifies every pinned tarball with a build attestation. To check by hand:
 
