@@ -7,11 +7,19 @@
 # Env: ITERS/WARMUP forwarded to bench.sh. BENCH_SH/WORKSPACE are override seams (tests inject a
 # stub bench.sh; WORKSPACE is unused by the real path but kept so the stub test can sandbox).
 set -euo pipefail
+
+# shellcheck source=native/container_env.sh
+. "$(dirname "${BASH_SOURCE[0]}")/container_env.sh"
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
 BENCH_SH="${BENCH_SH:-native/bench.sh}"
 VARIANTS=(bare logging devtools)
+
+# bench.sh's own exit trap covers native/bench (it is run as a subprocess below); this script's own
+# output is native/bench-results, so register that here.
+et_chown_outputs_on_exit native/bench-results
 
 RESULTS_DIR="native/bench-results"
 mkdir -p "${RESULTS_DIR}"
