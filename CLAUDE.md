@@ -102,6 +102,15 @@ Key ABI constraint: the build passes `-DCMAKE_BUILD_TYPE=Release` on Windows bec
 ./gradlew build       # full build incl. jacoco coverage report
 ```
 
+Every root-project `Test` task runs with `-Xcheck:jni`, the JVM's JNI-contract checker. The flag is attached to
+the test-task umbrella in `build.gradle.kts` (`tasks.withType<Test>().configureEach`) rather than to
+`tasks.test`, because `tasks.test` excludes eight tags including `oom` — and `oomTest`, the task
+that drives the allocation-failure paths this checker polices, is one of the excluded ones. A JNI
+contract violation surfaces as a `WARNING in native method:` line or a VM abort, not a test
+failure, so it is easy to miss. `JniCheckFlagTest` and `JniCheckFlagTaggedTest` prove the flag is
+attached (the tagged subclass carries the assertion into the eight tag-filtered tasks); deleting
+either silently removes the proof.
+
 ### Threading / workspace stress (local only, opt-in)
 
 ```bash
