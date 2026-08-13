@@ -35,14 +35,28 @@ grep -q 'executorch-libs-windows-x86_64' "${WFJOB}" || fail "windows artifact na
 # stay green even if the windows QA step were deleted.
 awk '/^  build-executorch-shim-windows:/{f=1} f' "${WFJOB}" | grep -q 'build_qa.sh' \
   || fail "windows QA step missing (build_qa.sh not invoked in the windows job)"
-# linux-aarch64 is an active matrix row: arm runner, its own image tag, and the aarch64 Corretto RPM.
+# linux-aarch64 is an active matrix row; its identity is the arm runner, asserted below.
 grep -qE '^\s*- platform: linux-aarch64' "${WFJOB}" || fail "linux-aarch64 matrix row missing"
 awk '/platform: linux-aarch64/{f=1} f' "${WFJOB}" \
   | grep -q 'runner: ubuntu-24.04-arm' \
   || fail "aarch64 row must run on ubuntu-24.04-arm"
-awk '/platform: linux-aarch64/{f=1} f' "${WFJOB}" \
-  | grep -q 'amazon-corretto-8-aarch64-linux-jdk.rpm' \
-  || fail "aarch64 row must use the aarch64 Corretto RPM"
+
+# The image is a manifest list, so the aarch64 row needs no image of its own and no arch-specific
+# JDK -- it needs only an arm runner. Its identity is the runner, asserted just above.
+
+# The image is pulled, never built here. Layer caching stays banned: its scopes collide across the
+# arch rows (#38).
+grep -q 'build-push-action'   "${WFJOB}" && fail "workflow must not build an image"
+grep -q 'setup-buildx-action' "${WFJOB}" && fail "workflow must not set up buildx"
+grep -q 'type=gha'            "${WFJOB}" && fail "workflow must not use the GHA layer cache"
+grep -q 'corretto'            "${WFJOB}" && fail "workflow must not download a JDK (image supplies JAVA_HOME)"
+grep -q 'ET_BUILD_IMAGE'      "${WFJOB}" || fail "workflow must run against the pinned image"
+test -f .github/workflows/warm-build-image.yml && fail "warm-build-image.yml must be deleted"
+test -d docker && fail "docker/ must be deleted"
+
+# Digest, not tag: `:main` moves on every publish, which is the exact failure the pin exists to
+# prevent -- a toolchain rebuilding underneath a green tree.
+grep -q 'engine-build@sha256:' .engine-build-image || fail ".engine-build-image must pin a digest, not a tag"
 
 # The Windows provenance gate must attest the row the build actually links (-static, /MT). The /MD row
 # is still in the pin file, so a pattern without the suffix keeps matching and keeps PASSING while
