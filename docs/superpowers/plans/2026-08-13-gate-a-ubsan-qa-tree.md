@@ -22,7 +22,109 @@
 
 ---
 
-### Task 1: Add the option and prove it catches UB
+### Task 1: Extract `native/container_env.sh` and hand ownership back automatically
+
+**Files:**
+- Create: `native/container_env.sh`
+- Modify: `native/build.sh:12-19` (the inline `cleanup` trap)
+- Modify: `native/build_qa.sh` (register the QA tree, Linux branch only)
+
+**Interfaces:**
+- Produces: `et_chown_outputs_on_exit <path>...` — registers paths and installs an EXIT trap that chowns them to `HOST_UID:HOST_GID`, and is a no-op when `HOST_UID` is unset (i.e. every host run). Every later task in this plan depends on it, because `native/asan` is otherwise root-owned after each containerised QA run.
+
+This comes first, not last. The spec scheduled it for PR 3, but PR 2 runs the containerised QA tree repeatedly — and `sudo chown` is not a workable step: it needs an interactive password, so it fails outright in a scripted or agent-driven run. Waiting until PR 3 means being bitten by the exact failure the helper exists to prevent: the next run's `rm -rf` on a root-owned tree dies with a bare `Permission denied` naming neither the container nor the cause.
+
+- [ ] **Step 1: Write the helper**
+
+Create `native/container_env.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Ownership handling for scripts run under native/local_build_wrapper.sh.
+#
+# The wrapper bind-mounts the repo into a container that runs as root, so anything a build or QA run
+# creates comes back root-owned on the host, where the next run's `rm -rf` then fails with a bare
+# "Permission denied". The wrapper passes HOST_UID/HOST_GID so we can hand the outputs back on exit.
+#
+# Sourced, never executed. Keeping it in one place is the point: two copies of this trap will drift.
+
+# Paths registered by et_chown_outputs_on_exit, chowned by et_chown_cleanup.
+ET_CHOWN_PATHS=()
+
+et_chown_cleanup() {
+  rc=$?
+  if [ -n "${HOST_UID:-}" ] && [ "${#ET_CHOWN_PATHS[@]}" -gt 0 ]; then
+    # Deliberately unquoted: entries may be globs (src/main/resources/native/linux*) that must expand
+    # HERE, at exit, rather than at registration time when the directories may not exist yet.
+    # `|| true` so a chown failure never masks the script's real exit status.
+    chown -R "${HOST_UID}:${HOST_GID}" ${ET_CHOWN_PATHS[@]} 2>/dev/null || true
+  fi
+  exit "$rc"
+}
+
+# Usage: et_chown_outputs_on_exit native/build 'src/main/resources/native/linux*'
+# Quote glob arguments at the call site so they survive to exit-time expansion.
+et_chown_outputs_on_exit() {
+  ET_CHOWN_PATHS=("$@")
+  trap et_chown_cleanup EXIT
+}
+```
+
+- [ ] **Step 2: Move `build.sh` onto it**
+
+Delete the inline `cleanup()` function and its `trap` line (`native/build.sh:12-19`). Source the helper near the top, but place the **registration call after the config block that assigns `NATIVE_BUILD_DIR`** — the old trap got away with referencing it early because the expansion happened at exit; the helper captures arguments at registration, so registering too early would store an empty path.
+
+```bash
+# shellcheck source=native/container_env.sh
+. "$(dirname "${BASH_SOURCE[0]}")/container_env.sh"
+```
+
+and after `NATIVE_BUILD_DIR` is assigned:
+
+```bash
+[ "${ET_HOST_OS}" = "linux" ] && \
+  et_chown_outputs_on_exit "${NATIVE_BUILD_DIR}" 'src/main/resources/native/linux*'
+```
+
+- [ ] **Step 3: Register the QA tree in `build_qa.sh`**
+
+`build_qa.sh` has no trap at all today, which is why `native/asan` comes back root-owned. In the Linux branch, before the configure:
+
+```bash
+  et_chown_outputs_on_exit native/asan
+```
+
+with the same `. "$(dirname "${BASH_SOURCE[0]}")/container_env.sh"` source line near the top. The Windows branch must not register anything — there is no container there.
+
+- [ ] **Step 4: Verify ownership comes back without `sudo`**
+
+Start from a clean slate so the test is real:
+
+```bash
+sudo rm -rf native/asan native/build
+./native/local_build_wrapper.sh native/build_qa.sh
+stat -c '%U %n' native/asan
+```
+
+Expected: the QA run passes, and `stat` reports **your** username, not `root`. Then confirm the shim build is still well-behaved:
+
+```bash
+./native/local_build_wrapper.sh
+stat -c '%U %n' native/build src/main/resources/native/linux-x86_64
+```
+
+Expected: both owned by you.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add native/container_env.sh native/build.sh native/build_qa.sh
+git commit -m "build: hand container outputs back via a shared container_env.sh"
+```
+
+---
+
+### Task 2: Add the option and prove it catches UB
 
 **Files:**
 - Modify: `native/CMakeLists.txt` (immediately after the `ET_BUILD_QA` / `ET_BUILD_BENCH` options, ~line 38)
@@ -51,11 +153,7 @@ There is no unit test for a sanitizer; the test is that a known-bad expression i
 
 Expected: BUILD SUCCESSFUL and the Catch2 suite **passes**. A shift past the width of `int` is undefined behaviour that the current ASan-only build does not see. That silence is the thing this task fixes.
 
-Then hand ownership back — `build_qa.sh` does not do it for you:
-
-```bash
-sudo chown -R "$(id -u):$(id -g)" native/asan
-```
+Ownership is handled by Task 1's trap; no `chown` step is needed here or anywhere below.
 
 - [ ] **Step 3: Add the CMake option**
 
@@ -139,10 +237,6 @@ Expected: **FAILURE**, with a line naming the probe, e.g.
 `et_runtime.cpp:<line>: runtime error: shift exponent 99 is too large for 32-bit type 'int'`,
 and a **nonzero exit**. A `runtime error:` line without a nonzero exit means `-fno-sanitize-recover` is not taking effect — fix that before continuing, because it is the whole gate.
 
-```bash
-sudo chown -R "$(id -u):$(id -g)" native/asan
-```
-
 - [ ] **Step 7: Revert the probe**
 
 Delete the two probe lines from `native/core/et_runtime.cpp`. Confirm they are gone:
@@ -162,7 +256,7 @@ git commit -m "test: compose UBSan onto the native QA build"
 
 ---
 
-### Task 2: Run the real QA suite under both sanitizers and fix findings
+### Task 3: Run the real QA suite under both sanitizers and fix findings
 
 **Files:**
 - Modify: `native/core/*.cpp`, `native/harness/*.cpp`, `native/test/et_runtime_test.cpp` — only in response to a diagnostic.
@@ -175,7 +269,6 @@ git commit -m "test: compose UBSan onto the native QA build"
 
 ```bash
 CLEAN=1 ./native/local_build_wrapper.sh native/build_qa.sh
-sudo chown -R "$(id -u):$(id -g)" native/asan
 ```
 
 Expected: Catch2 suite passes, then all three `et_leak_harness` runs pass, with no `runtime error:` lines.
@@ -192,7 +285,6 @@ For each `runtime error:` line, read the file path in the message:
 
 ```bash
 CLEAN=1 ./native/local_build_wrapper.sh native/build_qa.sh
-sudo chown -R "$(id -u):$(id -g)" native/asan
 ```
 
 Expected: no `runtime error:` lines, zero exit.
@@ -208,7 +300,7 @@ git commit -m "fix: <the specific undefined behaviour UBSan reported>"
 
 ---
 
-### Task 3: Confirm the shipping build is untouched, then document
+### Task 4: Confirm the shipping build is untouched, then document
 
 **Files:**
 - Modify: `CLAUDE.md` (the native QA section), `docs/building.md` (the native QA section)

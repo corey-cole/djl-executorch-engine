@@ -51,9 +51,14 @@ silently defeating image pinning — does not exist here, because #40 removed it
 Three PRs, in this order. Each is independently useful and independently revertable.
 
 1. **PR 1 — Gate C.** One line plus two test classes. No native build.
-2. **PR 2 — Gate A.** A CMake option plus flags in `build_qa.sh`.
-3. **PR 3 — Gate B**, preceded in the same PR by the `container_env.sh` extraction (§5), plus CI
-   wiring (§7).
+2. **PR 2 — Gate A**, preceded in the same PR by the `container_env.sh` extraction (§5). A CMake
+   option plus flags in `build_qa.sh`.
+3. **PR 3 — Gate B**, plus CI wiring (§7).
+
+The `container_env.sh` extraction moved from PR 3 to PR 2 during planning. PR 2 runs the
+containerised QA tree repeatedly, and its outputs are root-owned without the helper; the fallback,
+`sudo chown`, needs an interactive password and so fails outright in a scripted run. Scheduling the
+fix for PR 3 would have meant meeting the failure it prevents, in PR 2, first.
 
 If Gate C reports findings, they are fixed **in PR 1**. A gate that cannot be turned on green is not
 done, so the gate lands enforcing rather than pending.
@@ -83,17 +88,22 @@ The sibling extracted its chown-on-exit trap into a sourced helper. We never did
 has it inline, and `build_qa.sh` has none, which is why `native/asan/` comes back root-owned today
 (CLAUDE.md documents the manual `chown` as the workaround).
 
-Gate B makes this urgent rather than cosmetic. Its build phase runs as root in the container and its
-next run starts with `rm -rf` on that tree — the handover reports this exact sequence failing with a
-bare `Permission denied` that names neither the container nor the cause, discovered *after* the code
-had passed review once.
+Both UBSan gates make this urgent rather than cosmetic. Each runs the containerised QA tree
+repeatedly and then starts the next run with `rm -rf` on a root-owned tree — the handover reports
+this exact sequence failing with a bare `Permission denied` that names neither the container nor the
+cause, discovered *after* the code had passed review once. The obvious manual workaround is not
+available to a scripted run: `sudo chown` needs an interactive password.
 
-So PR 3 extracts the trap into `native/container_env.sh` (register paths, chown on exit, no-op when
-`HOST_UID` is unset) and moves all three consumers onto it: `build.sh`, `ubsan_gate.sh`, and
-`build_qa.sh`. `build_qa.sh` is included rather than deferred — it is one call once the helper
-exists, and it retires the manual `sudo chown -R` on `native/asan/` that CLAUDE.md currently
-documents as the workaround. `bench.sh` and `build_variants.sh` keep their current behaviour; they
-are out of this PR's path.
+So **PR 2** extracts the trap into `native/container_env.sh` (register paths, chown on exit, no-op
+when `HOST_UID` is unset) and moves `build.sh` and `build_qa.sh` onto it. `build_qa.sh` gains a trap
+it never had, which is why `native/asan/` is root-owned today and why CLAUDE.md documents a manual
+`sudo chown -R` as the workaround; that note gets retired. **PR 3** adds `ubsan_gate.sh` as a third
+consumer. `bench.sh` and `build_variants.sh` keep their current behaviour; they are out of the path.
+
+One extraction detail, since it is easy to get wrong: `build.sh`'s current trap references
+`${NATIVE_BUILD_DIR}` before that variable is assigned, and gets away with it because the expansion
+happens at exit. The helper captures its arguments at registration, so the registration call must sit
+*after* the config block or it stores an empty path.
 
 ## 6. Gates A and B — mechanics
 
