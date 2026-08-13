@@ -123,9 +123,8 @@ There is **no permission guard** — a host with the tools may build (spec §3).
 
 ```bash
 else
-  # Headers only; we never link libjvm. The pinned image sets JAVA_HOME to its baked Corretto 8; a
-  # host build supplies its own JDK. This script does NOT install one -- extracting an RPM here was
-  # remediation, which hides drift and only ever worked on the manylinux base.
+  # Headers only; we never link libjvm. JAVA_HOME comes from the pinned image or from the host --
+  # either way it is supplied, never installed here.
   echo "--- JDK headers ---"
   test -n "${JAVA_HOME:-}" \
     || { echo "JAVA_HOME is unset: point it at any JDK, or build via ./native/local_build_wrapper.sh"; exit 1; }
@@ -146,10 +145,9 @@ else
   echo "--- Toolchain (asserted, never installed) ---"
   command -v ninja >/dev/null 2>&1 \
     || { echo "ninja not on PATH: install it, or build via ./native/local_build_wrapper.sh"; exit 1; }
-  # Inside the pinned image a version mismatch means a BROKEN IMAGE, so check equality there and only
-  # there -- on a host, whatever ninja you have is your business. Compare against what ninja REPORTS,
-  # not pip metadata: the Kitware jobserver-pipe wheel is `1.13.0` to pip but prints
-  # `1.13.0.git.kitware.jobserver-pipe-1`.
+  # In the pinned image a version mismatch means a broken image, so equality is checked there and
+  # only there; on a host any ninja will do. Compare what ninja REPORTS, not pip metadata: the
+  # Kitware jobserver-pipe wheel is `1.13.0` to pip but prints `1.13.0.git.kitware.jobserver-pipe-1`.
   if [ "${MEASLY_DJL_PINNED_IMAGE:-}" = "1" ] && [ "$(ninja --version)" != "${MEASLY_DJL_NINJA_VERSION}" ]; then
     echo "ninja reports $(ninja --version), image declares ${MEASLY_DJL_NINJA_VERSION}"; exit 1
   fi
@@ -192,9 +190,8 @@ git commit -m "build: assert the toolchain instead of installing it"
 Append to `native/tests/ci_workflow.sh`, after the Task 1 block:
 
 ```bash
-# The <sys/sdt.h> assertion is a rehomed invariant, not the shape of this diff: the deleted docker/
-# Dockerfiles asserted it at image-build time, and if it is dropped from here too nothing notices
-# until a pin bump resurfaces `fatal error: sys/sdt.h: No such file` inside native/core/et_probes.h.
+# build_qa.sh is the only thing asserting <sys/sdt.h>. Drop that assertion and a toolchain without
+# systemtap-sdt-devel surfaces as `fatal error: sys/sdt.h: No such file` inside et_probes.h instead.
 grep -q '/usr/include/sys/sdt.h' native/build_qa.sh \
   || fail "build_qa.sh must assert <sys/sdt.h> is present"
 ```
@@ -209,19 +206,18 @@ Expected: `FAIL: build_qa.sh must assert <sys/sdt.h> is present`
 In `native/build_qa.sh`, replace the `if command -v dnf …` block (lines 63-68) with the following. Note there is **no permission guard**: a host with a working `-fsanitize=address` toolchain and `<sys/sdt.h>` can run QA, and if its libasan is missing or mismatched the ASan link fails and says so — remediating it here was the actual mistake.
 
 ```bash
-  # QA requirements are asserted, never installed. <sys/sdt.h> comes from systemtap-sdt-devel and is
-  # needed by native/core/et_probes.h (the W8 USDT tracepoints); the deleted docker/ Dockerfiles
-  # asserted it at image-build time, so it lives here now and fails by name rather than as a fatal
-  # error inside et_probes.h.
+  # QA requirements are asserted, never installed. <sys/sdt.h> ships in systemtap-sdt-devel and is
+  # required by native/core/et_probes.h for its USDT tracepoints; assert it here so a missing header
+  # fails by name instead of as a fatal error mid-compile.
   test -e /usr/include/sys/sdt.h || {
     echo "missing /usr/include/sys/sdt.h (systemtap-sdt-devel): native/core/et_probes.h needs it;"
     echo "install it, or run QA via ./native/local_build_wrapper.sh native/build_qa.sh"; exit 1; }
 
-  # Inside the pinned image only: a libasan from a different toolset revision than the gcc that
-  # emitted the instrumentation is the classic source of confusing ASan link errors, so the image
-  # holds both to one revision and we assert it held. Both values are read from the environment --
-  # hardcoding the NEVRA is exactly how a script and its image come to disagree after a bump. On a
-  # host this is skipped: rpm need not exist, and a host's own ASan runtime is legitimately different.
+  # Pinned image only. A libasan from a different toolset revision than the gcc that emitted the
+  # instrumentation produces confusing ASan link errors, so the image holds both to one revision and
+  # this asserts it held. Read both values from the environment: a hardcoded NEVRA is how a script
+  # and its image come to disagree. Skipped on a host, where rpm need not exist and a different ASan
+  # runtime is legitimate -- there the -fsanitize=address link is the check.
   if [ "${MEASLY_DJL_PINNED_IMAGE:-}" = "1" ]; then
     ASAN_PKG="gcc-toolset-${MEASLY_DJL_TOOLSET_VER}-libasan-devel-${MEASLY_DJL_TOOLSET_NEVRA}"
     rpm -q "${ASAN_PKG}" >/dev/null \
@@ -264,8 +260,8 @@ In `native/tests/ci_workflow.sh`, **replace** the aarch64 Corretto assertion (li
 # The image is a manifest list, so the aarch64 row needs no image of its own and no arch-specific
 # JDK -- it needs only an arm runner. Its identity is the runner, asserted just above.
 
-# No image is built here any more. These three greps are what keeps #38's bug class retired: with no
-# GHA layer cache there is no cache scope, so a scope collision between the arch rows cannot recur.
+# The image is pulled, never built here. Layer caching stays banned: its scopes collide across the
+# arch rows (#38).
 grep -q 'build-push-action'   "${WFJOB}" && fail "workflow must not build an image"
 grep -q 'setup-buildx-action' "${WFJOB}" && fail "workflow must not set up buildx"
 grep -q 'type=gha'            "${WFJOB}" && fail "workflow must not use the GHA layer cache"
@@ -303,12 +299,10 @@ Delete the "Download Corretto JDK 8 RPM" step (lines 32-34) — the image suppli
 Replace the buildx + build-push-action steps (lines 48-66) with:
 
 ```yaml
-      # The shared toolchain image, pinned by digest in .engine-build-image and published by
-      # measly-java-learning/base-docker-images. It is a public manifest list covering amd64 and
-      # arm64, so both matrix rows use ONE reference: no login, no buildx, no image build, and --
-      # crucially -- no GHA layer cache, hence no cache scope to collide across arches (#38).
-      # Read from the file rather than duplicated here so a bump stays a one-line change that this
-      # workflow and native/local_build_wrapper.sh pick up together.
+      # The shared toolchain image, published by measly-java-learning/base-docker-images. It is a
+      # public manifest list covering amd64 and arm64, so both matrix rows use one reference and the
+      # pull needs no credentials. The digest is read from .engine-build-image rather than written
+      # here, so a bump is one line that this workflow and native/local_build_wrapper.sh both pick up.
       - name: Resolve the pinned build image
         run: |
           image="$(cat .engine-build-image)"
@@ -354,14 +348,11 @@ git commit -m "ci: run the shared engine-build image; delete docker/ and the war
 Append to `native/tests/docs_present.sh`, before the final `echo`:
 
 ```bash
-# A doc that sends a contributor to a Dockerfile this repo no longer contains is a broken doc, and
-# nothing else catches it. This is the only new docs assertion -- "the docs mention engine-build"
-# would just restate the diff.
-# Scoped to the current-guidance docs on purpose: docs/superpowers/ and docs/research/ are
-# point-in-time records that legitimately still name the old Dockerfiles (this migration's own spec
-# and plan among them), and rewriting history to keep a grep green would be the tail wagging the dog.
+# Current guidance must not send a contributor to a Dockerfile this repo does not contain. Scoped to
+# the three current-guidance docs: docs/superpowers/ and docs/research/ are point-in-time records and
+# are expected to name things that are gone.
 grep -q 'docker/linux-.*\.Dockerfile' docs/building.md README.md CLAUDE.md \
-  && fail "current docs still reference the deleted per-platform Dockerfiles"
+  && fail "current docs reference a per-platform Dockerfile that does not exist"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
