@@ -148,6 +148,39 @@ for a one-off run. GCC has no ignorelist, so the way to exempt a function is
 The same gate runs in CI on both Linux arches — `native-build-job.yml` calls `build_qa.sh` in its
 `linux-x86_64` and `linux-aarch64` rows — and UBSan adds compile and run time to both.
 
+### The JNI shim UBSan gate (JVM-driven)
+
+`build_qa.sh` never touches the JNI shim: `native/CMakeLists.txt` skips `jni/` under
+`ET_BUILD_QA`, and the QA scripts are JVM-free. The **only** configuration that instruments
+`jni/executorch_djl_jni.cpp` is `native/ubsan_gate.sh`, which runs the JVM suite against an
+UBSan-instrumented shim.
+
+It runs in **two phases** because no single environment has both the toolchain and a JDK Gradle
+can use: the pinned image ships Corretto 8 (the oldest supported `jni.h`), which cannot start
+Gradle 9.6.1's JDK 17 toolchain. `ET_UBSAN_MODE` selects the phase — `build` | `test` | `all`,
+default `auto` (build-only inside the pinned image, both phases outside it). The local invocation
+is the two commands the script prints:
+
+```bash
+./native/local_build_wrapper.sh native/ubsan_gate.sh   # build phase (in-container)
+ET_UBSAN_MODE=test ./native/ubsan_gate.sh              # JVM phase (host, JDK 17)
+```
+
+A UB hit presents as a **JVM hard crash** mid-test, not a Java exception or assertion failure: the
+`runtime error:` line and its stack trace appear **above** the JVM's own crash dump — that is the
+gate working, not a flake. The instrumented library is never staged into
+`src/main/resources/native/`: it is reached through `EXECUTORCH_LIBRARY_PATH`, which `LibUtils`
+honours ahead of the classpath copy and which `build.gradle.kts` declares as a `Test` task input,
+so the ordinary tree is untouched and no rebuild is needed afterwards. The link uses
+`-static-libubsan` so the UBSan runtime travels inside the `.so` and a stock JVM can `dlopen` it;
+the script asserts the result has no dynamic `libubsan` dependency.
+
+CI runs the gate on **`linux-x86_64` only** — `native-build-job.yml` builds the instrumented shim
+in that matrix row, and `native-build.yml`'s `ubsan-jvm-gate` job downloads the
+`executorch-ubsan-linux-x86_64` artifact and runs the JVM phase. The aarch64 row is deliberately
+not gated (a second native build plus a `--rerun-tasks` JVM suite is real CI time, and it would
+double for no new defect class).
+
 ## 7. Verifying runtime provenance (optional, local)
 
 CI verifies every pinned tarball with a build attestation. To check by hand:

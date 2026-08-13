@@ -195,6 +195,12 @@ if(NOT ET_BUILD_QA AND NOT ET_BUILD_BENCH)
   target_include_directories(executorch_djl PRIVATE
     "${JAVA_HOME}/include" "${JAVA_HOME}/include/${_JNI_MD_DIR}")
   target_link_libraries(executorch_djl PRIVATE et_runtime)
+  # The shim is dlopen'd by a stock JVM that knows nothing about sanitizer runtimes, so UBSan's
+  # runtime has to travel inside the .so. Without this the link succeeds and System.load fails
+  # later -- in CI, possibly in a different job on a different machine than the build.
+  if(ET_UBSAN)
+    target_link_options(executorch_djl PRIVATE -static-libubsan)
+  endif()
 
   # First-party custom ops (etnp LSTM) ship only in some runtime tarballs (Linux logging). The
   # tarball's self-describing ETNPExtras.cmake declares the imported targets + the whole-archive

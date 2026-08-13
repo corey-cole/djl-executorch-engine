@@ -30,6 +30,7 @@ build
 native/bench/
 native/bench-results/
 native/asan/
+native/ubsan/
 native/qa_noasan/
 
 src/main/resources/native/**/*.so

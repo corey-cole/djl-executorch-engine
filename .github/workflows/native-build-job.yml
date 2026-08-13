@@ -64,6 +64,28 @@ jobs:
             ${{ env.ET_BUILD_IMAGE }} \
             /bin/bash /workspace/native/build_qa.sh
  
+      # Gate B build phase. Runs only here: the JVM phase needs a JDK 17 the image does not have, so
+      # it lives in a separate job that downloads this artifact.
+      - name: Build the UBSan-instrumented shim
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            ${{ env.ET_BUILD_IMAGE }} \
+            /bin/bash /workspace/native/ubsan_gate.sh
+
+      # NOT executorch-libs-*: native-build.yml downloads that pattern with merge-multiple into
+      # src/main/resources/native/, which would make this instrumented library what every ordinary
+      # test run loads.
+      - name: Store the UBSan-instrumented shim
+        if: matrix.platform == 'linux-x86_64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: executorch-ubsan-linux-x86_64
+          path: ${{ github.workspace }}/native/ubsan/libexecutorch_djl.so
+          compression-level: 1
+
       # Make the shim available to the next job
       # If we care about permissions will need to interpose a `tar` step prior to upload
       # https://github.com/actions/upload-artifact#using-outputs
