@@ -46,6 +46,7 @@ docker run --rm \
     -e ET_STRESS \
     -e ET_STRESS_SECONDS \
     -e CLEAN \
+    -e ET_UBSAN_MODE \
     -v "${REPO_ROOT}":/workspace \
     -w /workspace \
     "${ET_BUILD_IMAGE}" \
