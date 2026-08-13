@@ -247,8 +247,12 @@ The Java side is an ordinary Gradle build on JDK 17, but the engine also needs a
 that is **built from source, not committed** — the JVM integration tests will not run until it
 exists. The ExecuTorch runtime the shim links against is *not* compiled here either: CMake downloads
 a hash-pinned, build-attested tarball, so no ExecuTorch checkout is required, only network access.
-On Linux the shim is built inside a `manylinux_2_28` container to hold the glibc 2.28 floor that
-ExecuTorch's `torch` dependency imposes; on Windows it is built directly with MSVC 2022.
+Verify any downloaded tarball by hand with `gh attestation verify <downloaded-tarball>
+--repo measly-java-learning/executorch-runtime-dist`.
+On Linux the shim is built inside a pinned shared `manylinux_2_28`-derived toolchain image (digest
+in `.engine-build-image`) to hold the glibc 2.28 floor that ExecuTorch's `torch` dependency
+imposes — the floor is unchanged because the shared image is itself a manylinux_2_28 derivative; on
+Windows it is built directly with MSVC 2022.
 
 See [docs/building.md](docs/building.md).
 

@@ -14,4 +14,10 @@ grep -q 'gh attestation verify' README.md || fail "README must document local at
 grep -qi 'FetchContent\|downloads\|prebuilt' README.md || fail "README must describe the fetch model"
 
 grep -q 'et-install/' .gitignore && fail "obsolete et-install/ still ignored (no longer produced)"
+
+# Current guidance must not send a contributor to a Dockerfile this repo does not contain. Scoped to
+# the three current-guidance docs: docs/superpowers/ and docs/research/ are point-in-time records and
+# are expected to name things that are gone.
+grep -q 'docker/linux-.*\.Dockerfile' docs/building.md README.md CLAUDE.md \
+  && fail "current docs reference a per-platform Dockerfile that does not exist"
 echo "PASS: docs present"

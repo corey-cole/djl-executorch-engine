@@ -7,8 +7,10 @@
 
 ## 1. Prerequisites
 
-- **Docker** — the Linux native library is built inside a `manylinux_2_28` container (see
-  [The glibc floor](#2-the-glibc-floor-and-why-the-container-is-not-optional) below).
+- **Docker** — the Linux native library is built inside the pinned shared engine-build image, a
+  `manylinux_2_28` derivative (see [The glibc floor](#2-the-glibc-floor-and-why-the-container-is-not-optional)
+  below). Docker is needed for a **pull** of that image's pinned digest, not to build it — the
+  first build pays the pull.
 - **JDK 17** on the host for Gradle. (The native build fetches its own JDK *headers* for JNI — you
   do not need a JDK inside the container.)
 - No ExecuTorch checkout is needed — CMake `FetchContent`s the pinned runtime tarball. Network
@@ -33,20 +35,23 @@ attested tarball published by
 ./native/local_build_wrapper.sh
 ```
 
-The wrapper launches a `manylinux_2_28` container and runs the build **inside it**, so the staged
-`.so` keeps its **glibc-2.28 floor** (RHEL8+). Inside the container, CMake `FetchContent`s the
-pinned `logging` runtime, compiles the shim, and stages it into
-`src/main/resources/native/linux-x86_64/`. It is fast — there is no ExecuTorch build.
+The wrapper runs the **pinned shared engine-build image** — a `manylinux_2_28` derivative whose
+digest lives in `.engine-build-image` (see [Bumping the toolchain image](#bumping-the-toolchain-image)
+below) — and runs the build **inside it**, so the staged `.so` keeps its **glibc-2.28 floor**
+(RHEL8+). The image is pulled by digest, never built locally, and the first run pays the pull.
+Inside the container, CMake `FetchContent`s the pinned `logging` runtime, compiles the shim, and
+stages it into `src/main/resources/native/linux-x86_64/`. It is fast — there is no ExecuTorch
+build.
 
-**There is no host fast path on Linux.** `native/build.sh` is what `local_build_wrapper.sh` invokes
-*inside* the container, not a way to skip Docker — its non-Windows branch unconditionally assumes a
-manylinux_2_28 image (it extracts a Corretto RPM the wrapper's bind-mount stages at
-`/workspace/amazon-corretto-linux-jdk.rpm`, calls `rpm2archive`, absent on Debian/Ubuntu, and
-expects `/opt/python/cp312-cp312/bin` on PATH). Running it directly on a bare Linux host fails
-outright (e.g. `mkdir /opt/corretto: Permission denied`, or a missing `/workspace/...` RPM); it
-does not merely produce a `.so` that breaks the glibc-2.28 floor. `local_build_wrapper.sh` is the
-only supported path on Linux. (On Windows, `build.sh` *is* run directly on the host — see
-[Windows](#4-windows) below — because there is no equivalent container image for that platform.)
+**Host builds now work but break the floor.** `native/build.sh` is what `local_build_wrapper.sh`
+invokes *inside* the container, but it no longer requires one — it **asserts** its toolchain
+(JDK headers via `JAVA_HOME`, `ninja` on PATH) instead of installing it. A Linux host that already
+has ninja, cmake, a C++17 compiler, and JDK headers can therefore run `native/build.sh` directly
+and get a shim. What such a build costs: it links **host glibc** and **breaks the 2.28 floor**, so
+it is fine for local `./gradlew test` and never for a release. `local_build_wrapper.sh` remains the
+blessed path because it holds the floor. (On Windows, `build.sh` *is* run directly on the host —
+see [Windows](#4-windows) below — because there is no equivalent container image for that
+platform.)
 
 **Escape hatch / custom runtime:** set `ET_INSTALL=/path/to/et-install` to link an existing runtime
 tree (e.g. one you built from source per `docs/executorch-build-notes.md`); CMake then skips the
@@ -55,6 +60,15 @@ download.
 When the pinned runtime provides the first-party custom ops (the `logging` linux-x86_64 tarball
 ships an `etnp::lstm` op), the shim auto-detects the tarball's `ETNPExtras.cmake` and
 whole-archives the op in. The Windows tarball has no such extras, so the op is simply absent there.
+
+### Bumping the toolchain image
+
+The engine-build image is pinned by digest in `.engine-build-image` (exactly one line). CI's
+`native-build-job.yml` and `local_build_wrapper.sh` both read that file, so a bump is a one-line
+change both pick up together. Digests are per-run, not per-commit — take the new digest from the
+`Publish Engine Images` run you intend to consume, not from a commit in this repo. The image is
+published by `measly-java-learning/base-docker-images`; see its
+`docs/consuming-engine-build.md` for what the image guarantees and for `gh attestation verify`.
 
 ## 4. Windows
 
@@ -99,7 +113,7 @@ first** (see [Building the native shim](#3-building-the-native-shim) above). The
 `native/build_qa.sh` (AddressSanitizer/LeakSanitizer Catch2 units + leak harness), `native/bench.sh`
 (Release timing harness), and `native/build_variants.sh` (times all three runtime variants) each
 fetch the runtime via CMake (or set `ET_INSTALL` for the escape hatch). Run them in the **same
-`manylinux_2_28` container** as the shim build so the toolchain matches — pass the script to the
+pinned engine-build image** as the shim build so the toolchain matches — pass the script to the
 wrapper:
 
 ```bash
