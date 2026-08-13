@@ -33,37 +33,13 @@ Tasks 1-4 cannot leave the tree green in CI individually: after Task 2 the build
 **Files:**
 - Create: `.engine-build-image`
 - Modify: `native/local_build_wrapper.sh:21-37`
-- Test: `native/tests/ci_workflow.sh`
 
 **Interfaces:**
 - Produces: `.engine-build-image` (one-line digest reference), consumed by Task 4's workflow step. `ET_BUILD_IMAGE` remains the wrapper's override env var.
 
-- [ ] **Step 1: Write the failing test**
+**No test of its own.** Asserting the wrapper's text with greps would pin its exact wording and break on the next edit while proving nothing. The wrapper is verified where it actually matters — Task 6 runs it against the real image — and the one durable invariant about the pin file (digest, not tag) is asserted once in Task 4.
 
-Append to `native/tests/ci_workflow.sh`, immediately before the `# Python is optional;` block near the end:
-
-```bash
-# The pin file is the single source of truth for the shared toolchain image; both this repo's
-# wrapper and the workflow read it, so a second hardcoded copy anywhere is drift waiting to happen.
-PINFILE=".engine-build-image"
-test -f "${PINFILE}" || fail "${PINFILE} missing"
-grep -q 'ghcr.io/measly-java-learning/engine-build@sha256:' "${PINFILE}" \
-  || fail "${PINFILE} must pin a digest, not a tag"
-test "$(wc -l <"${PINFILE}")" -eq 1 || fail "${PINFILE} must be exactly one line"
-
-WRAPPER="native/local_build_wrapper.sh"
-grep -q "cat \"\${REPO_ROOT}/.engine-build-image\"" "${WRAPPER}" \
-  || fail "wrapper must read the digest from ${PINFILE}"
-grep -q 'docker build' "${WRAPPER}" && fail "wrapper must not build an image"
-grep -q 'corretto' "${WRAPPER}" && fail "wrapper must not download the Corretto RPM (image supplies JAVA_HOME)"
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `bash native/tests/ci_workflow.sh`
-Expected: `FAIL: .engine-build-image missing`
-
-- [ ] **Step 3: Create the pin file**
+- [ ] **Step 1: Create the pin file**
 
 `.engine-build-image`, exactly one line and a trailing newline:
 
@@ -71,7 +47,7 @@ Expected: `FAIL: .engine-build-image missing`
 ghcr.io/measly-java-learning/engine-build@sha256:725884538caa4f7f8444847e34b3928bb90089da95d5b77ce560aa2e624f905b
 ```
 
-- [ ] **Step 4: Rewrite the wrapper's preamble**
+- [ ] **Step 2: Rewrite the wrapper's preamble**
 
 In `native/local_build_wrapper.sh`, delete the Corretto `curl` block (lines 21-25) and the image-build block (lines 27-37) and put this in their place:
 
@@ -90,15 +66,15 @@ Also update the header comment: the JDK headers now come from the image (`JAVA_H
 
 `.gitignore` needs no edit — line 39 is a generic `*.rpm`, not a named Corretto entry. Delete any stale `amazon-corretto-linux-jdk.rpm` left in your working tree from an earlier build; nothing produces it now.
 
-- [ ] **Step 5: Run test to verify it passes**
+- [ ] **Step 3: Sanity-check the wrapper's own resolution**
 
-Run: `bash native/tests/ci_workflow.sh`
-Expected: `PASS: ci workflow`
+Run: `ET_BUILD_IMAGE=echo-only bash -n native/local_build_wrapper.sh && head -c 200 .engine-build-image`
+Expected: `bash -n` reports no syntax error, and the pin file prints the digest on one line.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add .engine-build-image native/local_build_wrapper.sh native/tests/ci_workflow.sh
+git add .engine-build-image native/local_build_wrapper.sh
 git commit -m "build: pin the shared engine-build image and stop building one locally"
 ```
 
@@ -125,11 +101,9 @@ rc=0
 out="$(MEASLY_DJL_PINNED_IMAGE= bash native/build.sh 2>&1)" || rc=$?
 test "${rc}" -ne 0 || fail "build.sh must refuse to run outside the pinned image"
 grep -q 'local_build_wrapper.sh' <<<"${out}" || fail "guard message must name the wrapper"
-
-# Nothing may be installed at build time any more -- a missing tool is a broken image.
-grep -q 'pip install ninja' native/build.sh && fail "build.sh must not install ninja"
-grep -q 'rpm2archive'       native/build.sh && fail "build.sh must not extract a Corretto RPM"
 ```
+
+This is behavioural — it runs the script and checks what it does. Do **not** add greps for the removed `pip install ninja` / `rpm2archive` lines: those assert the shape of the diff, and Task 6's real build is what proves nothing gets installed.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -216,24 +190,23 @@ git commit -m "build: assert the pinned image's toolchain instead of installing 
 Append to `native/tests/ci_workflow.sh`, after the Task 1 block:
 
 ```bash
-# QA's sanitizer runtime and <sys/sdt.h> are baked into the image. The sdt.h assertion in
-# particular MUST live somewhere: the deleted docker/ Dockerfiles carried it, and without it a pin
-# bump that drops systemtap-sdt-devel resurfaces as a fatal error inside native/core/et_probes.h.
 QA="native/build_qa.sh"
-grep -q 'dnf install' "${QA}" && fail "build_qa.sh must not dnf-install the ASan runtime"
-grep -q 'MEASLY_DJL_TOOLSET_NEVRA' "${QA}" || fail "build_qa.sh must assert the libasan NEVRA from the env"
-grep -q '/usr/include/sys/sdt.h'   "${QA}" || fail "build_qa.sh must assert <sys/sdt.h> is present"
-
 rc=0
 out="$(MEASLY_DJL_PINNED_IMAGE= bash "${QA}" 2>&1)" || rc=$?
 test "${rc}" -ne 0 || fail "build_qa.sh must refuse to run outside the pinned image"
 grep -q 'local_build_wrapper.sh' <<<"${out}" || fail "QA guard message must name the wrapper"
+
+# The one grep worth keeping in this task, and only because it guards a rehomed invariant rather
+# than the shape of this diff: the deleted docker/ Dockerfiles asserted <sys/sdt.h> at image-build
+# time. If that assertion is dropped from here too, nothing notices until a pin bump silently
+# resurfaces `fatal error: sys/sdt.h: No such file` inside native/core/et_probes.h.
+grep -q '/usr/include/sys/sdt.h' "${QA}" || fail "build_qa.sh must assert <sys/sdt.h> is present"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `bash native/tests/ci_workflow.sh`
-Expected: `FAIL: build_qa.sh must not dnf-install the ASan runtime`
+Expected: FAIL — `build_qa.sh must refuse to run outside the pinned image` if `dnf` is absent on the host (the current `|| true` swallows it and the script runs on), or a `sys/sdt.h` failure.
 
 - [ ] **Step 3: Replace the dnf block**
 
@@ -301,6 +274,10 @@ grep -q 'corretto'            "${WFJOB}" && fail "workflow must not download a J
 grep -q 'ET_BUILD_IMAGE'      "${WFJOB}" || fail "workflow must run against the pinned image"
 test -f .github/workflows/warm-build-image.yml && fail "warm-build-image.yml must be deleted"
 test -d docker && fail "docker/ must be deleted"
+
+# Digest, not tag: `:main` moves on every publish, which is the exact failure the pin exists to
+# prevent -- a toolchain rebuilding underneath a green tree.
+grep -q 'engine-build@sha256:' .engine-build-image || fail ".engine-build-image must pin a digest, not a tag"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -378,16 +355,20 @@ git commit -m "ci: run the shared engine-build image; delete docker/ and the war
 Append to `native/tests/docs_present.sh`, before the final `echo`:
 
 ```bash
-# The docs must not tell a contributor to build a toolchain image that no longer exists here.
-grep -q 'docker/linux-x86_64.Dockerfile' docs/building.md && fail "building.md still references the deleted Dockerfile"
-grep -q 'engine-build' docs/building.md || fail "building.md must describe the shared engine-build image"
-grep -q '.engine-build-image' docs/building.md || fail "building.md must document where the pin lives"
+# A doc that sends a contributor to a Dockerfile this repo no longer contains is a broken doc, and
+# nothing else catches it. This is the only new docs assertion -- "the docs mention engine-build"
+# would just restate the diff.
+# Scoped to the current-guidance docs on purpose: docs/superpowers/ and docs/research/ are
+# point-in-time records that legitimately still name the old Dockerfiles (this migration's own spec
+# and plan among them), and rewriting history to keep a grep green would be the tail wagging the dog.
+grep -q 'docker/linux-.*\.Dockerfile' docs/building.md README.md CLAUDE.md \
+  && fail "current docs still reference the deleted per-platform Dockerfiles"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `bash native/tests/docs_present.sh`
-Expected: `FAIL: building.md must describe the shared engine-build image`
+Expected: `FAIL: docs still reference the deleted per-platform Dockerfiles` (CLAUDE.md and `docs/building.md` both name them today)
 
 - [ ] **Step 3: Update `docs/building.md`**
 
