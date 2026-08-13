@@ -14,8 +14,7 @@ set -ex # Fail on error, print commands to log
 #   ./native/local_build_wrapper.sh native/bench.sh
 #   ITERS=2000 ./native/local_build_wrapper.sh native/build_qa.sh
 #   ./native/local_build_wrapper.sh native/build_variants.sh
-# Note: only build.sh chowns its outputs back to you; bench/qa/variants leave root-owned dirs
-# (see the "Container file ownership" note in README.md).
+# Outputs are handed back to you automatically via native/container_env.sh.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Optional first arg: the native/ script to run in the container (default the shim build).
@@ -46,6 +45,7 @@ docker run --rm \
     -e INTRAOP \
     -e ET_STRESS \
     -e ET_STRESS_SECONDS \
+    -e CLEAN \
     -v "${REPO_ROOT}":/workspace \
     -w /workspace \
     "${ET_BUILD_IMAGE}" \

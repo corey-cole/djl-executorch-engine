@@ -14,6 +14,9 @@
 # native/build.sh (matching gcc-toolset toolchain).
 set -euo pipefail
 
+# shellcheck source=native/container_env.sh
+. "${BASH_SOURCE[0]%/*}/container_env.sh"
+
 # Run from the repo root regardless of where this script is invoked from.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
@@ -70,7 +73,10 @@ else
   # Drop the tree only if it was configured for a different source root (container vs host); a same-root
   # re-run keeps it so the cached Catch2 build (native/asan/_deps) is reused, not rebuilt. CLEAN=1 forces.
   bash native/clean_stale_tree.sh native/asan native
+  et_chown_outputs_on_exit native/asan
+  export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
   cmake -B native/asan -S native -G "Unix Makefiles" "${ET_ARGS[@]}" -DET_BUILD_QA=ON \
+    -DET_UBSAN=ON \
     -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
     -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"

@@ -1,6 +1,9 @@
 #!/bin/bash
 set -ex # Fail on error, print commands to log
 
+# shellcheck source=native/container_env.sh
+. "${BASH_SOURCE[0]%/*}/container_env.sh"
+
 # Host fork. Under Git-Bash on Windows `uname -s` is MINGW64_NT-* or MSYS_NT-*. The caller must have
 # already activated the MSVC dev shell (see .github/workflows/native-build-job.yml); this script does
 # not activate VS itself. Everything Linux-only below (Corretto RPM, chown, dnf, nproc) is skipped.
@@ -9,16 +12,6 @@ case "$(uname -s)" in
   *)            ET_HOST_OS=linux ;;
 esac
 
-# Container bind-mount outputs are root-owned on the host; chown them back on exit (any status).
-cleanup() {
-  rc=$?
-  if [ -n "${HOST_UID:-}" ]; then
-    chown -R "${HOST_UID}:${HOST_GID}" "${NATIVE_BUILD_DIR}" src/main/resources/native/linux* 2>/dev/null || true
-  fi
-  exit "$rc"
-}
-[ "${ET_HOST_OS}" = "linux" ] && trap cleanup EXIT
-
 # --- Shim build config. The ExecuTorch runtime is NOT built here anymore: native/CMakeLists.txt
 #     resolves it (FetchContent the pinned tarball, or -DET_INSTALL escape hatch). The runtime
 #     recipe now lives in measly-java-learning/executorch-runtime-dist; see
@@ -26,6 +19,9 @@ cleanup() {
 ET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT:-logging}"
 STAGE_SO="${STAGE_SO:-1}"
 NATIVE_BUILD_DIR="${NATIVE_BUILD_DIR:-native/build}"
+
+[ "${ET_HOST_OS}" = "linux" ] && \
+  et_chown_outputs_on_exit "${NATIVE_BUILD_DIR}" 'src/main/resources/native/linux*'
 
 # Fast diagnostic: print resolved shim-build config and exit before any heavy setup.
 if [ -n "${PRINT_BUILD_CONFIG:-}" ]; then

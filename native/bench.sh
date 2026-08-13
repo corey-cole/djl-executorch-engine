@@ -11,6 +11,9 @@
 # skips the JNI shim.
 set -euo pipefail
 
+# shellcheck source=native/container_env.sh
+. "${BASH_SOURCE[0]%/*}/container_env.sh"
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
@@ -26,6 +29,7 @@ ET_ARGS=(-DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT}")
 # Release, no sanitizer, own build tree (distinct from native/asan QA and native/build shim).
 # Drop the tree only if it was configured for a different source root (container vs host); a same-root
 # re-run keeps it so the FetchContent'd runtime tarball (native/bench/_deps) is reused. CLEAN=1 forces.
+et_chown_outputs_on_exit native/bench native/bench-results
 bash native/clean_stale_tree.sh native/bench native
 cmake -B native/bench -S native -G "Unix Makefiles" "${ET_ARGS[@]}" \
   -DET_BUILD_BENCH=ON -DCMAKE_BUILD_TYPE=Release

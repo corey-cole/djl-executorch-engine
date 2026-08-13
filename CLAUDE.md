@@ -116,7 +116,7 @@ either silently removes the proof.
 ```bash
 ./gradlew stressGate                     # 8-thread correctness gate, ~30s (add -PstressSeconds=N)
 ./gradlew stressSweep                    # 9-cell throughput matrix -> build/reports/stress/sweep.tsv
-ET_STRESS=1 ./native/local_build_wrapper.sh native/build_qa.sh   # native harness under ASan/LSan
+ET_STRESS=1 ./native/local_build_wrapper.sh native/build_qa.sh   # native harness under ASan + UBSan
 ```
 
 **None of these run in CI, deliberately** — they saturate every core for their whole duration. The
@@ -145,14 +145,24 @@ Native library JARs are published per-platform with a classifier (`djl-executorc
 
 Run these **through the container wrapper** so the toolchain matches:
 ```bash
-./native/local_build_wrapper.sh native/build_qa.sh        # Catch2 units + ASan/LSan leak harness
+./native/local_build_wrapper.sh native/build_qa.sh        # Catch2 units + leak harness under ASan + UBSan
 ./native/local_build_wrapper.sh native/bench.sh           # Release timing harness
 ITERS=2000 ./native/local_build_wrapper.sh native/build_variants.sh   # times all 3 runtime variants
 ```
 
 Shell-level tests for the build machinery live in `native/tests/` (e.g. `cmake_resolution.sh` exercises pin resolution for a foreign platform without that hardware, via `-DET_PRINT_RESOLUTION=ON`).
 
-**Container file-ownership gap**: container builds run as root. `native/build.sh` chowns *its own* outputs back via an EXIT trap when passed `HOST_UID`/`HOST_GID`, but `bench.sh`/`build_variants.sh`/`build_qa.sh` do not — they leave root-owned `native/bench/`, `native/bench-results/`, `native/asan/`. Fix by hand with `sudo chown -R "$(id -u):$(id -g)" ...` after running them.
+`native/build_qa.sh` builds the QA tree under **both** ASan and UBSan, so the Catch2 units and the
+leak harness run under UndefinedBehaviorSanitizer too. UBSan is a gate, not a log: UB **aborts** the
+run rather than printing, so a QA failure may be a `runtime error:` line rather than a failed
+assertion — treat either as a finding. The check set lives in the `ET_UBSAN_CHECKS` CMake cache
+variable (`undefined,float-cast-overflow,float-divide-by-zero`, minus `vptr`) and can be narrowed
+for a one-off run. GCC has no ignorelist, so the way to exempt a function is
+`__attribute__((no_sanitize("undefined")))` (or a per-TU compile-option override).
+`implicit-signed-integer-truncation` is clang-only and therefore uncovered by this gate.
+
+The gate also runs in CI on both Linux arches — `native-build-job.yml` invokes `build_qa.sh` in its
+`linux-x86_64` and `linux-aarch64` rows — and UBSan adds compile and run time to both.
 
 ## Example module
 
