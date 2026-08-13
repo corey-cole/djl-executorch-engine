@@ -69,13 +69,19 @@ is a broken image and must fail loudly rather than be installed at run time.
 
 ### 4.1 `.engine-build-image` — single source of truth
 
-A new repo-root file holding a comment header and one bare digest line. Two consumers read it, both
-stripping comments and blanks (`grep -vE '^[[:space:]]*(#|$)' | head -1`):
+A new repo-root file holding exactly one line: the digest reference, no comments. Both consumers
+read it with a plain `cat` plus a non-empty check — the rationale comment lives at each point of
+use, not in the data file:
+
+```bash
+IMAGE="$(cat "${REPO_ROOT}/.engine-build-image")"
+test -n "${IMAGE}" || { echo "empty .engine-build-image" >&2; exit 1; }
+```
 
 - `native/local_build_wrapper.sh` — as the default for `ET_BUILD_IMAGE`, so an explicit override
   still wins.
 - `.github/workflows/native-build-job.yml` — one step after checkout publishing `ET_BUILD_IMAGE`
-  to `$GITHUB_ENV` for the `docker run` steps.
+  to `$GITHUB_ENV` for the `docker run` steps, with the same non-empty check.
 
 The alternative — a workflow `env:` var plus a wrapper default — writes the digest twice and lets
 local builds silently disagree with CI, which is the drift the pin exists to prevent.
