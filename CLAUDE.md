@@ -164,6 +164,41 @@ for a one-off run. GCC has no ignorelist, so the way to exempt a function is
 The gate also runs in CI on both Linux arches — `native-build-job.yml` invokes `build_qa.sh` in its
 `linux-x86_64` and `linux-aarch64` rows — and UBSan adds compile and run time to both.
 
+### The JNI shim UBSan gate (JVM-driven)
+
+`native/ubsan_gate.sh` is the **only** configuration that instruments the JNI shim:
+`native/CMakeLists.txt` skips `jni/` under `ET_BUILD_QA`, and `build_qa.sh` — et_runtime + Catch2 +
+harnesses — is JVM-free by design. This gate builds the shim under UBSan and runs the JVM suite
+against it, so the marshalling code the JNI tests exercise is checked.
+
+It runs in **two phases** because no single environment has both the toolchain and a usable JDK: the
+pinned image carries Corretto 8 (chosen for the oldest supported `jni.h`), which cannot start Gradle
+9.6.1's JDK 17 toolchain. `ET_UBSAN_MODE` selects the phase — `build` | `test` | `all`, default
+`auto` (build-only inside the pinned image, both phases outside it). The local invocation is the two
+commands the script prints:
+
+```bash
+./native/local_build_wrapper.sh native/ubsan_gate.sh   # build phase (in-container)
+ET_UBSAN_MODE=test ./native/ubsan_gate.sh              # JVM phase (host, JDK 17)
+```
+
+A UB hit presents as a **JVM hard crash** mid-test, not a Java exception or assertion failure: the
+`runtime error:` line and its stack trace sit **above** the JVM's own crash dump. That is the gate
+working, not a flake.
+
+The instrumented library is never staged into `src/main/resources/native/`. It is reached through
+`EXECUTORCH_LIBRARY_PATH`, which `LibUtils` honours ahead of the classpath copy and which
+`build.gradle.kts` declares as a `Test` task input — so the plain tree is untouched and no rebuild
+is needed afterwards. The gate links with `-static-libubsan` so the UBSan runtime travels inside
+the `.so` and a stock JVM can `dlopen` it, and it asserts the result carries **no dynamic `libubsan`
+dependency**.
+
+CI runs the gate on **`linux-x86_64` only**: `native-build-job.yml` builds the instrumented shim in
+that matrix row, and `native-build.yml`'s `ubsan-jvm-gate` job downloads the
+`executorch-ubsan-linux-x86_64` artifact and runs the JVM phase. The aarch64 row is deliberately
+not gated — a second native build plus a `--rerun-tasks` JVM suite is real CI time, and it would
+double for no new defect class.
+
 ## Example module
 
 `example/` is a standalone MobileNetV2 image-classification demo (`org.measly.example.MobilenetExample`) that benchmarks this ExecuTorch engine against the LibTorch/PyTorch DJL engine (JMH benchmarks in `src/jmh/`). Model artifacts (`.pte`/`.pt`) are generated on demand by `./gradlew :example:exportModels` (needs `uv` on PATH; runs `tools/scripts/export_mobilenet.py`).
