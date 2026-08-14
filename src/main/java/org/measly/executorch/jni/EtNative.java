@@ -31,6 +31,7 @@ public final class EtNative {
      *
      * @param handle the native handle
      * @return per-input scalar types, memory-planned flags, and the planned arena size
+     * @throws IllegalStateException if {@code handle} is 0, i.e. the model has been closed
      */
     public static native EtMethodMeta methodMeta(long handle);
 
@@ -42,6 +43,7 @@ public final class EtNative {
      *
      * @param handle the native handle
      * @return staging bytes, or 0 for an all-planned model
+     * @throws IllegalStateException if {@code handle} is 0, i.e. the model has been closed
      */
     public static native long stagingBytes(long handle);
 
@@ -52,6 +54,7 @@ public final class EtNative {
      * @param inputs one {@link EtTensor} per declared input, in position order
      * @return one {@link EtTensor} per model output, each a heap-buffer single copy out of
      *     ExecuTorch's arena
+     * @throws IllegalStateException if {@code handle} is 0, i.e. the model has been closed
      */
     public static native EtTensor[] forward(long handle, EtTensor[] inputs);
 
