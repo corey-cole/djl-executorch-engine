@@ -20,6 +20,10 @@ import org.measly.executorch.jni.EtTensor;
  * ExecuTorch {@code Module} may not support concurrent execution. Use one {@code Model} /
  * {@code Predictor} per thread, and do not close the model while a forward call is in flight.
  *
+ * <p>A {@code forward()} that <i>starts</i> after {@link #close()} throws
+ * {@link IllegalStateException}. A {@code close()} that lands <i>during</i> a forward is still
+ * undefined — that is the contract above, not something this class enforces.
+ *
  * <p><b>Threading, and why more threads is usually wrong <i>under the default sharing mode</i>.</b>
  * The rule above is about <i>safety</i>, not throughput. XNNPACK-delegated models already
  * parallelize inside a single {@code forward()} on ExecuTorch's shared intra-op pool, and under the
@@ -63,6 +67,18 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
             NDList inputs,
             boolean training,
             PairList<String, Object> params) {
+        // Read the handle once, before any marshalling: a zero handle means close() already
+        // destroyed the native module, and passing it on is a null dereference inside native code,
+        // i.e. a JVM crash rather than an exception. The field is volatile, so no lock is needed
+        // and the hot path pays one load. This closes the ordered use-after-close only — a close()
+        // concurrent with a forward in flight remains the documented caller contract.
+        final long h = handle;
+        if (h == 0) {
+            throw new IllegalStateException(
+                    "forward() called on a closed ExecuTorch model; the native module has been"
+                            + " released. Use one Model/Predictor per thread and do not close a"
+                            + " model that is still in use.");
+        }
         final int count = inputs.size();
         if (count != meta.numInputs) {
             throw new IllegalArgumentException(
@@ -87,7 +103,7 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
             in[i] = new EtTensor(et.getShape().getShape(), st, buf);
         }
         final long startNanos = System.nanoTime();
-        EtTensor[] out = EtNative.forward(handle, in);
+        EtTensor[] out = EtNative.forward(h, in);
         EtModelCounters c = counters;
         if (c != null) {
             c.recordForward(System.nanoTime() - startNanos);

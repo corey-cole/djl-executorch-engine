@@ -79,6 +79,16 @@ static void throwIllegalArgument(JNIEnv* env, const char* msg) {
   }
 }
 
+// Throw IllegalStateException, the zero-handle rejection. Same FindClass-before-anything-throws
+// reasoning as throwIllegalArgument above.
+static void throwIllegalState(JNIEnv* env, const char* msg) {
+  jclass cls = env->FindClass("java/lang/IllegalStateException");
+  if (cls != nullptr) {
+    env->ThrowNew(cls, msg);
+    env->DeleteLocalRef(cls);
+  }
+}
+
 // FindClass -> NewGlobalRef -> DeleteLocalRef. Returns a process-lifetime global ref, or nullptr
 // (pending exception) so the caller can fail JNI_OnLoad.
 static jclass cacheGlobalClass(JNIEnv* env, const char* name) {
@@ -158,15 +168,20 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
 
 // Handle convention for every entry point below. A `jlong handle` is a reinterpret_cast of an
 // EtRuntime* whose ownership lives on the Java side: loadModule news it and hands the pointer over,
-// destroy deletes it. There is no registry and no validation here -- a handle that was already
-// destroyed, was never returned by loadModule, or is 0 because the block was closed, is dereferenced
-// blind. That is a use-after-free or a null deref inside native code, not a Java exception.
+// destroy deletes it. Exactly one value is validated, 0 -- the value EtSymbolBlock.close() writes
+// once it has destroyed the module -- and it is rejected with IllegalStateException. There is no
+// registry, so nothing else is checkable: a handle that was already destroyed or was never returned
+// by loadModule is dereferenced blind, a use-after-free inside native code rather than a Java
+// exception. destroy() is the one exception to the check, because `delete nullptr` is already a
+// well-defined no-op.
 //
-// Java-side discipline is therefore the whole safety story, and it is only partial by design:
-// EtSymbolBlock.close() zeroes its handle field under statsLock and toStats() re-reads it under the
-// same monitor, so the stats poll can never race a destroy. forwardInternal deliberately stays off
-// that monitor to keep the hot path lock-free, which is exactly why "do not close a model with a
-// forward in flight" is a documented caller contract rather than something enforced.
+// Java-side discipline therefore still carries most of the safety story, and it is partial by
+// design: EtSymbolBlock.close() zeroes its handle field under statsLock and toStats() re-reads it
+// under the same monitor, so the stats poll can never race a destroy. forwardInternal reads the
+// handle once and rejects 0 itself, but deliberately stays off that monitor to keep the hot path
+// lock-free -- which is why the zero check closes the *ordered* use-after-close only, and "do not
+// close a model with a forward in flight" remains a documented caller contract rather than
+// something enforced.
 extern "C" JNIEXPORT jlong JNICALL
 Java_org_measly_executorch_jni_EtNative_loadModule(
     JNIEnv* env, jclass, jstring jpath, jint jworkspaceSharingMode) {
@@ -186,6 +201,10 @@ Java_org_measly_executorch_jni_EtNative_loadModule(
 
 extern "C" JNIEXPORT jobject JNICALL
 Java_org_measly_executorch_jni_EtNative_methodMeta(JNIEnv* env, jclass, jlong handle) {
+  if (handle == 0) {
+    throwIllegalState(env, "methodMeta() on a closed ExecuTorch model (native handle is 0)");
+    return nullptr;
+  }
   auto* rt = reinterpret_cast<EtRuntime*>(handle);
   MethodMeta meta;
   try {
@@ -220,6 +239,10 @@ Java_org_measly_executorch_jni_EtNative_methodMeta(JNIEnv* env, jclass, jlong ha
 extern "C" JNIEXPORT jobjectArray JNICALL
 Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handle,
                                                 jobjectArray jinputs) {
+  if (handle == 0) {
+    throwIllegalState(env, "forward() on a closed ExecuTorch model (native handle is 0)");
+    return nullptr;
+  }
   auto* rt = reinterpret_cast<EtRuntime*>(handle);
 
   jsize nIn = env->GetArrayLength(jinputs);
@@ -367,6 +390,10 @@ Java_org_measly_executorch_jni_EtNative_intraOpThreads(JNIEnv* env, jclass) {
 // EtSymbolBlock.toStats() also reports -1 for a closed block, so -1 uniformly means "unavailable".
 extern "C" JNIEXPORT jlong JNICALL
 Java_org_measly_executorch_jni_EtNative_stagingBytes(JNIEnv* env, jclass, jlong handle) {
+  if (handle == 0) {
+    throwIllegalState(env, "stagingBytes() on a closed ExecuTorch model (native handle is 0)");
+    return -1;
+  }
   auto* rt = reinterpret_cast<EtRuntime*>(handle);
   try {
     return static_cast<jlong>(rt->stagingBytes());
