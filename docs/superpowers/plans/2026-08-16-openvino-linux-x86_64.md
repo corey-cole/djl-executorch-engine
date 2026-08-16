@@ -20,6 +20,7 @@
 - **Never load out of the staging directory.** Publish by atomic directory rename first, load second.
 - Platform variance is expressed as **capability** — `if(TARGET openvino_backend)`, `ET_RUNTIME_OPENVINO_PLATFORM`, `LibUtils.platform()` — never as a platform name. Upstream is exploring a Windows delegate.
 - **Do not add `openvino_backend` to the post-link XNNPACK registration guard's required set.** That guard catches XNNPACK being GC'd out of the `.so`; a target that legitimately does not exist on most platforms would turn it into a platform conditional.
+- **Every JNI entry point copies its strings and releases immediately, before any `try`.** The idiom is `GetStringUTFChars` → null-check → copy to `std::string` → `ReleaseStringUTFChars` → then do the work. `GetStringUTFChars` returns null with an OOM pending, and it is *not* among the JNI functions legal to call in that state, so a second unchecked `Get*` after a failed first is itself a violation — and a `std::string` built from null is UB the shim's UBSan gate would abort on. Releasing before the `try` also removes any question about whether cleanup runs on the throwing path. See `executorch_djl_jni.cpp:188-190` for the established shape.
 - Parity tolerance is **`atol=1e-2`** and must not be tightened. bf16 hardware lands ~2.5e-3 from the f32 eager golden, f32 hardware ~6e-8. Both correct. A tighter bound asserts which machine CI allocated.
 - **Every OpenVINO test runs in its own JVM.** `OPENVINO_LIB_PATH` is process env and the `dlopen` is once-only.
 - Nothing in this work touches export tooling. No torch, no partitioner, no quantizer.
@@ -159,20 +160,31 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_org_measly_executorch_jni_EtNative_pteUsesBackend(
     JNIEnv* env, jclass, jstring ptePath, jstring backend) {
   const char* path = env->GetStringUTFChars(ptePath, nullptr);
+  if (path == nullptr) {
+    return JNI_FALSE;  // OOM already pending; do not call another JNI function that could fail
+  }
+  std::string p(path);
+  env->ReleaseStringUTFChars(ptePath, path);
+
   const char* name = env->GetStringUTFChars(backend, nullptr);
-  jboolean result = JNI_FALSE;
+  if (name == nullptr) {
+    return JNI_FALSE;
+  }
+  std::string b(name);
+  env->ReleaseStringUTFChars(backend, name);
+
   try {
-    result = measly::et::pteUsesBackend(path, name) ? JNI_TRUE : JNI_FALSE;
+    return measly::et::pteUsesBackend(p, b) ? JNI_TRUE : JNI_FALSE;
   } catch (const std::exception& e) {
     throwJava(env, "Backend detection failed", &e);
+    return JNI_FALSE;
   }
-  env->ReleaseStringUTFChars(ptePath, path);
-  env->ReleaseStringUTFChars(backend, name);
-  return result;
 }
 ```
 
-Note the `ReleaseStringUTFChars` calls run on the exception path too — `throwJava` schedules an exception rather than unwinding past this frame, and `-Xcheck:jni` will flag a leaked UTF chars buffer.
+**Copy, release immediately, then enter the try** — the same shape `loadModule` uses at lines 188-190. This is not stylistic. Holding the UTF chars across the `try` raises the question of whether the release runs on the throwing path (it would, since `throwJava` schedules an exception rather than unwinding, and `ReleaseStringUTFChars` is one of the few JNI functions legal to call with an exception pending) — but releasing first means the question never arises.
+
+The null checks matter for a second reason. `GetStringUTFChars` returns null with an OOM pending, and `GetStringUTFChars` is *not* on the list of functions safe to call in that state — so calling the second one after the first failed is itself a violation. Constructing a `std::string` from a null pointer would also be UB, which the shim's UBSan gate would rightly abort on. This file already reasons about the same hazard for `FindClass` at lines 58-63.
 
 - [ ] **Step 9: Declare the Java side**
 
@@ -1020,7 +1032,11 @@ In `native/jni/executorch_djl_jni.cpp`, beside the other free functions:
 extern "C" JNIEXPORT void JNICALL
 Java_org_measly_executorch_jni_EtNative_setOpenVinoLibPath(JNIEnv* env, jclass, jstring path) {
   const char* value = env->GetStringUTFChars(path, nullptr);
+  if (value == nullptr) {
+    return;  // OOM already pending; setenv with a null value would be UB
+  }
   const int rc = setenv("OPENVINO_LIB_PATH", value, 1);
+  // Released before the throw, not after: nothing is held across a JNI call that can fail.
   env->ReleaseStringUTFChars(path, value);
   if (rc != 0) {
     throwJava(env, "setenv(OPENVINO_LIB_PATH) failed", nullptr);
@@ -1575,8 +1591,14 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_org_measly_executorch_jni_EtNative_openVinoInferencePrecision(
     JNIEnv* env, jclass, jstring libPath) {
   const char* path = env->GetStringUTFChars(libPath, nullptr);
-  const std::string result = measly::et::openVinoInferencePrecision(path);
+  if (path == nullptr) {
+    return nullptr;  // OOM pending; the Java wrapper degrades this to "unavailable"
+  }
+  std::string p(path);
   env->ReleaseStringUTFChars(libPath, path);
+  // Same copy-then-release shape as the other entry points: no JNI resource is held across the
+  // call, so no path through here can leak one.
+  const std::string result = measly::et::openVinoInferencePrecision(p);
   return env->NewStringUTF(result.c_str());
 }
 ```
@@ -1623,7 +1645,11 @@ In `EtEngine.java`:
             return "unavailable";
         }
         try {
-            return EtNative.openVinoInferencePrecision(lib);
+            // Null rather than a string means the native side could not even read its argument
+            // (OOM pending). Fold it into the same sentinel: this is a diagnostic, and a caller
+            // reading it should never have to distinguish degrees of unavailability.
+            String precision = EtNative.openVinoInferencePrecision(lib);
+            return (precision == null || precision.isEmpty()) ? "unavailable" : precision;
         } catch (RuntimeException | LinkageError e) {
             return "unavailable";
         }
