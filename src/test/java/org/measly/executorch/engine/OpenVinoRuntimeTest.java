@@ -1,17 +1,31 @@
 package org.measly.executorch.engine;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ai.djl.Model;
+import ai.djl.engine.EngineException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.measly.executorch.TestSupport;
+import org.measly.executorch.jni.EtNative;
 
 @Tag("openvino")
+// Deterministic order is load-bearing here: the openvinoTest JVM is forked per CLASS (forkEvery=1),
+// so the first test that extracts/configures sets process-global state the later tests observe.
+// anOperatorSetLibPathIsHonouredUntouched asserts resolvedLibPath() is still null, which can only
+// hold while it runs before any test that legitimately extracts the bundle.
+@TestMethodOrder(MethodOrderer.MethodName.class)
 class OpenVinoRuntimeTest {
 
     @Test
@@ -41,5 +55,81 @@ class OpenVinoRuntimeTest {
     void repeatedExtractionIsIdempotentAndReturnsTheSameDirectory() throws Exception {
         TestSupport.assumeOpenVinoBundleAvailable();
         assertEquals(OpenVinoRuntime.ensureExtracted(), OpenVinoRuntime.ensureExtracted());
+    }
+
+    @Test
+    void probingForABackendDoesNotBurnTheDelegatesOneShotDlopen() throws Exception {
+        TestSupport.assumeOpenVinoBundleAvailable();
+
+        Path pte = Paths.get("src/test/resources/models/openvino/openvino_tiny.pte");
+
+        // Probe FIRST, with OPENVINO_LIB_PATH deliberately unresolved. If pteUsesBackend loaded the
+        // method rather than just the program, this would run delegate init unconfigured -- and the
+        // delegate's dlopen is std::call_once with no retry, so the load below would then fail
+        // forever in this JVM no matter how correctly we configure afterwards.
+        assertTrue(EtNative.pteUsesBackend(pte.toString(), OpenVinoRuntime.BACKEND));
+
+        // Now configure and load for real. Success here proves the probe consumed nothing.
+        try (Model model = Model.newInstance("openvino_tiny", "ExecuTorch")) {
+            model.load(pte.getParent(), "openvino_tiny");
+        }
+    }
+
+    @Test
+    void anOperatorSetLibPathIsHonouredUntouched() throws Exception {
+        // Cannot be asserted by mutating this JVM's environment -- Java cannot -- so this asserts
+        // the decision function instead: given a non-empty existing value, resolution must return
+        // it unchanged and must not extract anything.
+        String existing = System.getenv("OPENVINO_LIB_PATH");
+        Assumptions.assumeTrue(
+                existing == null || existing.isEmpty(),
+                "this asserts the default path; an inherited OPENVINO_LIB_PATH would mask it");
+        // With no override set, a non-OpenVINO model must leave configuration untouched: the
+        // bundle is not extracted and no lib path is resolved for a model that never needs one.
+        OpenVinoRuntime.ensureReady(Paths.get(TestSupport.addPtePath()));
+        assertNull(
+                OpenVinoRuntime.resolvedLibPath(),
+                "a non-OpenVINO model must not trigger bundle resolution");
+    }
+
+    @Test
+    void anUnusableLibPathOverrideIsRejectedWithTheValueThatCausedIt() throws Exception {
+        // Tested as a pure function because a JVM cannot set its own environment. The end-to-end
+        // env path is covered natively in et_runtime_test.cpp, which can call setenv in-process.
+        Path realFile = Files.createTempFile("not-a-library", ".so");
+        Path dir = Files.createTempDirectory("openvino-dir");
+        try {
+            EngineException nonexistent = assertThrows(
+                    EngineException.class, () -> OpenVinoRuntime.validateOverride("XXX"));
+            assertTrue(
+                    nonexistent.getMessage().contains("XXX"),
+                    "the message must quote the offending value: " + nonexistent.getMessage());
+
+            EngineException directory = assertThrows(
+                    EngineException.class,
+                    () -> OpenVinoRuntime.validateOverride(dir.toString()));
+            assertTrue(
+                    directory.getMessage().contains("directory"),
+                    "a directory must be called out by name, because the error the delegate would "
+                            + "otherwise give mentions LD_LIBRARY_PATH and misleads: "
+                            + directory.getMessage());
+
+            // Any readable regular file passes. Validation deliberately stops at "could this be
+            // dlopen'd at all" -- proving it is really OpenVINO would mean loading it, which is
+            // the once-only operation this check exists to protect.
+            assertDoesNotThrow(() -> OpenVinoRuntime.validateOverride(realFile.toString()));
+        } finally {
+            Files.deleteIfExists(realFile);
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void reportsBundleAvailabilityFromTheClasspathRatherThanThePlatform() {
+        TestSupport.assumeNativeLibraryAvailable();
+        // A boolean either way is correct -- what must NOT happen is a throw. This runs on every
+        // platform, including ones with no bundle, because that is the case whose error path
+        // matters most.
+        assertDoesNotThrow(OpenVinoRuntime::bundleAvailable);
     }
 }
