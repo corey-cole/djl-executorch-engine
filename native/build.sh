@@ -133,6 +133,43 @@ if [ "${STAGE_SO}" = "1" ]; then
   cp "${ET_RUNTIME_ROOT}/LICENSE" "${LIC_OUT}/"
   cp -r "${ET_RUNTIME_ROOT}/THIRD-PARTY-NOTICES" "${LIC_OUT}/"
   echo "Notices: ${LIC_OUT} ($(find "${LIC_OUT}" -type f | wc -l) files)"
+
+  # --- OpenVINO runtime bundle (optional, published as a separate opt-in jar) ---
+  # Fetched here rather than by CMake because nothing links against it: the delegate dlopens the C
+  # API at runtime. Guarded on the pin declaring a bundle for THIS row, so a release that published
+  # none, or a platform the bundle does not cover, stages nothing and the jar task skips.
+  PIN="native/cmake/EtRuntimePin.cmake"
+  OV_PLATFORM="$(grep -oP 'set\(ET_RUNTIME_OPENVINO_PLATFORM "\K[^"]+' "${PIN}" || true)"
+  if [ -n "${OV_PLATFORM}" ] && [ "${OV_PLATFORM}" = "${OUT_PLATFORM}" ]; then
+    OV_URL="$(grep -oPz 'set\(ET_RUNTIME_OPENVINO_URL\s*\n?\s*"\K[^"]+' "${PIN}" | tr -d '\0')"
+    OV_SHA="$(grep -oP 'set\(ET_RUNTIME_OPENVINO_SHA256 "\K[^"]+' "${PIN}")"
+    OV_VER="$(grep -oP 'set\(ET_RUNTIME_OPENVINO_VERSION "\K[^"]+' "${PIN}")"
+    OV_OUT="${OUT}/openvino"
+    TARBALL="native/build/openvino-runtime.tar.gz"
+
+    curl -fsSL -o "${TARBALL}" "${OV_URL}"
+    echo "${OV_SHA}  ${TARBALL}" | sha256sum -c - \
+      || { echo "OpenVINO bundle SHA256 mismatch -- refusing to stage"; exit 1; }
+
+    rm -rf "${OV_OUT}"
+    mkdir -p "${OV_OUT}"
+    # --strip-components=1 drops the single top-level dir, keeping lib/, licenses/ and BUILDINFO.
+    tar xzf "${TARBALL}" --strip-components=1 -C "${OV_OUT}"
+    # The symlink is deliberately not shipped: jars do not preserve symlinks, and it is unnecessary --
+    # OPENVINO_LIB_PATH names the versioned file directly and $ORIGIN resolves the rest. Verified
+    # against this exact bundle.
+    rm -f "${OV_OUT}/lib/libopenvino_c.so"
+
+    {
+      echo "openvino_version=${OV_VER}"
+      echo "tarball_sha256=${OV_SHA}"
+      echo "tarball_url=${OV_URL}"
+    } > "${OV_OUT}/MANIFEST"
+
+    echo "OpenVINO bundle staged: ${OV_OUT} ($(du -sh "${OV_OUT}" | cut -f1))"
+  else
+    echo "OpenVINO bundle: pin declares none for ${OUT_PLATFORM}; skipping"
+  fi
 else
   echo "STAGE_SO=0: built shim but not staging into resources"
   ls -lh "${NATIVE_BUILD_DIR}/${OUT_LIB}"
