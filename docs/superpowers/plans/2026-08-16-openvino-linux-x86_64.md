@@ -813,12 +813,15 @@ Create `src/main/java/org/measly/executorch/engine/OpenVinoRuntime.java`:
 ```java
 package org.measly.executorch.engine;
 
+import ai.djl.engine.EngineException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
@@ -884,20 +887,26 @@ public final class OpenVinoRuntime {
         if (configured) {
             return; // one-shot per process; the delegate's dlopen is too
         }
-        if (!bundleAvailable()) {
-            return; // nothing we can do; the native guard produces the error
-        }
         String existing = System.getenv("OPENVINO_LIB_PATH");
-        if (existing != null && !existing.isEmpty()) {
-            // An operator override always wins, untouched. Checked explicitly rather than with a
-            // set-if-absent idiom, whose eager default would extract 72 MB even when the variable
-            // is already correct.
+        boolean overridden = existing != null && !existing.isEmpty();
+        if (!overridden && !bundleAvailable()) {
+            return; // nothing to configure and nothing to check; the native guard reports it
+        }
+        // The probe comes BEFORE the override check, not after. Validating an override for every
+        // model would fail a pure-XNNPACK workload that happens to carry a stale OPENVINO_LIB_PATH
+        // in its environment -- punishing a caller for a variable their models never touch.
+        if (!EtNative.pteUsesBackend(ptePath.toString(), BACKEND)) {
+            return; // not an OpenVINO model; extract nothing, validate nothing
+        }
+        if (overridden) {
+            // An operator override always wins -- but a wrong one is worth catching here rather
+            // than letting it reach the delegate, whose dlopen is once-only. Checked explicitly
+            // rather than with a set-if-absent idiom, whose eager default would extract 72 MB even
+            // when the variable is already correct.
+            validateOverride(existing);
             configured = true;
             libPath = existing;
             return;
-        }
-        if (!EtNative.pteUsesBackend(ptePath.toString(), BACKEND)) {
-            return; // not an OpenVINO model; extract nothing
         }
         try {
             Path dir = ensureExtracted();
@@ -907,6 +916,45 @@ public final class OpenVinoRuntime {
             logger.info("OpenVINO runtime resolved: {}", lib);
         } catch (IOException e) {
             throw new IllegalStateException("Failed to extract the OpenVINO runtime bundle", e);
+        }
+    }
+
+    /**
+     * Rejects an {@code OPENVINO_LIB_PATH} that cannot work, before the delegate sees it.
+     *
+     * <p>Deliberately does <b>not</b> fall back to the vendored bundle. An operator who set this
+     * variable meant to, and quietly substituting our runtime for theirs would turn a typo into a
+     * silently different OpenVINO — which, because a {@code .pte} embeds a precompiled blob, could
+     * surface much later as an import failure. Failing here names the value they actually set.
+     *
+     * @param value the environment variable's contents
+     * @throws EngineException if it does not name a readable regular file
+     */
+    static void validateOverride(String value) {
+        Path candidate;
+        try {
+            candidate = Paths.get(value);
+        } catch (InvalidPathException e) {
+            throw new EngineException(
+                    "OPENVINO_LIB_PATH is not a usable path: '" + value + "'. It must be the full "
+                            + "path to the OpenVINO C library FILE.", e);
+        }
+        if (Files.isDirectory(candidate)) {
+            // Upstream's documented top mistake, and an easy one to make: the error the delegate
+            // would otherwise produce mentions LD_LIBRARY_PATH, which reads like it wants a
+            // directory. It does not.
+            throw new EngineException(
+                    "OPENVINO_LIB_PATH points at a directory: '" + value + "'. It must be the full "
+                            + "path to the library FILE itself, e.g. <dir>/libopenvino_c.so."
+                            + "<abi>.");
+        }
+        if (!Files.isRegularFile(candidate) || !Files.isReadable(candidate)) {
+            throw new EngineException(
+                    "OPENVINO_LIB_PATH does not name a readable file: '" + value + "'."
+                            + (bundleAvailable()
+                                    ? " Unset it to use the OpenVINO runtime vendored in this"
+                                            + " engine's openvino artifact."
+                                    : " Set it to the full path of the OpenVINO C library file."));
         }
     }
 
@@ -1211,6 +1259,38 @@ Append to `OpenVinoRuntimeTest.java`:
     }
 
     @Test
+    void anUnusableLibPathOverrideIsRejectedWithTheValueThatCausedIt() throws Exception {
+        // Tested as a pure function because a JVM cannot set its own environment. The end-to-end
+        // env path is covered natively in et_runtime_test.cpp, which can call setenv in-process.
+        Path realFile = Files.createTempFile("not-a-library", ".so");
+        Path dir = Files.createTempDirectory("openvino-dir");
+        try {
+            EngineException nonexistent = assertThrows(
+                    EngineException.class, () -> OpenVinoRuntime.validateOverride("XXX"));
+            assertTrue(
+                    nonexistent.getMessage().contains("XXX"),
+                    "the message must quote the offending value: " + nonexistent.getMessage());
+
+            EngineException directory = assertThrows(
+                    EngineException.class,
+                    () -> OpenVinoRuntime.validateOverride(dir.toString()));
+            assertTrue(
+                    directory.getMessage().contains("directory"),
+                    "a directory must be called out by name, because the error the delegate would "
+                            + "otherwise give mentions LD_LIBRARY_PATH and misleads: "
+                            + directory.getMessage());
+
+            // Any readable regular file passes. Validation deliberately stops at "could this be
+            // dlopen'd at all" -- proving it is really OpenVINO would mean loading it, which is
+            // the once-only operation this check exists to protect.
+            assertDoesNotThrow(() -> OpenVinoRuntime.validateOverride(realFile.toString()));
+        } finally {
+            Files.deleteIfExists(realFile);
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
     void reportsBundleAvailabilityFromTheClasspathRatherThanThePlatform() {
         TestSupport.assumeNativeLibraryAvailable();
         // A boolean either way is correct -- what must NOT happen is a throw. This runs on every
@@ -1220,7 +1300,7 @@ Append to `OpenVinoRuntimeTest.java`:
     }
 ```
 
-Add imports: `org.junit.jupiter.api.Assumptions`, and the static imports `assertNull`, `assertDoesNotThrow`.
+Add imports: `org.junit.jupiter.api.Assumptions`, `ai.djl.engine.EngineException`, `java.nio.file.Files`, and the static imports `assertNull`, `assertDoesNotThrow`, `assertThrows`.
 
 - [ ] **Step 4: Run them**
 
