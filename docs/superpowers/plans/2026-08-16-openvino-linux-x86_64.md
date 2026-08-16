@@ -21,6 +21,7 @@
 - **Never load out of the staging directory.** Publish by atomic directory rename first, load second.
 - Platform variance is expressed as **capability** — `if(TARGET openvino_backend)`, `ET_RUNTIME_OPENVINO_PLATFORM`, `LibUtils.platform()` — never as a platform name. Upstream is exploring a Windows delegate.
 - **Do not add `openvino_backend` to the post-link XNNPACK registration guard's required set.** That guard catches XNNPACK being GC'd out of the `.so`; a target that legitimately does not exist on most platforms would turn it into a platform conditional.
+- **An already-set `OPENVINO_LIB_PATH` always wins, and that is decided natively, never in Java.** `System.getenv` is a snapshot from JVM startup and does not observe a `setenv` issued afterwards, so a Java-side check cannot see a value installed natively after start; native `getenv` can. The JNI primitive is therefore set-if-absent and returns the value in force — callers must use the return value, not their own argument. Task 5 Step 9 verifies the snapshot behaviour rather than assuming it.
 - **Every JNI entry point copies its strings and releases immediately, before any `try`.** The idiom is `GetStringUTFChars` → null-check → copy to `std::string` → `ReleaseStringUTFChars` → then do the work. `GetStringUTFChars` returns null with an OOM pending, and it is *not* among the JNI functions legal to call in that state, so a second unchecked `Get*` after a failed first is itself a violation — and a `std::string` built from null is UB the shim's UBSan gate would abort on. Releasing before the `try` also removes any question about whether cleanup runs on the throwing path. See `executorch_djl_jni.cpp:188-190` for the established shape.
 - Parity tolerance is **`atol=1e-2`** and must not be tightened. bf16 hardware lands ~2.5e-3 from the f32 eager golden, f32 hardware ~6e-8. Both correct. A tighter bound asserts which machine CI allocated.
 - **Every OpenVINO test runs in its own JVM.** `OPENVINO_LIB_PATH` is process env and the `dlopen` is once-only.
@@ -717,7 +718,7 @@ LD_LIBRARY_PATH and reads like it wants a directory."
 
 **Files:**
 - Create: `src/main/java/org/measly/executorch/engine/OpenVinoRuntime.java`
-- Modify: `native/jni/executorch_djl_jni.cpp` (a `setOpenVinoLibPath` entry point)
+- Modify: `native/jni/executorch_djl_jni.cpp` (a `setOpenVinoLibPathIfAbsent` entry point)
 - Modify: `src/main/java/org/measly/executorch/jni/EtNative.java`
 - Modify: `src/main/java/org/measly/executorch/engine/EtModel.java:64-66` (probe before `loadModule`)
 - Modify: `src/main/java/org/measly/executorch/engine/LibUtils.java` (expose `cacheRoot()` to the package)
@@ -910,10 +911,19 @@ public final class OpenVinoRuntime {
         }
         try {
             Path dir = ensureExtracted();
-            String lib = resolvedLibPath();
-            EtNative.setOpenVinoLibPath(lib);
+            String ours = resolvedLibPath();
+            // Use what the native side reports as in force, not what we asked for. If something
+            // installed a path after JVM start -- invisible to the System.getenv check above --
+            // that path wins and this is how we find out.
+            String effective = EtNative.setOpenVinoLibPathIfAbsent(ours);
+            if (effective != null && !effective.equals(ours)) {
+                logger.info(
+                        "OpenVINO runtime already configured elsewhere; honouring {} instead of the"
+                                + " vendored {}", effective, ours);
+            }
+            libPath = (effective == null) ? ours : effective;
             configured = true;
-            logger.info("OpenVINO runtime resolved: {}", lib);
+            logger.info("OpenVINO runtime resolved: {}", libPath);
         } catch (IOException e) {
             throw new IllegalStateException("Failed to extract the OpenVINO runtime bundle", e);
         }
@@ -1082,29 +1092,47 @@ public final class OpenVinoRuntime {
 }
 ```
 
-- [ ] **Step 5: Add the `setOpenVinoLibPath` JNI entry point**
+- [ ] **Step 5: Add the `setOpenVinoLibPathIfAbsent` JNI entry point**
 
 In `native/jni/executorch_djl_jni.cpp`, beside the other free functions:
 
 ```cpp
-// Sets OPENVINO_LIB_PATH in the process environment. This exists because a JVM has no other way:
-// System.getenv is read-only and glibc's loader read LD_LIBRARY_PATH once, long ago. The delegate
-// reads OPENVINO_LIB_PATH at dlopen time, so writing it here still lands in time -- provided this
-// runs before the first OpenVINO inference, because that dlopen is once-only.
+// Sets OPENVINO_LIB_PATH only if it is not already set, and reports the value in force afterwards.
+// This exists because a JVM has no other way to configure it: System.getenv is read-only and
+// glibc's loader read LD_LIBRARY_PATH once, long ago. The delegate reads OPENVINO_LIB_PATH at
+// dlopen time, so writing it here still lands -- provided it runs before the first OpenVINO
+// inference, because that dlopen is once-only.
 //
-// overwrite=1 deliberately: a stale value from an earlier configuration would silently win.
-extern "C" JNIEXPORT void JNICALL
-Java_org_measly_executorch_jni_EtNative_setOpenVinoLibPath(JNIEnv* env, jclass, jstring path) {
+// SET-IF-ABSENT, not overwrite, and the decision is made HERE rather than in Java on purpose.
+// std::getenv sees the live environment; Java's System.getenv is a snapshot taken when the JVM
+// built its environment map and does not observe a setenv issued afterwards. So a value installed
+// natively after JVM start -- by an agent, another library, or this engine under a different
+// classloader -- is invisible to the Java check, and an overwrite there would silently replace a
+// configuration someone deliberately installed. Only this frame can see the truth, so only this
+// frame gets to decide.
+//
+// Returning the effective value makes that decision observable: the caller learns which path is
+// actually in force rather than assuming its own argument won.
+extern "C" JNIEXPORT jstring JNICALL
+Java_org_measly_executorch_jni_EtNative_setOpenVinoLibPathIfAbsent(
+    JNIEnv* env, jclass, jstring path) {
+  const char* existing = std::getenv("OPENVINO_LIB_PATH");
+  if (existing != nullptr && *existing != '\0') {
+    return env->NewStringUTF(existing);  // someone got here first; they win
+  }
   const char* value = env->GetStringUTFChars(path, nullptr);
   if (value == nullptr) {
-    return;  // OOM already pending; setenv with a null value would be UB
+    return nullptr;  // OOM already pending; setenv with a null value would be UB
   }
   const int rc = setenv("OPENVINO_LIB_PATH", value, 1);
+  std::string effective(value);
   // Released before the throw, not after: nothing is held across a JNI call that can fail.
   env->ReleaseStringUTFChars(path, value);
   if (rc != 0) {
     throwJava(env, "setenv(OPENVINO_LIB_PATH) failed", nullptr);
+    return nullptr;
   }
+  return env->NewStringUTF(effective.c_str());
 }
 ```
 
@@ -1112,16 +1140,25 @@ And in `EtNative.java`:
 
 ```java
     /**
-     * Sets {@code OPENVINO_LIB_PATH} in the process environment.
+     * Sets {@code OPENVINO_LIB_PATH} if it is not already set, and returns the value in force.
      *
      * <p>The only mechanism available to a JVM: {@code System.getenv} is read-only, and glibc's
      * loader read {@code LD_LIBRARY_PATH} once at process start. The delegate reads this variable
      * at {@code dlopen} time, so a write from here still lands — but only if it precedes the first
      * OpenVINO inference, because that {@code dlopen} runs once and never retries.
      *
-     * @param path absolute path to the OpenVINO C library file
+     * <p><b>An already-set value always wins</b>, and that decision is made natively rather than in
+     * Java. {@code System.getenv} is a snapshot taken when the JVM built its environment map and
+     * does not observe a {@code setenv} issued afterwards, so a Java-side check cannot see a value
+     * installed natively after startup. Native {@code getenv} can.
+     *
+     * <p>Callers must use the <b>returned</b> value rather than assuming their argument was
+     * applied — it may be someone else's path.
+     *
+     * @param path absolute path to the OpenVINO C library file, used only if none is set
+     * @return the path actually in force, or {@code null} if it could not be determined
      */
-    public static native void setOpenVinoLibPath(String path);
+    public static native String setOpenVinoLibPathIfAbsent(String path);
 ```
 
 - [ ] **Step 6: Register the `openvinoTest` task**
@@ -1163,7 +1200,28 @@ In `EtModel.java`, immediately before the `EtNative.loadModule` call at line 66 
 
 Expected: `test` BUILD SUCCESSFUL (unchanged behaviour for non-OpenVINO models); `openvinoTest` passes both cases, or skips cleanly if the bundle jar is not on the test classpath. If it skips, add the bundle jar output to the test runtime classpath before proceeding — a silently skipping suite proves nothing.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 9: Verify the `System.getenv` snapshot assumption**
+
+The set-if-absent decision lives natively *because* Java's environment view is a startup snapshot. That claim is load-bearing, so confirm it on this JDK rather than trusting it — if `System.getenv` did observe a JNI `setenv`, the native check would be redundant and the design should be simplified rather than left with a rationale that is not true here.
+
+Add a temporary assertion to `OpenVinoRuntimeTest` (delete it once observed):
+
+```java
+    @Test
+    void javaEnvironmentViewDoesNotObserveANativeSetenv() throws Exception {
+        TestSupport.assumeOpenVinoBundleAvailable();
+        OpenVinoRuntime.ensureExtracted();
+        String applied = EtNative.setOpenVinoLibPathIfAbsent(OpenVinoRuntime.resolvedLibPath());
+        System.out.println("native reports: " + applied);
+        System.out.println("System.getenv reports: " + System.getenv("OPENVINO_LIB_PATH"));
+    }
+```
+
+Run: `./gradlew openvinoTest --tests '*OpenVinoRuntimeTest*' -i`
+
+Expected: the native line shows a path; the `System.getenv` line shows `null`. That divergence is the whole reason the decision is native. **If both show the path**, stop and reconsider — the rationale in the JNI comment would be wrong on this JDK and must be corrected rather than left in place. Record what you observed in the commit message either way, then delete the test.
+
+- [ ] **Step 10: Commit**
 
 ```bash
 git add src/main/java/org/measly/executorch/engine/OpenVinoRuntime.java \
