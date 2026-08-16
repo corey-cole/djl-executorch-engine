@@ -78,6 +78,24 @@ public final class EtNative {
     public static native int intraOpThreads();
 
     /**
+     * Reads the XNNPACK delegate's memory arena size, for native-memory accounting.
+     *
+     * <p>Three properties a caller must not paper over. The figure is <b>process-wide</b> — the
+     * pinned runtime sets {@code EXECUTORCH_XNNPACK_SHARED_WORKSPACE=ON}, so every delegate shares
+     * one arena and this is already the total; never sum it per model. It is a <b>high-water
+     * mark</b> including allocator alignment padding, so it is the peak rather than the live
+     * footprint. And it stays {@code 0} until an XNNPACK-delegated method actually <b>executes</b>
+     * — loading one is not enough, and neither is a delegated model that allocates nothing, which
+     * is the case for an elementwise add or a Linear.
+     *
+     * <p>The backing option is a vendored patch in the pinned distribution, not upstream
+     * ExecuTorch. Against a stock runtime the key does not resolve and this reports {@code -1}.
+     *
+     * @return arena size in bytes, or {@code -1} when unavailable; {@code 0} is a real answer
+     */
+    public static native long xnnpackWorkspaceBytes();
+
+    /**
      * Called from native code (the ExecuTorch PAL sink) to route an ET_LOG message to slf4j.
      * Level codes match {@code measly::et::Slf4jLevel}: 0=debug, 1=info, 2=warn, 3=error
      * (unknown → info).

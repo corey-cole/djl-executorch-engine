@@ -6,11 +6,13 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include <executorch/extension/module/module.h>
 #include <executorch/extension/tensor/tensor.h>
 #include <executorch/extension/threadpool/threadpool.h>
 #include <executorch/runtime/backend/backend_options_map.h>
+#include <executorch/runtime/backend/interface.h>
 #include <executorch/runtime/backend/options.h>
 #include <executorch/runtime/executor/method_meta.h>
 
@@ -331,6 +333,23 @@ uint32_t setIntraOpThreads(uint32_t n) {
 uint32_t intraOpThreads() {
   return static_cast<uint32_t>(
       executorch::extension::threadpool::get_threadpool()->get_thread_count());
+}
+
+int64_t xnnpackWorkspaceBytes() {
+  // Both strings are hardcoded because XNNPACKBackend.h is not installed in the runtime tarball.
+  // The backend id must match the one the sharing-mode path above uses; the key is read-only --
+  // set_option on it returns InvalidArgument rather than silently no-op'ing.
+  executorch::runtime::BackendOption opt{};
+  std::snprintf(opt.key, sizeof(opt.key), "%s", "workspace_size_bytes");
+  executorch::runtime::Span<executorch::runtime::BackendOption> span(&opt, 1);
+  if (executorch::ET_RUNTIME_NAMESPACE::get_option("XnnpackBackend", span) !=
+      executorch::runtime::Error::Ok) {
+    return -1;
+  }
+  // The option is declared int; a different alternative means the runtime's contract changed under
+  // us, which is an "unavailable" rather than a value worth guessing at.
+  const int* value = std::get_if<int>(&opt.value);
+  return (value == nullptr) ? -1 : static_cast<int64_t>(*value);
 }
 
 }  // namespace measly::et

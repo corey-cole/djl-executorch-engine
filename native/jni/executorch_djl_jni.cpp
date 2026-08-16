@@ -384,6 +384,15 @@ Java_org_measly_executorch_jni_EtNative_intraOpThreads(JNIEnv* env, jclass) {
   return static_cast<jint>(measly::et::intraOpThreads());
 }
 
+// Process-wide XNNPACK workspace arena, for the stats path. Widened to jlong on the way out even
+// though the option is an int: the Java surface reports every byte count as a long, and -1 keeps
+// its "unavailable" meaning at both widths. Schedules no exception -- the core reports failure
+// in-band, so a monitoring read can never throw here.
+extern "C" JNIEXPORT jlong JNICALL
+Java_org_measly_executorch_jni_EtNative_xnnpackWorkspaceBytes(JNIEnv* env, jclass) {
+  return static_cast<jlong>(measly::et::xnnpackWorkspaceBytes());
+}
+
 // Total capacity of the input staging slots, for the stats path. Two distinct zero-ish results the
 // caller must not conflate: a genuine 0 means every input is memory-planned (the export default)
 // and nothing is ever staged, whereas -1 is the error return after an exception was scheduled.

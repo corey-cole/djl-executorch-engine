@@ -390,3 +390,32 @@ TEST_CASE("workspace: an out-of-range mode is rejected by the backend (proves th
   REQUIRE_THROWS([] { EtRuntime rt(ADD_PTE_PATH, 99); }());
 }
 
+// conv.pte, not add.pte: delegating and allocating are different properties. add.pte is one node
+// with external input and output, and lin129.pte lowers to a GEMM over statically packed weights;
+// both delegate to XNNPACK and both grow the arena by exactly 0, so an assertion built on either
+// would fail against a CORRECT build. Measured on the pinned runtime: add 0 after load and after
+// forward, lin129 0 after forward, conv non-zero. A conv is the cheapest graph that allocates.
+//
+// Only the transition is asserted, never the value: the figure is a high-water mark including
+// allocator alignment padding, so it is not stable across runs or platforms. It is also
+// process-wide, which is why this reads ">0 after" rather than a delta -- an earlier case in this
+// process may already have grown the arena.
+//
+// The pre-load 0 is deliberately NOT asserted. Catch2 runs every case in one process in
+// registration order, so "reads 0 before the first delegated load" would pass or fail on which
+// cases ran first, not on the accessor.
+TEST_CASE("workspace: an XNNPACK-delegated conv grows the arena to a readable size") {
+  // The forward() is load-bearing, not incidental. EtRuntime's ctor already calls load_forward(),
+  // so delegate init has run by the time it returns -- yet the arena is still 0 at that point.
+  // Measured on the pinned runtime: it grows on the first EXECUTE, not at delegate init, so the
+  // upstream consumer doc's "created lazily during delegate init" does not describe this path.
+  // Dropping the forward() turns this test red.
+  EtRuntime rt(CONV_PTE_PATH);
+  std::vector<float> x(1 * 3 * 16 * 16, 1.0f);
+  std::vector<InputDesc> inputs = {{x.data(), {1, 3, 16, 16}, 6}};
+  ForwardResult result = rt.forward(inputs);
+  const int64_t bytes = xnnpackWorkspaceBytes();
+  REQUIRE(bytes != -1);  // -1 is "get_option failed", i.e. the vendored patch is gone
+  REQUIRE(bytes > 0);
+}
+

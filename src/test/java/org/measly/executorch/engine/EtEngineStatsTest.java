@@ -8,6 +8,7 @@ import ai.djl.Model;
 import ai.djl.ndarray.NDArray;
 import ai.djl.ndarray.NDList;
 import ai.djl.ndarray.NDManager;
+import ai.djl.ndarray.types.Shape;
 import java.lang.ref.WeakReference;
 import java.nio.file.Paths;
 import java.util.List;
@@ -26,6 +27,33 @@ class EtEngineStatsTest {
         assertNotNull(s.getNativeLibraryPath());
         assertTrue(s.getIntraOpThreads() >= 1);
         assertNotNull(s.getDefaultWorkspaceSharingMode());
+    }
+
+    @Test
+    void reportsTheXnnpackWorkspaceArenaAfterADelegatedConvLoads() throws Exception {
+        TestSupport.assumeNativeAvailable();
+
+        // conv, not add: both delegate to XNNPACK, but an add is one node with external input and
+        // output and allocates no arena at all -- it reports a workspace of exactly 0 against a
+        // fully correct runtime. Only a conv grows the arena, so only a conv can tell a working
+        // accessor apart from a broken one. See native/spike/export_conv.py.
+        try (Model model = Model.newInstance("conv", "ExecuTorch")) {
+            model.load(Paths.get("native/spike"), "conv");
+            // The forward is required, not incidental: loading a delegated model runs delegate
+            // init but leaves the arena at 0. It grows on the first execute.
+            try (NDManager manager = NDManager.newBaseManager("ExecuTorch");
+                    NDList inputs = new NDList(manager.ones(new Shape(1, 3, 16, 16)));
+                    NDList outputs = model.getBlock().forward(null, inputs, false)) {
+                assertNotNull(outputs);
+            }
+
+            long bytes = EtEngineStats.snapshot().getXnnpackWorkspaceBytes();
+            assertTrue(bytes != -1, "-1 means get_option failed: the vendored patch is gone");
+            // Only the transition is asserted, never the value. The figure is a process-wide
+            // high-water mark including allocator alignment padding, so it is stable neither
+            // across runs nor across platforms.
+            assertTrue(bytes > 0, "a delegated conv must have grown the arena, got " + bytes);
+        }
     }
 
     @Test
