@@ -393,6 +393,33 @@ Java_org_measly_executorch_jni_EtNative_xnnpackWorkspaceBytes(JNIEnv* env, jclas
   return static_cast<jlong>(measly::et::xnnpackWorkspaceBytes());
 }
 
+// Metadata-only backend probe. Unlike loadModule this does NOT construct an EtRuntime, so it
+// cannot trigger delegate init -- which is the only reason it exists as a separate entry point.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_org_measly_executorch_jni_EtNative_pteUsesBackend(
+    JNIEnv* env, jclass, jstring ptePath, jstring backend) {
+  const char* path = env->GetStringUTFChars(ptePath, nullptr);
+  if (path == nullptr) {
+    return JNI_FALSE;  // OOM already pending; do not call another JNI function that could fail
+  }
+  std::string p(path);
+  env->ReleaseStringUTFChars(ptePath, path);
+
+  const char* name = env->GetStringUTFChars(backend, nullptr);
+  if (name == nullptr) {
+    return JNI_FALSE;
+  }
+  std::string b(name);
+  env->ReleaseStringUTFChars(backend, name);
+
+  try {
+    return measly::et::pteUsesBackend(p, b) ? JNI_TRUE : JNI_FALSE;
+  } catch (const std::exception& e) {
+    throwJava(env, "Backend detection failed", &e);
+    return JNI_FALSE;
+  }
+}
+
 // Total capacity of the input staging slots, for the stats path. Two distinct zero-ish results the
 // caller must not conflate: a genuine 0 means every input is memory-planned (the export default)
 // and nothing is ever staged, whereas -1 is the error return after an exception was scheduled.

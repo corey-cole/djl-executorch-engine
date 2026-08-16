@@ -96,6 +96,22 @@ public final class EtNative {
     public static native long xnnpackWorkspaceBytes();
 
     /**
+     * Reports whether a {@code .pte}'s {@code forward} method is delegated to a given backend,
+     * reading metadata only.
+     *
+     * <p>Deliberately separate from {@link #loadModule}: that call constructs the native runtime,
+     * whose constructor calls {@code load_forward()} — which for a delegated model is delegate
+     * init. OpenVINO's delegate init resolves its C API with a {@code dlopen} under
+     * {@code std::call_once} and never retries, so a caller that must configure something first has
+     * to ask before {@code loadModule}, not after.
+     *
+     * @param ptePath absolute path to the model file
+     * @param backend backend id, e.g. {@code OpenvinoBackend} (lowercase {@code v})
+     * @return true if {@code forward} is delegated to that backend
+     */
+    public static native boolean pteUsesBackend(String ptePath, String backend);
+
+    /**
      * Called from native code (the ExecuTorch PAL sink) to route an ET_LOG message to slf4j.
      * Level codes match {@code measly::et::Slf4jLevel}: 0=debug, 1=info, 2=warn, 3=error
      * (unknown → info).

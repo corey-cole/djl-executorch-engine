@@ -419,3 +419,19 @@ TEST_CASE("workspace: an XNNPACK-delegated conv grows the arena to a readable si
   REQUIRE(bytes > 0);
 }
 
+
+// Detection must work on EVERY platform, including ones where the delegate is not linked -- that
+// is precisely the case that needs a good error message. So this asserts metadata reading, not
+// delegate availability, and is NOT gated on the backend being present.
+TEST_CASE("backend detection: reports which delegate a .pte needs, without loading the method") {
+  REQUIRE(pteUsesBackend(OPENVINO_TINY_PTE_PATH, "OpenvinoBackend"));
+  REQUIRE_FALSE(pteUsesBackend(OPENVINO_TINY_PTE_PATH, "XnnpackBackend"));
+  REQUIRE(pteUsesBackend(CONV_PTE_PATH, "XnnpackBackend"));
+  REQUIRE_FALSE(pteUsesBackend(CONV_PTE_PATH, "OpenvinoBackend"));
+}
+
+TEST_CASE("backend detection: a missing file throws rather than reporting false") {
+  // Reporting false would be indistinguishable from "this model needs no delegate", sending the
+  // caller down the non-OpenVINO path and losing the real error until much later.
+  REQUIRE_THROWS([] { pteUsesBackend("/nonexistent/definitely-not-here.pte", "OpenvinoBackend"); }());
+}

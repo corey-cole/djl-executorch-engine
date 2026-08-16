@@ -352,4 +352,15 @@ int64_t xnnpackWorkspaceBytes() {
   return (value == nullptr) ? -1 : static_cast<int64_t>(*value);
 }
 
+bool pteUsesBackend(const std::string& ptePath, const std::string& backend) {
+  Module probe(ptePath);
+  const auto meta = probe.method_meta("forward");
+  if (!meta.ok()) {
+    throw std::runtime_error(
+        "pteUsesBackend: cannot read method metadata from " + ptePath + " (error " +
+        std::to_string(static_cast<int>(meta.error())) + ")");
+  }
+  return meta->uses_backend(backend.c_str());
+}
+
 }  // namespace measly::et

@@ -134,5 +134,16 @@ uint32_t intraOpThreads();
 // stock runtime this returns -1 rather than failing to build, since it names the key by string.
 int64_t xnnpackWorkspaceBytes();
 
+// True if `ptePath`'s "forward" method is delegated to `backend` (e.g. "OpenvinoBackend").
+//
+// Reads METADATA ONLY: it builds a bare Module and asks method_meta, never load_forward(). That
+// distinction is the whole point. EtRuntime's ctor calls load_forward() unconditionally, and for a
+// delegated model that IS delegate init -- which for OpenVINO means a dlopen under std::call_once
+// with no retry. Anything that needs to act before delegate init must ask through here.
+//
+// Throws std::runtime_error if the file cannot be opened or its program cannot be read. Reporting
+// false there would be indistinguishable from "needs no delegate" and would hide the real error.
+bool pteUsesBackend(const std::string& ptePath, const std::string& backend);
+
 }  // namespace measly::et
 #endif  // MEASLY_ET_RUNTIME_H
