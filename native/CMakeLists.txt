@@ -194,6 +194,28 @@ if(NOT ET_BUILD_QA AND NOT ET_BUILD_BENCH)
   target_include_directories(executorch_djl PRIVATE
     "${JAVA_HOME}/include" "${JAVA_HOME}/include/${_JNI_MD_DIR}")
   target_link_libraries(executorch_djl PRIVATE et_runtime)
+  # The OpenVINO delegate ships only in tarballs that were built with it -- linux-x86_64 today.
+  # Keyed on the TARGET rather than on ET_PLATFORM so a platform that later gains the delegate works
+  # with no edit here; upstream is actively exploring Windows.
+  #
+  # Deliberately NOT added to the post-link XNNPACK registration assertion: that guard exists to catch
+  # the XNNPACK registration being garbage-collected out of the .so, and folding in a target that
+  # legitimately does not exist on most platforms would convert a real guard into a platform
+  # conditional and weaken it.
+  #
+  # The archive is static and resolves the OpenVINO C API by dlopen at first use, so this adds no
+  # DT_NEEDED and drags in no OpenVINO shared object at link time.
+  #
+  # Linked PLAINLY, exactly like xnnpack_backend: the runtime's imported openvino_backend target
+  # already self-whole-archives via its INTERFACE_LINK_OPTIONS (ExecuTorchTargets.cmake), so a
+  # LINK_LIBRARY:WHOLE_ARCHIVE wrap here would link the archive twice and fail with multiple
+  # definitions of the OpenvinoBackend members.
+  if(TARGET openvino_backend)
+    target_link_libraries(executorch_djl PRIVATE openvino_backend)
+    message(STATUS "OpenVINO delegate: linked")
+  else()
+    message(STATUS "OpenVINO delegate: not present in this runtime (platform=${ET_PLATFORM})")
+  endif()
   # The shim is dlopen'd by a stock JVM that knows nothing about sanitizer runtimes, so UBSan's
   # runtime has to travel inside the .so. Without this the link succeeds and System.load fails
   # later -- in CI, possibly in a different job on a different machine than the build.
