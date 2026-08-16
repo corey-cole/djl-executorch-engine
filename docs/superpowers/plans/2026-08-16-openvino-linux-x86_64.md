@@ -14,7 +14,8 @@
 
 - Backend id is exactly **`OpenvinoBackend`** (lowercase `v`). Hardcoded as a string in C++ and Java.
 - OpenVINO pin is **`2025.4.1`, exact**, and must agree across three files: `native/cmake/EtRuntimePin.cmake` (`ET_RUNTIME_OPENVINO_VERSION`), the bundle `MANIFEST` in the jar, and `src/test/resources/models/openvino/MANIFEST`.
-- **ABI suffix is `2541`**, but never hardcode it — the bundle ships `BUILDINFO` carrying `ov_abi=2541`. Read it from there.
+- **ABI suffix is `2541`**, but never hardcode it — the bundle ships `BUILDINFO` carrying `ov_abi=2541`. Read it from there, in the extractor and in the shell tests alike. It tracks the version (`2025.4.1` → `2541`), so a literal turns every OpenVINO bump into an edit here and fails as "missing library" rather than "you bumped OpenVINO".
+- **`docs/openvino-version-bump.md` is the checklist of what an OpenVINO bump must touch** (Task 7). Anything this work makes version-coupled belongs on that list, and any test that fails because of a bump should name it in the failure message.
 - **No symlink is ever created.** Measured: with `libopenvino_c.so` absent, `dlopen("<dir>/libopenvino_c.so.2541")` resolves the whole graph through `$ORIGIN`. `OPENVINO_LIB_PATH` points at the versioned file.
 - All bundle libraries extract into **one flat directory**. `RPATH=$ORIGIN` is what resolves the graph; splitting them breaks it.
 - **Never load out of the staging directory.** Publish by atomic directory rename first, load second.
@@ -390,10 +391,25 @@ fail() { echo "FAIL: $1"; exit 1; }
 DIR="build/native-staging/linux-x86_64/openvino"
 [ -d "${DIR}" ] || { echo "SKIP: bundle not staged"; exit 0; }
 
-for f in libopenvino_c.so.2541 libopenvino.so.2541 libopenvino_intel_cpu_plugin.so \
-         libopenvino_ir_frontend.so.2541 libtbb.so.12 libtbbbind_2_5.so.3 libhwloc.so.15; do
-  [ -f "${DIR}/lib/${f}" ] || fail "missing library: ${f}"
+# The ABI suffix is DERIVED from BUILDINFO, never hardcoded: it tracks the OpenVINO version
+# (2025.4.1 -> 2541), so a hardcoded literal would make this test a thing to edit on every bump,
+# and a stale one would fail with "missing library" rather than "you bumped OpenVINO".
+abi="$(grep -oP '^ov_abi=\K.*' "${DIR}/BUILDINFO")"
+[ -n "${abi}" ] || fail "BUILDINFO carries no ov_abi"
+
+# The SET of libraries is the part worth reviewing on a version bump -- an OpenVINO release can add
+# or drop a transitive dependency, and a missing one fails at model load with an error naming none
+# of this. Keep in sync with OpenVinoRuntime.LIBS; docs/openvino-version-bump.md is the checklist.
+for f in "libopenvino_c.so.${abi}" "libopenvino.so.${abi}" libopenvino_intel_cpu_plugin.so \
+         "libopenvino_ir_frontend.so.${abi}" libtbb.so.12 libtbbbind_2_5.so.3 libhwloc.so.15; do
+  [ -f "${DIR}/lib/${f}" ] || fail "missing library: ${f} (see docs/openvino-version-bump.md)"
 done
+
+# Nothing may be shipped that no one enumerated: an unlisted library means the bundle grew and
+# OpenVinoRuntime.LIBS will not extract it, which fails at dlopen rather than here.
+count="$(find "${DIR}/lib" -maxdepth 1 -type f | wc -l)"
+[ "${count}" -eq 7 ] \
+  || fail "expected 7 libraries, found ${count} -- the bundle changed; see docs/openvino-version-bump.md"
 
 # Flat, not nested: RPATH=$ORIGIN is what resolves the graph.
 find "${DIR}/lib" -mindepth 1 -type d | grep -q . && fail "lib/ must be flat, found a subdirectory"
@@ -1317,7 +1333,8 @@ published directory leaving no staging directory behind."
 - Create: `src/test/resources/models/openvino/MANIFEST`
 - Create: `src/test/java/org/measly/executorch/OpenVinoModelIT.java`
 - Create: `native/tests/openvino_version_coupling.sh`
-- Modify: `docs/README.md` if it indexes fixtures (check first; it may not)
+- Create: `docs/openvino-version-bump.md`
+- Modify: `docs/README.md` (add the runbook to its reference list)
 
 **Interfaces:**
 - Consumes: everything from Tasks 1-5.
@@ -1455,12 +1472,70 @@ chmod +x native/tests/openvino_version_coupling.sh
 
 Expected: `PASS: openvino version coupling (2025.4.1)`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Write the version-bump runbook**
+
+Create `docs/openvino-version-bump.md`. OpenVINO versions independently of ExecuTorch, so a bump can arrive with no pin bump and vice versa, and the touch points are spread across four directories. This is the list.
+
+````markdown
+# Bumping the vendored OpenVINO version
+
+OpenVINO versions independently of ExecuTorch: a runtime-dist release can change
+`ET_RUNTIME_OPENVINO_VERSION` without changing the ExecuTorch version, and an ExecuTorch bump can
+leave OpenVINO untouched. So this is its own procedure, not a step inside a pin bump.
+
+The failure this prevents is specific. A `.pte` embeds a **precompiled OpenVINO blob**, so vendoring
+a runtime the committed fixture's blob cannot be imported by fails at *model load* with
+`failed to import model for device 'CPU'` — a message naming none of the causes below.
+
+## What must change together
+
+1. **`native/cmake/EtRuntimePin.cmake`** — generated. Replace it wholesale with the asset from the
+   new runtime-dist release; do not hand-edit. This carries
+   `ET_RUNTIME_OPENVINO_{VERSION,PLATFORM,URL,SHA256}`.
+2. **`src/test/resources/models/openvino/`** — the four fixture members **and** their `MANIFEST`.
+   The fixture asset is OpenVINO-version-coupled by name
+   (`etnp-openvino-fixtures-<etver>-<ovver>.tar.gz`), so a new OpenVINO means a new fixture. Update
+   `openvino_version`, `tarball_url`, and `tarball_sha256` in the `MANIFEST` to match the asset you
+   actually unpacked.
+3. **`OpenVinoRuntime.LIBS`** — only if the bundle's library set changed. Compare against the new
+   tarball's `lib/`. `native/tests/openvino_bundle_staging.sh` fails with a count mismatch when it
+   does, which is the signal to come here.
+
+## What must NOT change
+
+- **The ABI suffix is never hardcoded anywhere.** It tracks the version (`2025.4.1` → `2541`) and is
+  read from the bundle's `BUILDINFO` (`ov_abi`) by both the extractor and the staging test. If you
+  find yourself editing a `2541` literal, something has regressed.
+- **No symlink is ever created.** `OPENVINO_LIB_PATH` names the versioned file; `$ORIGIN` resolves
+  the rest. Verified against the shipped bundle.
+- **`atol=1e-2` in the parity test.** A new OpenVINO does not justify tightening it — the bound is
+  about which CPU the test lands on, not which version it runs.
+
+## Verifying the bump
+
+```bash
+./native/local_build_wrapper.sh                     # restages the bundle from the new pin
+./native/tests/openvino_version_coupling.sh         # pin == fixture == staged bundle
+./native/tests/openvino_bundle_staging.sh           # library set and ABI derivation
+./gradlew openvinoTest                              # parity against the new fixture
+```
+
+If parity fails but everything else passes, the fixture and the runtime disagree — you almost
+certainly updated one of items 1 and 2 without the other.
+````
+
+Add a pointer to it from `docs/README.md`'s reference list, and reference it from the coupling test's failure message:
+
+```bash
+  || fail "fixture MANIFEST openvino_version=${fixture} != pin ${pin} (see docs/openvino-version-bump.md)"
+```
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/test/resources/models/openvino/MANIFEST \
   src/test/java/org/measly/executorch/OpenVinoModelIT.java \
-  native/tests/openvino_version_coupling.sh
+  native/tests/openvino_version_coupling.sh docs/openvino-version-bump.md docs/README.md
 git commit -m "test: OpenVINO fixture parity and version coupling
 
 Runs the committed openvino_tiny fixture end to end and compares against the
@@ -1801,8 +1876,9 @@ In `CLAUDE.md`, after the workspace-metric bullet:
   nothing is ever loaded out of the staging directory. `EtEngine.openVinoInferencePrecision()`
   reports whether this host computes in `f32` or `bf16`, which is what keeps the parity test's
   `atol=1e-2` honest — **never tighten it**, both values are correct and the bound would then assert
-  which machine CI allocated. See
-  `docs/superpowers/specs/2026-08-16-openvino-linux-x86_64-design.md`.
+  which machine CI allocated. Bumping the vendored OpenVINO version touches four places across the
+  tree — `docs/openvino-version-bump.md` is the checklist, and the coupling tests name it when they
+  fail. Design: `docs/superpowers/specs/2026-08-16-openvino-linux-x86_64-design.md`.
 ```
 
 `docs/README.md` needs no edit: line 18 points at the `superpowers/` directory rather than listing individual specs, so the new spec is already covered. Confirm that is still true rather than assuming it.
