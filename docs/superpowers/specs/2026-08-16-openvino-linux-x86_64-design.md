@@ -53,6 +53,26 @@ forces reading a whole model file ExecuTorch is about to read again. `uses_backe
 **Detection is required regardless of extraction timing**, purely to produce a decent error. That
 is what makes lazy extraction free: it rides on a signal we already need.
 
+### Where each half of the detection runs, and why they differ
+
+`EtNative.loadModule` constructs an `EtRuntime`, whose constructor calls `Module::load_forward()`
+unconditionally — and that call *is* delegate init. So nothing after `loadModule` can detect
+anything in time. The two halves therefore sit in different places:
+
+- **The guard is C++, inside the `EtRuntime` constructor, between `Module` construction and
+  `load_forward()`.** At that point the program is loaded and `method_meta` is available, so
+  `uses_backend` costs nothing extra, and every error case — backend unlinked, `OPENVINO_LIB_PATH`
+  unset or not a file — is raised before delegate init. This is where all four errors come from.
+- **The Java probe is a separate `EtNative.pteUsesBackend(path, backend)` call before
+  `loadModule`,** because only Java can extract the bundle and only Java knows whether it is on the
+  classpath. It opens the `.pte` a second time, which is why it is **conditional**: it runs only
+  when the bundle is present *and* `OPENVINO_LIB_PATH` is not yet resolved.
+
+That condition is what keeps the cost off everyone else. A platform with no delegate never probes —
+it gets its error from the C++ guard. A consumer without the bundle jar never probes. A consumer
+with the bundle pays one extra `.pte` open per JVM, until the first OpenVINO model resolves the path
+and the probe switches off for the rest of the process.
+
 **The C++ guard duplicates the Java check deliberately.** `EtNative` is public and bypasses
 `EtModel`, and our own tests use it directly. Without the guard a direct `EtNative` caller who
 misconfigures OpenVINO burns the process's `call_once` and cannot recover without a restart.
@@ -288,12 +308,13 @@ so the port is a known quantity rather than a discovery.
 
 ## Verify during implementation, do not assume
 
-1. **Whether the symlink is needed at all.** Upstream adds `libopenvino_c.so` →
-   `libopenvino_c.so.<abi>` because the wheel omits it, and jars do not preserve symlinks, so we
-   would have to recreate it on extraction. But `OPENVINO_LIB_PATH` wants the full path to the
-   *file* — so pointing it straight at the versioned library may make the symlink unnecessary. If
-   that holds it removes a class of extraction bug and one Windows blocker at once. Prove it; do not
-   assume it.
+1. ~~Whether the symlink is needed at all.~~ **Settled: it is not.** Measured on the shipped
+   `openvino-runtime-2025.4.1-linux-x86_64` bundle — with `libopenvino_c.so` deleted from a flat
+   extraction directory, `dlopen("<dir>/libopenvino_c.so.2541")` succeeds, the whole dependency
+   graph resolves through `$ORIGIN`, and `ov_core_create` + `ov_core_get_property` return `Ok`. So
+   the design points `OPENVINO_LIB_PATH` at the versioned file and never creates a symlink, which
+   removes an extraction bug class and one Windows blocker. The ABI suffix is not hardcoded: the
+   bundle ships a `BUILDINFO` carrying `ov_abi=2541`.
 2. **The size cost of linking `libopenvino_backend.a` into the standard shim.** Measure the `.so`
    growth against the pre-change build. If it is small, one shim with capability-driven linking is
    far simpler than two shim variants; if it is not, the variant question reopens.
