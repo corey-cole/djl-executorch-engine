@@ -58,6 +58,11 @@ public class EtModel extends BaseModel {
                 "model {} workspaceSharingMode={}", getName(), EtWorkspaceSharing.name(workspaceSharingMode));
         // Not unit-tested below this point: loadModule/methodMeta/destroy require the native library
         // (integration-tested via EtModelTest#loadAndForwardAddModel).
+        // Before loadModule, never after: that call constructs the native runtime, whose ctor calls
+        // load_forward() -- delegate init. For OpenVINO that is a dlopen under std::call_once with
+        // no retry, so anything we need to configure has to be configured by now. Cheap in the
+        // common case: returns immediately once configured, and when no bundle is on the classpath.
+        OpenVinoRuntime.ensureReady(modelFile);
         // Timed from here so loadNanos covers delegate initialisation: EtRuntime's constructor
         // calls Module::load_forward() unconditionally, so the XNNPACK setup cost lands in load,
         // not in the first forward.

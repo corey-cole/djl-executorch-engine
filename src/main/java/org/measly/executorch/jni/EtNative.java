@@ -112,6 +112,27 @@ public final class EtNative {
     public static native boolean pteUsesBackend(String ptePath, String backend);
 
     /**
+     * Sets {@code OPENVINO_LIB_PATH} if it is not already set, and returns the value in force.
+     *
+     * <p>The only mechanism available to a JVM: {@code System.getenv} is read-only, and glibc's
+     * loader read {@code LD_LIBRARY_PATH} once at process start. The delegate reads this variable
+     * at {@code dlopen} time, so a write from here still lands — but only if it precedes the first
+     * OpenVINO inference, because that {@code dlopen} runs once and never retries.
+     *
+     * <p><b>An already-set value always wins</b>, and that decision is made natively rather than in
+     * Java. {@code System.getenv} is a snapshot taken when the JVM built its environment map and
+     * does not observe a {@code setenv} issued afterwards, so a Java-side check cannot see a value
+     * installed natively after startup. Native {@code getenv} can.
+     *
+     * <p>Callers must use the <b>returned</b> value rather than assuming their argument was
+     * applied — it may be someone else's path.
+     *
+     * @param path absolute path to the OpenVINO C library file, used only if none is set
+     * @return the path actually in force, or {@code null} if it could not be determined
+     */
+    public static native String setOpenVinoLibPathIfAbsent(String path);
+
+    /**
      * Called from native code (the ExecuTorch PAL sink) to route an ET_LOG message to slf4j.
      * Level codes match {@code measly::et::Slf4jLevel}: 0=debug, 1=info, 2=warn, 3=error
      * (unknown → info).

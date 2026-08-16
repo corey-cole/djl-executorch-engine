@@ -30,7 +30,7 @@ dependencies {
 }
 
 tasks.test {
-    useJUnitPlatform { excludeTags("leak", "oom", "intraop", "jmx-disabled", "stats-degraded", "stress", "stress-sweep", "stress-baseline") }
+    useJUnitPlatform { excludeTags("leak", "oom", "openvino", "intraop", "jmx-disabled", "stats-degraded", "stress", "stress-sweep", "stress-baseline") }
     jvmArgs("-XX:+HeapDumpOnOutOfMemoryError")
     finalizedBy(tasks.jacocoTestReport)
 }
@@ -103,6 +103,17 @@ val statsDegradedTest = tasks.register<Test>("statsDegradedTest") {
         "EXECUTORCH_LIBRARY_PATH",
         file("src/test/resources/not-a-library.txt").absolutePath,
     )
+}
+
+// Forked per class: OPENVINO_LIB_PATH is process environment and the delegate's dlopen is
+// once-only, so cases sharing a JVM contaminate each other in ways that present as flakes.
+tasks.register<Test>("openvinoTest") {
+  group = "verification"
+  description = "OpenVINO delegate tests (linux-x86_64 with the openvino bundle)"
+  testClassesDirs = sourceSets["test"].output.classesDirs
+  classpath = sourceSets["test"].runtimeClasspath
+  useJUnitPlatform { includeTags("openvino") }
+  forkEvery = 1
 }
 
 val checkDocLinks = tasks.register<Exec>("checkDocLinks") {

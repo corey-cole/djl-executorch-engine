@@ -1,6 +1,7 @@
 // Thin JNI shell over measly::et::EtRuntime. Raw JNI, no fbjni. Translation only.
 #include <jni.h>
 
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -418,6 +419,44 @@ Java_org_measly_executorch_jni_EtNative_pteUsesBackend(
     throwJava(env, "Backend detection failed", &e);
     return JNI_FALSE;
   }
+}
+
+// Sets OPENVINO_LIB_PATH only if it is not already set, and reports the value in force afterwards.
+// This exists because a JVM has no other way to configure it: System.getenv is read-only and
+// glibc's loader read LD_LIBRARY_PATH once, long ago. The delegate reads OPENVINO_LIB_PATH at
+// dlopen time, so writing it here still lands -- provided it runs before the first OpenVINO
+// inference, because that dlopen is once-only.
+//
+// SET-IF-ABSENT, not overwrite, and the decision is made HERE rather than in Java on purpose.
+// std::getenv sees the live environment; Java's System.getenv is a snapshot taken when the JVM
+// built its environment map and does not observe a setenv issued afterwards. So a value installed
+// natively after JVM start -- by an agent, another library, or this engine under a different
+// classloader -- is invisible to the Java check, and an overwrite there would silently replace a
+// configuration someone deliberately installed. Only this frame can see the truth, so only this
+// frame gets to decide.
+//
+// Returning the effective value makes that decision observable: the caller learns which path is
+// actually in force rather than assuming its own argument won.
+extern "C" JNIEXPORT jstring JNICALL
+Java_org_measly_executorch_jni_EtNative_setOpenVinoLibPathIfAbsent(
+    JNIEnv* env, jclass, jstring path) {
+  const char* existing = std::getenv("OPENVINO_LIB_PATH");
+  if (existing != nullptr && *existing != '\0') {
+    return env->NewStringUTF(existing);  // someone got here first; they win
+  }
+  const char* value = env->GetStringUTFChars(path, nullptr);
+  if (value == nullptr) {
+    return nullptr;  // OOM already pending; setenv with a null value would be UB
+  }
+  const int rc = setenv("OPENVINO_LIB_PATH", value, 1);
+  std::string effective(value);
+  // Released before the throw, not after: nothing is held across a JNI call that can fail.
+  env->ReleaseStringUTFChars(path, value);
+  if (rc != 0) {
+    throwJava(env, "setenv(OPENVINO_LIB_PATH) failed", nullptr);
+    return nullptr;
+  }
+  return env->NewStringUTF(effective.c_str());
 }
 
 // Total capacity of the input staging slots, for the stats path. Two distinct zero-ish results the
