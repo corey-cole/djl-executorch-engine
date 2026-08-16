@@ -2,11 +2,14 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <variant>
+
+#include <sys/stat.h>
 
 #include <executorch/extension/module/module.h>
 #include <executorch/extension/tensor/tensor.h>
@@ -84,6 +87,20 @@ MethodMeta buildMethodMeta(Module& module) {
   return out;
 }
 
+// Whether a backend is registered in this build. Registration is link-time, so this answers "was
+// the delegate compiled in", not "is it configured". Signatures per
+// runtime/backend/interface.h:179,184 in the pinned runtime -- note both are size_t-indexed.
+bool isBackendAvailable(const char* name) {
+  const size_t n = executorch::ET_RUNTIME_NAMESPACE::get_num_registered_backends();
+  for (size_t i = 0; i < n; ++i) {
+    const auto backendName = executorch::ET_RUNTIME_NAMESPACE::get_backend_name(i);
+    if (backendName.ok() && std::strcmp(*backendName, name) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode)
@@ -135,6 +152,37 @@ EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode)
   // Side effect, intended: the XNNPACK subgraph compile now happens at construction instead of on
   // the first forward(). In the timing harness that shifts cost from cold_ms into load_ms; warmup
   // is discarded there, so steady-state numbers are unaffected.
+  // Refuse an OpenVINO-delegated model that cannot possibly succeed, BEFORE load_forward() -- which
+  // is delegate init. This matters more than a typical precondition check: OpenvinoBackend resolves
+  // the OpenVINO C API with dlopen under std::call_once and never retries, so a failure that
+  // reaches it leaves the whole process broken until restart. Raising here keeps the failure an
+  // ordinary exception and the process usable.
+  //
+  // Duplicated by the Java layer deliberately: EtNative is public and bypasses EtModel, and our own
+  // tests call it directly.
+  auto etMeta = state_->module.method_meta("forward");
+  if (etMeta.ok() && etMeta->uses_backend("OpenvinoBackend")) {
+    if (!isBackendAvailable("OpenvinoBackend")) {
+      throw std::runtime_error(
+          "This .pte uses the OpenvinoBackend delegate, which this build does not provide. "
+          "The OpenVINO delegate ships only where the runtime tarball was built with it. "
+          "Re-export without the OpenVINO partitioner to run here.");
+    }
+    const char* lib = std::getenv("OPENVINO_LIB_PATH");
+    if (lib == nullptr || *lib == '\0') {
+      throw std::runtime_error(
+          "This .pte uses the OpenvinoBackend delegate, but OPENVINO_LIB_PATH is not set. "
+          "Set it to the FULL PATH OF THE LIBRARY FILE (not a directory) before the first "
+          "inference, or add the djl-executorch-engine <platform>-openvino artifact and load "
+          "through EtModel, which resolves it for you.");
+    }
+    struct stat st {};
+    if (stat(lib, &st) != 0 || !S_ISREG(st.st_mode)) {
+      throw std::runtime_error(
+          std::string("OPENVINO_LIB_PATH does not name a readable file: '") + lib +
+          "'. It must be the full path to the library FILE, not the directory containing it.");
+    }
+  }
   if (state_->module.load_forward() != executorch::runtime::Error::Ok) {
     throw std::runtime_error("EtRuntime: failed to load \"forward\" from .pte: " + ptePath);
   }

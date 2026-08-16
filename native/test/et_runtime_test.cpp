@@ -435,3 +435,21 @@ TEST_CASE("backend detection: a missing file throws rather than reporting false"
   // caller down the non-OpenVINO path and losing the real error until much later.
   REQUIRE_THROWS([] { pteUsesBackend("/nonexistent/definitely-not-here.pte", "OpenvinoBackend"); }());
 }
+
+// This is the test that protects the process. Without the guard, constructing an EtRuntime over an
+// OpenVINO model with OPENVINO_LIB_PATH unset reaches OpenvinoBackend::init, whose dlopen runs
+// under std::call_once and never retries -- so the FIRST bad attempt poisons every later attempt in
+// this process, including correct ones. Catch2 runs all cases in one process, which is exactly the
+// blast radius this prevents.
+TEST_CASE("openvino: an unconfigured OPENVINO_LIB_PATH is refused before delegate init") {
+  unsetenv("OPENVINO_LIB_PATH");
+  REQUIRE_THROWS([] { EtRuntime rt(OPENVINO_TINY_PTE_PATH); }());
+}
+
+TEST_CASE("openvino: OPENVINO_LIB_PATH pointing at a directory is refused") {
+  // Upstream's documented top mistake. The error the delegate would otherwise produce mentions
+  // LD_LIBRARY_PATH, which reads like it wants a directory. It does not -- it wants the file.
+  setenv("OPENVINO_LIB_PATH", "/tmp", 1);
+  REQUIRE_THROWS([] { EtRuntime rt(OPENVINO_TINY_PTE_PATH); }());
+  unsetenv("OPENVINO_LIB_PATH");
+}
