@@ -129,11 +129,10 @@ else()
       "bare/devtools are Linux-only (benchmarking; see native/build_variants.sh).")
   endif()
   set(_ET_STEM "executorch-runtime-${ET_RUNTIME_ET_VERSION}-${ET_RUNTIME_VARIANT}-${ET_RUNTIME_ROW}")
-  set(_ET_RESOLVED_URL "${ET_RUNTIME_URL_${ET_RUNTIME_VARIANT}_${ET_RUNTIME_ROW}}")
-  set(_ET_RESOLVED_SHA "${ET_RUNTIME_SHA256_${ET_RUNTIME_VARIANT}_${ET_RUNTIME_ROW}}")
-  if(NOT _ET_RESOLVED_URL)
-    message(FATAL_ERROR "No pin row for variant='${ET_RUNTIME_VARIANT}' row='${ET_RUNTIME_ROW}' (platform='${ET_PLATFORM}') in EtRuntimePin.cmake")
-  endif()
+  # The pin file's own selector: it FATAL_ERRORs on a row it does not define, so an unpublished
+  # variant/platform pair fails here by name rather than expanding to an empty URL and surfacing
+  # later as an opaque FetchContent error.
+  et_runtime_dist_url("${ET_RUNTIME_VARIANT}" "${ET_RUNTIME_ROW}" _ET_RESOLVED_URL _ET_RESOLVED_SHA)
 endif()
 
 if(ET_PRINT_RESOLUTION)
