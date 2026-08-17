@@ -9,6 +9,7 @@
 #include <utility>
 #include <variant>
 
+#include <dlfcn.h>
 #include <sys/stat.h>
 
 #include <executorch/extension/module/module.h>
@@ -409,6 +410,48 @@ bool pteUsesBackend(const std::string& ptePath, const std::string& backend) {
         std::to_string(static_cast<int>(meta.error())) + ")");
   }
   return meta->uses_backend(backend.c_str());
+}
+
+std::string openVinoInferencePrecision(const std::string& libPath) {
+  // dlopen'd rather than linked: we have no OpenVINO at link time, and the delegate resolves the
+  // same library the same way. Refcounted, so opening it here is safe alongside the delegate's own
+  // handle. RTLD_LOCAL so nothing here perturbs the delegate's symbol resolution.
+  void* handle = dlopen(libPath.c_str(), RTLD_LAZY | RTLD_LOCAL);
+  if (handle == nullptr) {
+    return "unavailable";
+  }
+  using CoreCreate = int (*)(void**);
+  using CoreGetProperty = int (*)(void*, const char*, const char*, char**);
+  using CoreFree = void (*)(void*);
+  using Free = void (*)(const char*);
+
+  auto create = reinterpret_cast<CoreCreate>(dlsym(handle, "ov_core_create"));
+  auto getProperty = reinterpret_cast<CoreGetProperty>(dlsym(handle, "ov_core_get_property"));
+  auto coreFree = reinterpret_cast<CoreFree>(dlsym(handle, "ov_core_free"));
+  auto ovFree = reinterpret_cast<Free>(dlsym(handle, "ov_free"));
+  if (create == nullptr || getProperty == nullptr || coreFree == nullptr) {
+    dlclose(handle);
+    return "unavailable";
+  }
+
+  void* core = nullptr;
+  if (create(&core) != 0 || core == nullptr) {
+    dlclose(handle);
+    return "unavailable";
+  }
+  char* value = nullptr;
+  std::string result = "unavailable";
+  if (getProperty(core, "CPU", "INFERENCE_PRECISION_HINT", &value) == 0 && value != nullptr) {
+    result = value;
+    if (ovFree != nullptr) {
+      ovFree(value);
+    }
+  }
+  coreFree(core);
+  // Not dlclose'd on the success path: the delegate may hold the same library, and OpenVINO
+  // registers plugin state that does not expect to be torn down and rebuilt. The handle is
+  // process-lifetime by design; this is a diagnostic called a handful of times at most.
+  return result;
 }
 
 }  // namespace measly::et

@@ -459,6 +459,21 @@ Java_org_measly_executorch_jni_EtNative_setOpenVinoLibPathIfAbsent(
   return env->NewStringUTF(effective.c_str());
 }
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_org_measly_executorch_jni_EtNative_openVinoInferencePrecision(
+    JNIEnv* env, jclass, jstring libPath) {
+  const char* path = env->GetStringUTFChars(libPath, nullptr);
+  if (path == nullptr) {
+    return nullptr;  // OOM pending; the Java wrapper degrades this to "unavailable"
+  }
+  std::string p(path);
+  env->ReleaseStringUTFChars(libPath, path);
+  // Same copy-then-release shape as the other entry points: no JNI resource is held across the
+  // call, so no path through here can leak one.
+  const std::string result = measly::et::openVinoInferencePrecision(p);
+  return env->NewStringUTF(result.c_str());
+}
+
 // Total capacity of the input staging slots, for the stats path. Two distinct zero-ish results the
 // caller must not conflate: a genuine 0 means every input is memory-planned (the export default)
 // and nothing is ever staged, whereas -1 is the error return after an exception was scheduled.

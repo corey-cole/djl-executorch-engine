@@ -145,5 +145,17 @@ int64_t xnnpackWorkspaceBytes();
 // false there would be indistinguishable from "needs no delegate" and would hide the real error.
 bool pteUsesBackend(const std::string& ptePath, const std::string& backend);
 
+// The numeric type OpenVINO will use for CPU inference on this host ("f32", "bf16", ...), or
+// "unavailable" if it cannot be determined.
+//
+// Reads through a FRESHLY CREATED ov::Core, not the Core the delegate built inside OpenvinoBackend.
+// Those agree today because the choice derives from CPU capability alone; if per-model precision
+// control is ever added they could diverge, and this would have to read through the delegate --
+// which ExecuTorch exposes no way to do.
+//
+// Creating a Core loads the CPU plugin and is not cheap. This is an on-demand diagnostic: never
+// call it on the hot path or during model load.
+std::string openVinoInferencePrecision(const std::string& libPath);
+
 }  // namespace measly::et
 #endif  // MEASLY_ET_RUNTIME_H

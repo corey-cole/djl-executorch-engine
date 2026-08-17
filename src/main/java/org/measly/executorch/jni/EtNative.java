@@ -133,6 +133,14 @@ public final class EtNative {
     public static native String setOpenVinoLibPathIfAbsent(String path);
 
     /**
+     * Reads the numeric type OpenVINO will use for CPU inference on this host.
+     *
+     * @param libPath absolute path to the OpenVINO C library file
+     * @return e.g. {@code f32} or {@code bf16}, or {@code unavailable}
+     */
+    public static native String openVinoInferencePrecision(String libPath);
+
+    /**
      * Called from native code (the ExecuTorch PAL sink) to route an ET_LOG message to slf4j.
      * Level codes match {@code measly::et::Slf4jLevel}: 0=debug, 1=info, 2=warn, 3=error
      * (unknown → info).
