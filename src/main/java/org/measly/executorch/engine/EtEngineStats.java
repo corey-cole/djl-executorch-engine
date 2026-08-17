@@ -232,6 +232,7 @@ public final class EtEngineStats {
                 models.size(),
                 arena,
                 staging,
+                safeXnnpackWorkspaceBytes(),
                 CLOSED_FORWARD_COUNT.get(),
                 CLOSED_FORWARD_TOTAL_NANOS.get(),
                 Collections.unmodifiableList(models));
@@ -272,6 +273,17 @@ public final class EtEngineStats {
             // on first access and NoClassDefFoundError afterwards. A broken or absent library must
             // degrade this read, never throw out of snapshot().
             return -1; // native library unavailable
+        }
+    }
+
+    private static long safeXnnpackWorkspaceBytes() {
+        try {
+            return EtNative.xnnpackWorkspaceBytes();
+        } catch (RuntimeException | LinkageError e) {
+            // Same degradation contract as safeIntraOpThreads() above, and the same -1. The native
+            // side already reports its own failures in band as -1, so this catch covers only the
+            // library being absent or unloadable.
+            return -1;
         }
     }
 }

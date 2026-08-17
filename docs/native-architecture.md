@@ -94,8 +94,17 @@ and exports for real work are planned — `native/spike/add.pte`, the MobileNetV
 `build_qa.sh` — by `et_leak_harness`), `clamp5.pte` and `lin129.pte` from `export_w4_models.py`,
 and a `mobilenet_v2_unplanned.pte` that `tools/scripts/export_mobilenet.py` generates alongside
 the planned one. Reading which one you have is not guesswork: the flag is plumbed all the way to
-Java (`EtMethodMeta.inputMemoryPlanned`) and logged per input at model load. The full contract, both
-directions, with the ExecuTorch source references:
+Java (`EtMethodMeta.inputMemoryPlanned`) and logged per input at model load.
+
+`native/spike/conv.pte` (from `export_conv.py`) is unrelated to memory planning and exists for a
+different reason: it is the only fixture that makes XNNPACK allocate a workspace arena. Delegating
+and allocating are separate properties — `add.pte` is a single node with external input and output,
+and `lin129.pte` lowers to a GEMM over statically packed weights, so both delegate and both grow the
+arena by exactly zero. Any `xnnpackWorkspaceBytes()` assertion built on them would pass vacuously or
+fail against a correct build. The arena also grows on the first *execute*, not at delegate init, so
+the fixture must be forwarded and not merely loaded.
+
+The full contract, both directions, with the ExecuTorch source references:
 [executorch-host-buffer-contract-brief.md](executorch-host-buffer-contract-brief.md).
 
 Two load-time rejections shape everything downstream, both in `EtRuntime`'s constructor. A method

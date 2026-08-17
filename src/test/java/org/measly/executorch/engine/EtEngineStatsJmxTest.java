@@ -32,6 +32,12 @@ class EtEngineStatsJmxTest {
             CompositeData data = (CompositeData) value;
             assertEquals("1.3.1", data.get("executorchVersion"));
             assertNotNull(data.get("models"));
+            // The MXBean surface is derived from the getters by reflection, so a new field reaches
+            // JMX only if its getter is bean-conforming. Asserting the key is present catches a
+            // getter that snapshot() populates but JMX silently drops.
+            assertNotNull(
+                    data.get("xnnpackWorkspaceBytes"),
+                    "the workspace figure must survive the CompositeData conversion");
         } finally {
             EtEngineStats.unregisterMBean();
         }

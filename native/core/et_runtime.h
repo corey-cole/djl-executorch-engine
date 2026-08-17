@@ -116,5 +116,23 @@ class EtRuntime {
 uint32_t setIntraOpThreads(uint32_t n);
 uint32_t intraOpThreads();
 
+// Size in bytes of the XNNPACK delegate's memory arena, or -1 when it cannot be read.
+//
+// Read through the backend-options API by string: XNNPACKBackend.h is not an installed header,
+// so the backend name and option key cannot be included and are spelled out in the .cpp.
+//
+// Three properties a caller must not paper over:
+//   * Process-wide. The runtime pins EXECUTORCH_XNNPACK_SHARED_WORKSPACE=ON, so every delegate
+//     instance shares one arena and this figure is already the total. Never sum it per model.
+//   * A high-water mark, including allocator alignment padding. The arena grows on demand and is
+//     never shrunk, so it is the peak, not the live footprint, and slightly over-states tensor data.
+//   * 0 before the first XNNPACK-delegated method loads. The arena is created lazily during
+//     delegate init, so a 0 there is the correct answer, not a broken accessor -- which is why
+//     failure is reported as -1 and never folded into 0.
+//
+// The option is a vendored patch in the pinned distribution, not upstream ExecuTorch. Against a
+// stock runtime this returns -1 rather than failing to build, since it names the key by string.
+int64_t xnnpackWorkspaceBytes();
+
 }  // namespace measly::et
 #endif  // MEASLY_ET_RUNTIME_H

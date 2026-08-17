@@ -20,6 +20,7 @@ public final class EtStatsSnapshot {
     private final long modelsLive;
     private final long totalPlannedArenaBytes;
     private final long totalStagingBytes;
+    private final long xnnpackWorkspaceBytes;
     private final long closedForwardCount;
     private final long closedForwardTotalNanos;
     private final List<EtModelStats> models;
@@ -34,6 +35,7 @@ public final class EtStatsSnapshot {
             long modelsLive,
             long totalPlannedArenaBytes,
             long totalStagingBytes,
+            long xnnpackWorkspaceBytes,
             long closedForwardCount,
             long closedForwardTotalNanos,
             List<EtModelStats> models) {
@@ -46,6 +48,7 @@ public final class EtStatsSnapshot {
         this.modelsLive = modelsLive;
         this.totalPlannedArenaBytes = totalPlannedArenaBytes;
         this.totalStagingBytes = totalStagingBytes;
+        this.xnnpackWorkspaceBytes = xnnpackWorkspaceBytes;
         this.closedForwardCount = closedForwardCount;
         this.closedForwardTotalNanos = closedForwardTotalNanos;
         this.models = models;
@@ -100,6 +103,31 @@ public final class EtStatsSnapshot {
     /** @return summed staging bytes of all live models; {@code 0} when all inputs are planned */
     public long getTotalStagingBytes() {
         return totalStagingBytes;
+    }
+
+    /**
+     * Size in bytes of the XNNPACK delegate's memory arena, or {@code -1} when unavailable.
+     *
+     * <p>Unlike every other byte field here this is <b>not</b> a sum over live models: the pinned
+     * runtime sets {@code EXECUTORCH_XNNPACK_SHARED_WORKSPACE=ON}, so one arena backs every
+     * delegate in the process and this figure is already the total. There is deliberately no
+     * per-model counterpart — the runtime offers no basis for attributing a shared arena, and a
+     * per-model field would report a number that looked attributable and was not.
+     *
+     * <p>It is a <b>high-water mark</b> including allocator alignment padding: the arena grows on
+     * demand and is never shrunk, so it is the peak rather than the live footprint, and it
+     * slightly over-states actual tensor bytes.
+     *
+     * <p>{@code 0} is a real answer, not a failure. It stands until an XNNPACK-delegated method
+     * <b>executes</b> — loading one does not grow the arena, and a delegated model that allocates
+     * nothing never will (an elementwise add and a Linear both measure 0 on the pinned runtime).
+     * Genuine unavailability is {@code -1}, following the same convention as
+     * {@link EtModelStats#getStagingBytes()}.
+     *
+     * @return arena bytes, {@code 0} when nothing has allocated yet, or {@code -1} if unreadable
+     */
+    public long getXnnpackWorkspaceBytes() {
+        return xnnpackWorkspaceBytes;
     }
 
     /** @return forwards completed by models that have since been closed */
