@@ -1,6 +1,7 @@
 // Thin JNI shell over measly::et::EtRuntime. Raw JNI, no fbjni. Translation only.
 #include <jni.h>
 
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -391,6 +392,107 @@ Java_org_measly_executorch_jni_EtNative_intraOpThreads(JNIEnv* env, jclass) {
 extern "C" JNIEXPORT jlong JNICALL
 Java_org_measly_executorch_jni_EtNative_xnnpackWorkspaceBytes(JNIEnv* env, jclass) {
   return static_cast<jlong>(measly::et::xnnpackWorkspaceBytes());
+}
+
+// Metadata-only backend probe. Unlike loadModule this does NOT construct an EtRuntime, so it
+// cannot trigger delegate init -- which is the only reason it exists as a separate entry point.
+// Whether a backend's archive was linked into this build. Distinguishes "this build cannot run the
+// model at all" from "it can, once an OpenVINO runtime is supplied" -- two states that need
+// different advice, and which the Java layer cannot otherwise tell apart.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_org_measly_executorch_jni_EtNative_backendRegistered(JNIEnv* env, jclass, jstring backend) {
+  const char* name = env->GetStringUTFChars(backend, nullptr);
+  if (name == nullptr) {
+    return JNI_FALSE;  // OOM already pending
+  }
+  std::string b(name);
+  env->ReleaseStringUTFChars(backend, name);
+  return measly::et::isBackendRegistered(b) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_org_measly_executorch_jni_EtNative_pteUsesBackend(
+    JNIEnv* env, jclass, jstring ptePath, jstring backend) {
+  const char* path = env->GetStringUTFChars(ptePath, nullptr);
+  if (path == nullptr) {
+    return JNI_FALSE;  // OOM already pending; do not call another JNI function that could fail
+  }
+  std::string p(path);
+  env->ReleaseStringUTFChars(ptePath, path);
+
+  const char* name = env->GetStringUTFChars(backend, nullptr);
+  if (name == nullptr) {
+    return JNI_FALSE;
+  }
+  std::string b(name);
+  env->ReleaseStringUTFChars(backend, name);
+
+  try {
+    return measly::et::pteUsesBackend(p, b) ? JNI_TRUE : JNI_FALSE;
+  } catch (const std::exception& e) {
+    throwJava(env, "Backend detection failed", &e);
+    return JNI_FALSE;
+  }
+}
+
+// Sets OPENVINO_LIB_PATH only if it is not already set, and reports the value in force afterwards.
+// This exists because a JVM has no other way to configure it: System.getenv is read-only and
+// glibc's loader read LD_LIBRARY_PATH once, long ago. The delegate reads OPENVINO_LIB_PATH at
+// dlopen time, so writing it here still lands -- provided it runs before the first OpenVINO
+// inference, because that dlopen is once-only.
+//
+// SET-IF-ABSENT, not overwrite, and the decision is made HERE rather than in Java on purpose.
+// std::getenv sees the live environment; Java's System.getenv is a snapshot taken when the JVM
+// built its environment map and does not observe a setenv issued afterwards. So a value installed
+// natively after JVM start -- by an agent, another library, or this engine under a different
+// classloader -- is invisible to the Java check, and an overwrite there would silently replace a
+// configuration someone deliberately installed. Only this frame can see the truth, so only this
+// frame gets to decide.
+//
+// Returning the effective value makes that decision observable: the caller learns which path is
+// actually in force rather than assuming its own argument won.
+extern "C" JNIEXPORT jstring JNICALL
+Java_org_measly_executorch_jni_EtNative_setOpenVinoLibPathIfAbsent(
+    JNIEnv* env, jclass, jstring path) {
+  const char* existing = std::getenv("OPENVINO_LIB_PATH");
+  if (existing != nullptr && *existing != '\0') {
+    return env->NewStringUTF(existing);  // someone got here first; they win
+  }
+  const char* value = env->GetStringUTFChars(path, nullptr);
+  if (value == nullptr) {
+    return nullptr;  // OOM already pending; setenv with a null value would be UB
+  }
+  // setenv is POSIX-only; MSVC exposes _putenv_s (same "set, overwrite, return 0 on success"
+  // contract, declared in <cstdlib> alongside setenv). OpenVINO is linux-only, so on Windows this
+  // is dead-but-compilable -- which is exactly the point of the branch: the shim builds there.
+#ifdef _WIN32
+  const int rc = _putenv_s("OPENVINO_LIB_PATH", value);
+#else
+  const int rc = setenv("OPENVINO_LIB_PATH", value, 1);
+#endif
+  std::string effective(value);
+  // Released before the throw, not after: nothing is held across a JNI call that can fail.
+  env->ReleaseStringUTFChars(path, value);
+  if (rc != 0) {
+    throwJava(env, "setenv(OPENVINO_LIB_PATH) failed", nullptr);
+    return nullptr;
+  }
+  return env->NewStringUTF(effective.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_org_measly_executorch_jni_EtNative_openVinoInferencePrecision(
+    JNIEnv* env, jclass, jstring libPath) {
+  const char* path = env->GetStringUTFChars(libPath, nullptr);
+  if (path == nullptr) {
+    return nullptr;  // OOM pending; the Java wrapper degrades this to "unavailable"
+  }
+  std::string p(path);
+  env->ReleaseStringUTFChars(libPath, path);
+  // Same copy-then-release shape as the other entry points: no JNI resource is held across the
+  // call, so no path through here can leak one.
+  const std::string result = measly::et::openVinoInferencePrecision(p);
+  return env->NewStringUTF(result.c_str());
 }
 
 // Total capacity of the input staging slots, for the stats path. Two distinct zero-ish results the

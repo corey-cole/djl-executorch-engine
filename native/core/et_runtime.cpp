@@ -2,11 +2,20 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <variant>
+
+// dlopen is POSIX-only; MSVC has no <dlfcn.h>. openVinoInferencePrecision() (below) is guarded
+// the same way, so the include is only needed where the body exists. The rest of this file uses
+// only C-standard and ExecuTorch APIs and must keep compiling on the Windows shim build.
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+#include <sys/stat.h>
 
 #include <executorch/extension/module/module.h>
 #include <executorch/extension/tensor/tensor.h>
@@ -84,6 +93,20 @@ MethodMeta buildMethodMeta(Module& module) {
   return out;
 }
 
+// Whether a backend is registered in this build. Registration is link-time, so this answers "was
+// the delegate compiled in", not "is it configured". Signatures per
+// runtime/backend/interface.h:179,184 in the pinned runtime -- note both are size_t-indexed.
+bool isBackendAvailable(const char* name) {
+  const size_t n = executorch::ET_RUNTIME_NAMESPACE::get_num_registered_backends();
+  for (size_t i = 0; i < n; ++i) {
+    const auto backendName = executorch::ET_RUNTIME_NAMESPACE::get_backend_name(i);
+    if (backendName.ok() && std::strcmp(*backendName, name) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode)
@@ -135,6 +158,43 @@ EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode)
   // Side effect, intended: the XNNPACK subgraph compile now happens at construction instead of on
   // the first forward(). In the timing harness that shifts cost from cold_ms into load_ms; warmup
   // is discarded there, so steady-state numbers are unaffected.
+  // Refuse an OpenVINO-delegated model that cannot possibly succeed, BEFORE load_forward() -- which
+  // is delegate init. This matters more than a typical precondition check: OpenvinoBackend resolves
+  // the OpenVINO C API with dlopen under std::call_once and never retries, so a failure that
+  // reaches it leaves the whole process broken until restart. Raising here keeps the failure an
+  // ordinary exception and the process usable.
+  //
+  // Duplicated by the Java layer deliberately: EtNative is public and bypasses EtModel, and our own
+  // tests call it directly.
+  auto etMeta = state_->module.method_meta("forward");
+  if (etMeta.ok() && etMeta->uses_backend("OpenvinoBackend")) {
+    if (!isBackendAvailable("OpenvinoBackend")) {
+      throw std::runtime_error(
+          "This .pte uses the OpenvinoBackend delegate, which this build does not provide. "
+          "The OpenVINO delegate ships only where the runtime tarball was built with it. "
+          "Re-export without the OpenVINO partitioner to run here.");
+    }
+    const char* lib = std::getenv("OPENVINO_LIB_PATH");
+    if (lib == nullptr || *lib == '\0') {
+      throw std::runtime_error(
+          // Deliberately does NOT name a per-platform artifact. This layer knows neither the
+          // platform nor whether an OpenVINO bundle is published for it, and the delegate ships on
+          // platforms that have no bundle -- so naming one here told aarch64 users to fetch
+          // something that does not exist. EtModel's Java path knows both and says more.
+          "This .pte uses the OpenvinoBackend delegate, but OPENVINO_LIB_PATH is not set. "
+          "Set it to the FULL PATH OF THE LIBRARY FILE (not a directory) before the first "
+          "inference, or load through EtModel, which resolves a bundled runtime when one is "
+          "available for this platform.");
+    }
+    struct stat st {};
+    // S_ISREG is a POSIX macro MSVC does not provide; S_IFMT/S_IFREG exist on both, and the
+    // expansion is identical, so this form keeps the Windows shim compiling.
+    if (stat(lib, &st) != 0 || (st.st_mode & S_IFMT) != S_IFREG) {
+      throw std::runtime_error(
+          std::string("OPENVINO_LIB_PATH does not name a readable file: '") + lib +
+          "'. It must be the full path to the library FILE, not the directory containing it.");
+    }
+  }
   if (state_->module.load_forward() != executorch::runtime::Error::Ok) {
     throw std::runtime_error("EtRuntime: failed to load \"forward\" from .pte: " + ptePath);
   }
@@ -350,6 +410,72 @@ int64_t xnnpackWorkspaceBytes() {
   // us, which is an "unavailable" rather than a value worth guessing at.
   const int* value = std::get_if<int>(&opt.value);
   return (value == nullptr) ? -1 : static_cast<int64_t>(*value);
+}
+
+bool isBackendRegistered(const std::string& backend) {
+  return isBackendAvailable(backend.c_str());
+}
+
+bool pteUsesBackend(const std::string& ptePath, const std::string& backend) {
+  Module probe(ptePath);
+  const auto meta = probe.method_meta("forward");
+  if (!meta.ok()) {
+    throw std::runtime_error(
+        "pteUsesBackend: cannot read method metadata from " + ptePath + " (error " +
+        std::to_string(static_cast<int>(meta.error())) + ")");
+  }
+  return meta->uses_backend(backend.c_str());
+}
+
+std::string openVinoInferencePrecision(const std::string& libPath) {
+  // OpenVINO is linux-x86_64 only and MSVC has no dlopen, so the probe body is POSIX-guarded and
+  // the Windows build reports "unavailable" -- which is also the honest answer there, since no
+  // vendored runtime exists to read from. The accessor's contract (EtEngine) is to degrade to
+  // "unavailable" rather than throw, so callers need no platform awareness.
+#ifndef _WIN32
+  // dlopen'd rather than linked: we have no OpenVINO at link time, and the delegate resolves the
+  // same library the same way. Refcounted, so opening it here is safe alongside the delegate's own
+  // handle. RTLD_LOCAL so nothing here perturbs the delegate's symbol resolution.
+  void* handle = dlopen(libPath.c_str(), RTLD_LAZY | RTLD_LOCAL);
+  if (handle == nullptr) {
+    return "unavailable";
+  }
+  using CoreCreate = int (*)(void**);
+  using CoreGetProperty = int (*)(void*, const char*, const char*, char**);
+  using CoreFree = void (*)(void*);
+  using Free = void (*)(const char*);
+
+  auto create = reinterpret_cast<CoreCreate>(dlsym(handle, "ov_core_create"));
+  auto getProperty = reinterpret_cast<CoreGetProperty>(dlsym(handle, "ov_core_get_property"));
+  auto coreFree = reinterpret_cast<CoreFree>(dlsym(handle, "ov_core_free"));
+  auto ovFree = reinterpret_cast<Free>(dlsym(handle, "ov_free"));
+  if (create == nullptr || getProperty == nullptr || coreFree == nullptr) {
+    dlclose(handle);
+    return "unavailable";
+  }
+
+  void* core = nullptr;
+  if (create(&core) != 0 || core == nullptr) {
+    dlclose(handle);
+    return "unavailable";
+  }
+  char* value = nullptr;
+  std::string result = "unavailable";
+  if (getProperty(core, "CPU", "INFERENCE_PRECISION_HINT", &value) == 0 && value != nullptr) {
+    result = value;
+    if (ovFree != nullptr) {
+      ovFree(value);
+    }
+  }
+  coreFree(core);
+  // Not dlclose'd on the success path: the delegate may hold the same library, and OpenVINO
+  // registers plugin state that does not expect to be torn down and rebuilt. The handle is
+  // process-lifetime by design; this is a diagnostic called a handful of times at most.
+  return result;
+#else
+  (void)libPath;
+  return "unavailable";
+#endif
 }
 
 }  // namespace measly::et

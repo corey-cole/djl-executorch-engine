@@ -20,9 +20,17 @@ public final class TestSupport {
         return new File(path).isFile();
     }
 
-    /** Skips the test if the native library itself is unavailable (no model fixture needed). */
+    /** Skips the test (assumption) if the native library itself is unavailable (no model fixture needed). */
     public static void assumeNativeLibraryAvailable() {
         loadNativeLibrary();
+    }
+
+    /** Skips when the OpenVINO bundle jar is not on the classpath. */
+    public static void assumeOpenVinoBundleAvailable() {
+        assumeNativeLibraryAvailable();
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                org.measly.executorch.engine.OpenVinoRuntime.bundleAvailable(),
+                "OpenVINO bundle jar not on the classpath");
     }
 
     /** Skips the test (assumption) if the native lib or the test model fixture is unavailable. */

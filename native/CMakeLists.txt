@@ -167,6 +167,11 @@ target_link_libraries(et_runtime PUBLIC
   # Explicit, not transitive through xnnpack_backend: the core now calls
   # get_threadpool()/_unsafe_reset_threadpool itself (spec §5).
   extension_threadpool
+  # openVinoInferencePrecision() dlopens/dlsyms the vendored C API (Task 8). The dlopen usage is
+  # POSIX-only, and on glibc 2.28 (the manylinux floor) dlsym lives in libdl.so.2, so executables
+  # that link et_runtime (Catch2 units, harnesses) need -ldl. The shim tolerates the omission
+  # because shared libraries may carry undefined symbols, which is why this only surfaced in QA.
+  ${CMAKE_DL_LIBS}
 )
 
 # --- JNI shell shared library (loaded BY the JVM: JNI headers only, never libjvm/libjawt) ---
@@ -194,6 +199,28 @@ if(NOT ET_BUILD_QA AND NOT ET_BUILD_BENCH)
   target_include_directories(executorch_djl PRIVATE
     "${JAVA_HOME}/include" "${JAVA_HOME}/include/${_JNI_MD_DIR}")
   target_link_libraries(executorch_djl PRIVATE et_runtime)
+  # The OpenVINO delegate ships only in tarballs that were built with it -- linux-x86_64 today.
+  # Keyed on the TARGET rather than on ET_PLATFORM so a platform that later gains the delegate works
+  # with no edit here; upstream is actively exploring Windows.
+  #
+  # Deliberately NOT added to the post-link XNNPACK registration assertion: that guard exists to catch
+  # the XNNPACK registration being garbage-collected out of the .so, and folding in a target that
+  # legitimately does not exist on most platforms would convert a real guard into a platform
+  # conditional and weaken it.
+  #
+  # The archive is static and resolves the OpenVINO C API by dlopen at first use, so this adds no
+  # DT_NEEDED and drags in no OpenVINO shared object at link time.
+  #
+  # Linked PLAINLY, exactly like xnnpack_backend: the runtime's imported openvino_backend target
+  # already self-whole-archives via its INTERFACE_LINK_OPTIONS (ExecuTorchTargets.cmake), so a
+  # LINK_LIBRARY:WHOLE_ARCHIVE wrap here would link the archive twice and fail with multiple
+  # definitions of the OpenvinoBackend members.
+  if(TARGET openvino_backend)
+    target_link_libraries(executorch_djl PRIVATE openvino_backend)
+    message(STATUS "OpenVINO delegate: linked")
+  else()
+    message(STATUS "OpenVINO delegate: not present in this runtime (platform=${ET_PLATFORM})")
+  endif()
   # The shim is dlopen'd by a stock JVM that knows nothing about sanitizer runtimes, so UBSan's
   # runtime has to travel inside the .so. Without this the link succeeds and System.load fails
   # later -- in CI, possibly in a different job on a different machine than the build.
@@ -259,11 +286,28 @@ if(ET_BUILD_QA)
 
   add_executable(et_runtime_test ${CMAKE_CURRENT_SOURCE_DIR}/test/et_runtime_test.cpp)
   target_link_libraries(et_runtime_test PRIVATE et_runtime Catch2::Catch2WithMain)
+
+  # The OpenVINO delegate is NOT pulled in by et_runtime, and the shim -- the only other thing that
+  # links it -- is not built under ET_BUILD_QA. Without this the test binary carries no
+  # OpenvinoBackend registration, so the ctor guard's FIRST branch ("this build does not provide")
+  # fires for every OpenVINO case and the OPENVINO_LIB_PATH branches it is meant to exercise are
+  # unreachable. Linked plainly for the same reason the shim does: the imported target
+  # self-whole-archives via its INTERFACE_LINK_OPTIONS.
+  #
+  # ET_OPENVINO_LINKED tells the tests which guard branch to expect. It is genuinely
+  # platform-dependent -- linux-aarch64 ships no delegate -- so the tests assert the "not provided"
+  # message there and the env-specific messages here, rather than either one skipping.
+  if(TARGET openvino_backend)
+    target_link_libraries(et_runtime_test PRIVATE openvino_backend)
+    target_compile_definitions(et_runtime_test PRIVATE ET_OPENVINO_LINKED=1)
+  endif()
+
   target_compile_definitions(et_runtime_test PRIVATE
     ADD_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/add.pte"
     ADD_UNPLANNED_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/add_unplanned.pte"
     PRIM_INPUT_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/prim_input.pte"
-    CONV_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/conv.pte")
+    CONV_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/conv.pte"
+    OPENVINO_TINY_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../src/test/resources/models/openvino/openvino_tiny.pte")
   target_include_directories(et_runtime_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/jni)
 
   add_executable(et_leak_harness ${CMAKE_CURRENT_SOURCE_DIR}/harness/et_leak_harness.cpp)

@@ -134,5 +134,38 @@ uint32_t intraOpThreads();
 // stock runtime this returns -1 rather than failing to build, since it names the key by string.
 int64_t xnnpackWorkspaceBytes();
 
+// True if `ptePath`'s "forward" method is delegated to `backend` (e.g. "OpenvinoBackend").
+//
+// Reads METADATA ONLY: it builds a bare Module and asks method_meta, never load_forward(). That
+// distinction is the whole point. EtRuntime's ctor calls load_forward() unconditionally, and for a
+// delegated model that IS delegate init -- which for OpenVINO means a dlopen under std::call_once
+// with no retry. Anything that needs to act before delegate init must ask through here.
+//
+// Throws std::runtime_error if the file cannot be opened or its program cannot be read. Reporting
+// false there would be indistinguishable from "needs no delegate" and would hide the real error.
+bool pteUsesBackend(const std::string& ptePath, const std::string& backend);
+
+// True if `backend` is registered in this build, i.e. its archive was linked. Answers "was the
+// delegate compiled in", NOT "is it configured to run" -- registration is a link-time fact.
+//
+// Exposed because the two states need different advice and only the caller can tell them apart. A
+// build with no delegate cannot run the model at all (re-export is the fix); a build WITH the
+// delegate but no OpenVINO runtime for this platform can (supply a runtime). The delegate ships in
+// every Linux runtime tarball, including linux-aarch64, while the OpenVINO runtime bundle is
+// published for fewer platforms -- so the second case is real, not hypothetical.
+bool isBackendRegistered(const std::string& backend);
+
+// The numeric type OpenVINO will use for CPU inference on this host ("f32", "bf16", ...), or
+// "unavailable" if it cannot be determined.
+//
+// Reads through a FRESHLY CREATED ov::Core, not the Core the delegate built inside OpenvinoBackend.
+// Those agree today because the choice derives from CPU capability alone; if per-model precision
+// control is ever added they could diverge, and this would have to read through the delegate --
+// which ExecuTorch exposes no way to do.
+//
+// Creating a Core loads the CPU plugin and is not cheap. This is an on-demand diagnostic: never
+// call it on the hot path or during model load.
+std::string openVinoInferencePrecision(const std::string& libPath);
+
 }  // namespace measly::et
 #endif  // MEASLY_ET_RUNTIME_H

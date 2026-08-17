@@ -243,6 +243,29 @@ double for no new defect class.
   Linear measure 0; only a conv allocates, which is why `native/spike/conv.pte` exists). The backing
   option is a **vendored patch in the pinned distribution**, not upstream ExecuTorch, and requires
   runtime `1.3.1-10`+; against a stock runtime the key does not resolve and this reads `-1`.
+- **OpenVINO delegate.** Two things ship separately and on *different* platform sets — conflating
+  them is the mistake this bullet exists to prevent. The **delegate** (`libopenvino_backend.a`) is in
+  every Linux runtime tarball, **including `linux-aarch64`**, and is linked whenever
+  `TARGET openvino_backend` exists; only Windows lacks it. The **OpenVINO runtime bundle** is
+  published for `linux-x86_64` alone (`ET_RUNTIME_OPENVINO_PLATFORM`). So aarch64 links the delegate
+  but has no runtime to resolve, which is a third state distinct from both "supported" and
+  "unsupported": the model is runnable there the moment a runtime is supplied, and telling that user
+  to re-export would be wrong. `EtNative.backendRegistered` is what separates the two, and the
+  OpenVINO *runtime* is a separate ~21 MB opt-in jar
+  (capability `org.measly:djl-executorch-engine-<platform>-openvino`) — it is not in the standard
+  platform jar. Loading an OpenVINO `.pte` without it fails with a message naming the missing
+  artifact. The delegate resolves its C API by `dlopen` under `std::call_once` **with no retry**, so
+  every check happens before delegate init: a C++ guard in `EtRuntime`'s ctor before
+  `load_forward()`, and `OpenVinoRuntime.ensureReady` before `loadModule`. A JVM cannot use
+  `LD_LIBRARY_PATH` (glibc reads it once at process start), so `OPENVINO_LIB_PATH` set from JNI is
+  the only mechanism — and a caller-set value always wins. Bundle extraction is content-addressed on
+  the upstream tarball SHA under the `LibUtils` cache root, published by atomic directory rename;
+  nothing is ever loaded out of the staging directory. `EtEngine.openVinoInferencePrecision()`
+  reports whether this host computes in `f32` or `bf16`, which is what keeps the parity test's
+  `atol=1e-2` honest — **never tighten it**, both values are correct and the bound would then assert
+  which machine CI allocated. Bumping the vendored OpenVINO version touches four places across the
+  tree — `docs/openvino-version-bump.md` is the checklist, and the coupling tests name it when they
+  fail. Design: `docs/superpowers/specs/2026-08-16-openvino-linux-x86_64-design.md`.
 - `weight_cache_enabled` is deliberately **not** exposed. `XnnpackBackend::execute()` holds a second process-global mutex (`weights_cache_mutex_`) for the whole delegate call whenever a model uses the cache, which would undo everything `workspaceSharingMode=disabled` buys. It is off in our pin (`EXECUTORCH_XNNPACK_ENABLE_WEIGHT_CACHE=OFF`), which is what makes the `disabled` numbers above real — treat a pin bump that flips it as a performance regression. To enable it anyway no rebuild is needed: the macro guards only the *default*, and `XNNWeightsCache` is compiled into the shipped `libxnnpack_backend.a`. Set `weight_cache_enabled` (a **bool**) in the same `LoadBackendOptionsMap` built in `native/core/et_runtime.cpp`, and keep those models off the hot path.
 - `EtRuntime`'s constructor calls `Module::load_forward()` unconditionally so the workspace sharing mode (and any XNNPACK delegate) is resolved at construction, not deferred to the first `forward()`. This applies to every XNNPACK-delegated model, not only ones that set the new option: model loading is slower and the first inference is faster, an invalid sharing mode now fails at load rather than at first predict, and in `native/harness/et_timing_harness.cpp` this shifts measured cost from `cold_ms` into `load_ms` (steady-state throughput is unaffected since warmup is discarded there).
 - The `native/spike/` directory holds throwaway spike/smoke files (`EtNative.java`, `cpp_smoke.cpp`, `add.pte`), not production code.

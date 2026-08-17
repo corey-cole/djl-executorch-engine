@@ -158,6 +158,41 @@ public final class EtEngine extends Engine {
     }
 
     /**
+     * The numeric type OpenVINO will use for CPU inference on this host, e.g. {@code "f32"} or
+     * {@code "bf16"}, or {@code "unavailable"} when it cannot be determined.
+     *
+     * <p>OpenVINO selects this from the CPU it lands on rather than from how the model was
+     * compiled: on avx512_bf16/AMX hardware it computes in bf16, elsewhere in f32. Both are
+     * correct, and the difference against an f32 golden is ~2.5e-3 versus ~6e-8 — which is why
+     * OpenVINO parity tests use a loose tolerance. This exists so that looseness stays observable
+     * instead of hiding a silent shift.
+     *
+     * <p>Reports what a <b>freshly created</b> Core would choose, not a reading from the Core the
+     * delegate built. Those agree today because the choice derives from CPU capability alone.
+     *
+     * <p>Creating a Core loads the CPU plugin and is not cheap. This is an on-demand diagnostic:
+     * do not call it on the hot path or during model load. It returns {@code "unavailable"} rather
+     * than throwing, because a diagnostic that throws is a diagnostic people stop calling.
+     *
+     * @return the precision, or {@code "unavailable"}
+     */
+    public static String openVinoInferencePrecision() {
+        String lib = OpenVinoRuntime.resolvedLibPath();
+        if (lib == null) {
+            return "unavailable";
+        }
+        try {
+            // Null rather than a string means the native side could not even read its argument
+            // (OOM pending). Fold it into the same sentinel: this is a diagnostic, and a caller
+            // reading it should never have to distinguish degrees of unavailability.
+            String precision = EtNative.openVinoInferencePrecision(lib);
+            return (precision == null || precision.isEmpty()) ? "unavailable" : precision;
+        } catch (RuntimeException | LinkageError e) {
+            return "unavailable";
+        }
+    }
+
+    /**
      * Pure precedence/resolution used by the seal: the setter wins over the property; a present
      * but unparseable or < 1 property is WARNed and ignored (fall back to the runtime default --
      * a typo'd JVM flag must not fail startup). Returns the effective count, or -1 for the

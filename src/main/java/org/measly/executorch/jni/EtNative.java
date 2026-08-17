@@ -96,6 +96,67 @@ public final class EtNative {
     public static native long xnnpackWorkspaceBytes();
 
     /**
+     * Reports whether a {@code .pte}'s {@code forward} method is delegated to a given backend,
+     * reading metadata only.
+     *
+     * <p>Deliberately separate from {@link #loadModule}: that call constructs the native runtime,
+     * whose constructor calls {@code load_forward()} — which for a delegated model is delegate
+     * init. OpenVINO's delegate init resolves its C API with a {@code dlopen} under
+     * {@code std::call_once} and never retries, so a caller that must configure something first has
+     * to ask before {@code loadModule}, not after.
+     *
+     * @param ptePath absolute path to the model file
+     * @param backend backend id, e.g. {@code OpenvinoBackend} (lowercase {@code v})
+     * @return true if {@code forward} is delegated to that backend
+     */
+    public static native boolean pteUsesBackend(String ptePath, String backend);
+
+    /**
+     * Reports whether a backend's archive was linked into this build.
+     *
+     * <p>A link-time fact, not a configuration one: it answers "was the delegate compiled in",
+     * never "can it run right now". The two need different advice — a build without the delegate
+     * cannot run the model at all and the fix is to re-export, while a build with it but no
+     * OpenVINO runtime for this platform runs fine once a runtime is supplied. The OpenVINO
+     * delegate ships in every Linux runtime tarball, including {@code linux-aarch64}, while the
+     * OpenVINO runtime bundle is published for fewer platforms — so the second case is real.
+     *
+     * @param backend backend id, e.g. {@code OpenvinoBackend}
+     * @return true if the backend is registered in this build
+     */
+    public static native boolean backendRegistered(String backend);
+
+
+    /**
+     * Sets {@code OPENVINO_LIB_PATH} if it is not already set, and returns the value in force.
+     *
+     * <p>The only mechanism available to a JVM: {@code System.getenv} is read-only, and glibc's
+     * loader read {@code LD_LIBRARY_PATH} once at process start. The delegate reads this variable
+     * at {@code dlopen} time, so a write from here still lands — but only if it precedes the first
+     * OpenVINO inference, because that {@code dlopen} runs once and never retries.
+     *
+     * <p><b>An already-set value always wins</b>, and that decision is made natively rather than in
+     * Java. {@code System.getenv} is a snapshot taken when the JVM built its environment map and
+     * does not observe a {@code setenv} issued afterwards, so a Java-side check cannot see a value
+     * installed natively after startup. Native {@code getenv} can.
+     *
+     * <p>Callers must use the <b>returned</b> value rather than assuming their argument was
+     * applied — it may be someone else's path.
+     *
+     * @param path absolute path to the OpenVINO C library file, used only if none is set
+     * @return the path actually in force, or {@code null} if it could not be determined
+     */
+    public static native String setOpenVinoLibPathIfAbsent(String path);
+
+    /**
+     * Reads the numeric type OpenVINO will use for CPU inference on this host.
+     *
+     * @param libPath absolute path to the OpenVINO C library file
+     * @return e.g. {@code f32} or {@code bf16}, or {@code unavailable}
+     */
+    public static native String openVinoInferencePrecision(String libPath);
+
+    /**
      * Called from native code (the ExecuTorch PAL sink) to route an ET_LOG message to slf4j.
      * Level codes match {@code measly::et::Slf4jLevel}: 0=debug, 1=info, 2=warn, 3=error
      * (unknown → info).

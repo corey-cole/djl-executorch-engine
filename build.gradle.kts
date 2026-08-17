@@ -30,7 +30,7 @@ dependencies {
 }
 
 tasks.test {
-    useJUnitPlatform { excludeTags("leak", "oom", "intraop", "jmx-disabled", "stats-degraded", "stress", "stress-sweep", "stress-baseline") }
+    useJUnitPlatform { excludeTags("leak", "oom", "openvino", "openvino-unsupported", "intraop", "jmx-disabled", "stats-degraded", "stress", "stress-sweep", "stress-baseline") }
     jvmArgs("-XX:+HeapDumpOnOutOfMemoryError")
     finalizedBy(tasks.jacocoTestReport)
 }
@@ -103,6 +103,28 @@ val statsDegradedTest = tasks.register<Test>("statsDegradedTest") {
         "EXECUTORCH_LIBRARY_PATH",
         file("src/test/resources/not-a-library.txt").absolutePath,
     )
+}
+
+// Forked per class: OPENVINO_LIB_PATH is process environment and the delegate's dlopen is
+// once-only, so cases sharing a JVM contaminate each other in ways that present as flakes.
+tasks.register<Test>("openvinoTest") {
+  group = "verification"
+  description = "OpenVINO delegate tests (linux-x86_64 with the openvino bundle)"
+  testClassesDirs = sourceSets["test"].output.classesDirs
+  classpath = sourceSets["test"].runtimeClasspath
+  useJUnitPlatform { includeTags("openvino") }
+  forkEvery = 1
+}
+
+// The inverse leg of openvinoTest: asserts the platform error where the delegate is ABSENT. Shaped
+// exactly like openvinoTest (forked per class) so the two matrix legs stay symmetric.
+tasks.register<Test>("openvinoUnsupportedTest") {
+  group = "verification"
+  description = "OpenVINO unsupported-platform error tests (runs where the delegate is ABSENT)"
+  testClassesDirs = sourceSets["test"].output.classesDirs
+  classpath = sourceSets["test"].runtimeClasspath
+  useJUnitPlatform { includeTags("openvino-unsupported") }
+  forkEvery = 1
 }
 
 val checkDocLinks = tasks.register<Exec>("checkDocLinks") {
@@ -222,9 +244,11 @@ val nativeStaging = layout.buildDirectory.dir("native-staging")
 val nativeJarTasks = nativePlatforms.map { platform ->
   tasks.register<Jar>("nativeJar-${platform}") {
     archiveClassifier.set(platform)
-    // The native library, excluding the bundled licenses subtree (mapped to META-INF below).
+    // The native library, excluding the bundled licenses subtree (mapped to META-INF below) and
+    // the OpenVINO runtime bundle (shipped only via its own opt-in openvino variant).
     from(nativeStaging.map { it.dir(platform) }) {
         exclude("licenses/**")
+        exclude("openvino/**")
         into("native/${platform}")
     }
     // Third-party notices from the runtime tarball, staged next to the .so by native/build.sh.
@@ -241,6 +265,32 @@ val nativeJarTasks = nativePlatforms.map { platform ->
             "Missing third-party notices for ${platform}: ${licensesDir}" +
                 " (native/build.sh must stage LICENSE + THIRD-PARTY-NOTICES/)"
         }
+    }
+  }
+}
+
+// The OpenVINO runtime ships as a SEPARATE opt-in variant, never folded into the platform jar:
+// it is ~21 MB compressed and ~72 MB extracted, for a delegate most consumers never load. A
+// consumer opts in by requesting the capability.
+//
+// Registered for every platform but only produced where build.sh staged a bundle -- the pin decides
+// which platforms have one, so this needs no platform name.
+val openvinoJarTasks = nativePlatforms.map { platform ->
+  tasks.register<Jar>("nativeJar-${platform}-openvino") {
+    archiveClassifier.set("${platform}-openvino")
+    from(nativeStaging.map { it.dir("${platform}/openvino") }) {
+      exclude("licenses/**")
+      into("native/${platform}/openvino")
+    }
+    from(nativeStaging.map { it.dir("${platform}/openvino/licenses") }) {
+      into("META-INF/licenses/openvino-runtime")
+    }
+    val bundleDir = nativeStaging.get().dir(platform).dir("openvino").asFile
+    onlyIf { bundleDir.isDirectory }
+    doFirst { // A jar with the libraries but no notices is not shippable
+      require(File(bundleDir, "licenses").isDirectory) {
+        "Missing OpenVINO third-party notices for ${platform}: ${bundleDir}/licenses"
+      }
     }
   }
 }
@@ -271,8 +321,33 @@ val nativeVariants = nativePlatforms.map { platform ->
     }
 }
 
+val openvinoVariants = nativePlatforms.map { platform ->
+    val osFamily = platform.substringBefore("-")
+    val arch = platform.substringAfter("-")
+    configurations.consumable("openvinoRuntimeElements-${platform}") {
+        attributes {
+            attribute(Category.CATEGORY_ATTRIBUTE, objects.named(Category.LIBRARY))
+            attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_RUNTIME))
+            attribute(Bundling.BUNDLING_ATTRIBUTE, objects.named(Bundling.EXTERNAL))
+            attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, objects.named(LibraryElements.JAR))
+            attribute(OperatingSystemFamily.OPERATING_SYSTEM_ATTRIBUTE, objects.named(osFamily))
+            attribute(
+                MachineArchitecture.ARCHITECTURE_ATTRIBUTE,
+                objects.named(if (arch == "aarch64") MachineArchitecture.ARM64 else MachineArchitecture.X86_64)
+            )
+        }
+        outgoing {
+            capability("${project.group}:djl-executorch-engine-${platform}-openvino:${project.version}")
+            artifact(tasks.named("nativeJar-${platform}-openvino"))
+        }
+    }
+}
+
 (components["java"] as AdhocComponentWithVariants).apply {
     nativeVariants.forEach { variant ->
+        addVariantsFromConfiguration(variant.get()) { mapToOptional() }
+    }
+    openvinoVariants.forEach { variant ->
         addVariantsFromConfiguration(variant.get()) { mapToOptional() }
     }
 }

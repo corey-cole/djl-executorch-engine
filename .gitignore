@@ -37,6 +37,16 @@ src/main/resources/native/**/*.so
 src/main/resources/native/**/*.dylib
 src/main/resources/native/**/*.dll
 src/main/resources/native/**/licenses/
+# Versioned sonames too: the *.so pattern above does NOT match libopenvino.so.2541 or libtbb.so.12,
+# so without this the staged OpenVINO bundle is untracked-but-not-ignored and a `git add -A` commits
+# ~70 MB of binaries.
+src/main/resources/native/**/*.so.*
+# The whole staged OpenVINO bundle, which also carries non-library files (BUILDINFO, MANIFEST) that
+# no extension pattern would catch. Staged by native/build.sh from the hash-pinned tarball and
+# republished into the openvino jar; never a source artifact.
+# NOTE: this is src/MAIN/resources. The committed test fixture at src/test/resources/models/openvino/
+# is a different path and stays tracked.
+src/main/resources/native/**/openvino/
 *.rpm
 bin/
 et-cmake-out/

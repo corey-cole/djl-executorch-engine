@@ -97,6 +97,9 @@ public final class LibUtils {
     /**
      * Cache location. Windows cannot delete a loaded DLL, so a per-JVM temp file would leak 11.5 MB per
      * run; a stable per-content directory is reused instead.
+     *
+     * <p>Shared with {@link OpenVinoRuntime}, which extracts the OpenVINO bundle into a sibling
+     * subdirectory under the same root so one cache location covers every native payload.
      */
     static Path cacheRoot() {
         String os = System.getProperty("os.name").toLowerCase();
