@@ -120,7 +120,7 @@ tasks.register<Test>("openvinoTest") {
 // exactly like openvinoTest (forked per class) so the two matrix legs stay symmetric.
 tasks.register<Test>("openvinoUnsupportedTest") {
   group = "verification"
-  description = "OpenVINO delegate tests (linux-x86_64 with the openvino bundle)"
+  description = "OpenVINO unsupported-platform error tests (runs where the delegate is ABSENT)"
   testClassesDirs = sourceSets["test"].output.classesDirs
   classpath = sourceSets["test"].runtimeClasspath
   useJUnitPlatform { includeTags("openvino-unsupported") }

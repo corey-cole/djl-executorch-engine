@@ -286,6 +286,22 @@ if(ET_BUILD_QA)
 
   add_executable(et_runtime_test ${CMAKE_CURRENT_SOURCE_DIR}/test/et_runtime_test.cpp)
   target_link_libraries(et_runtime_test PRIVATE et_runtime Catch2::Catch2WithMain)
+
+  # The OpenVINO delegate is NOT pulled in by et_runtime, and the shim -- the only other thing that
+  # links it -- is not built under ET_BUILD_QA. Without this the test binary carries no
+  # OpenvinoBackend registration, so the ctor guard's FIRST branch ("this build does not provide")
+  # fires for every OpenVINO case and the OPENVINO_LIB_PATH branches it is meant to exercise are
+  # unreachable. Linked plainly for the same reason the shim does: the imported target
+  # self-whole-archives via its INTERFACE_LINK_OPTIONS.
+  #
+  # ET_OPENVINO_LINKED tells the tests which guard branch to expect. It is genuinely
+  # platform-dependent -- linux-aarch64 ships no delegate -- so the tests assert the "not provided"
+  # message there and the env-specific messages here, rather than either one skipping.
+  if(TARGET openvino_backend)
+    target_link_libraries(et_runtime_test PRIVATE openvino_backend)
+    target_compile_definitions(et_runtime_test PRIVATE ET_OPENVINO_LINKED=1)
+  endif()
+
   target_compile_definitions(et_runtime_test PRIVATE
     ADD_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/add.pte"
     ADD_UNPLANNED_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/add_unplanned.pte"

@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <cstdint>
 #include <cstdlib>
@@ -459,15 +460,35 @@ TEST_CASE("backend detection: a missing file throws rather than reporting false"
 // under std::call_once and never retries -- so the FIRST bad attempt poisons every later attempt in
 // this process, including correct ones. Catch2 runs all cases in one process, which is exactly the
 // blast radius this prevents.
+// Both cases below match the MESSAGE, not merely "something threw". The guard has three refusal
+// branches and they are easy to confuse: until the delegate was linked into this binary, every
+// OpenVINO case fell through the first branch ("this build does not provide") and a bare
+// REQUIRE_THROWS passed without either OPENVINO_LIB_PATH branch ever running.
+//
+// Which branch is correct here is a genuine platform property, so it is selected rather than
+// skipped: where the runtime tarball ships no delegate (linux-aarch64) the first branch IS the
+// right answer, and asserting it there keeps that leg meaningful instead of vacuous.
+#ifdef ET_OPENVINO_LINKED
+#define ET_EXPECT_UNSET_MSG "OPENVINO_LIB_PATH is not set"
+#define ET_EXPECT_DIRECTORY_MSG "does not name a readable file"
+#else
+#define ET_EXPECT_UNSET_MSG "this build does not provide"
+#define ET_EXPECT_DIRECTORY_MSG "this build does not provide"
+#endif
+
 TEST_CASE("openvino: an unconfigured OPENVINO_LIB_PATH is refused before delegate init") {
   unsetEnvVar("OPENVINO_LIB_PATH");
-  REQUIRE_THROWS([] { EtRuntime rt(OPENVINO_TINY_PTE_PATH); }());
+  REQUIRE_THROWS_WITH(
+      [] { EtRuntime rt(OPENVINO_TINY_PTE_PATH); }(),
+      Catch::Matchers::ContainsSubstring(ET_EXPECT_UNSET_MSG));
 }
 
 TEST_CASE("openvino: OPENVINO_LIB_PATH pointing at a directory is refused") {
   // Upstream's documented top mistake. The error the delegate would otherwise produce mentions
   // LD_LIBRARY_PATH, which reads like it wants a directory. It does not -- it wants the file.
   setEnvVar("OPENVINO_LIB_PATH", "/tmp");
-  REQUIRE_THROWS([] { EtRuntime rt(OPENVINO_TINY_PTE_PATH); }());
+  REQUIRE_THROWS_WITH(
+      [] { EtRuntime rt(OPENVINO_TINY_PTE_PATH); }(),
+      Catch::Matchers::ContainsSubstring(ET_EXPECT_DIRECTORY_MSG));
   unsetEnvVar("OPENVINO_LIB_PATH");
 }

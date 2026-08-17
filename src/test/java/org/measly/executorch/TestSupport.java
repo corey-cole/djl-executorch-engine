@@ -20,7 +20,6 @@ public final class TestSupport {
         return new File(path).isFile();
     }
 
-    /** Skips the test if the native library itself is unavailable (no model fixture needed). */
     /** Skips the test (assumption) if the native library itself is unavailable (no model fixture needed). */
     public static void assumeNativeLibraryAvailable() {
         loadNativeLibrary();

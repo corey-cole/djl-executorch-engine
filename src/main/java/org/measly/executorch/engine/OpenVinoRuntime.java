@@ -197,7 +197,10 @@ public final class OpenVinoRuntime {
     // Extract into a staging directory, then publish by atomic rename. Nothing is ever loaded out
     // of the staging directory, which is what lets a loser in a race delete its own work even on a
     // platform that refuses to delete a loaded library.
-    private static void publish(Path target) throws IOException {
+    // Package-private, not private, so OpenVinoConcurrentExtractionTest can drive the adoption
+    // branch below directly. ensureExtracted() cannot reach it: it is static synchronized with a
+    // cached fast path, so within one JVM only the first caller ever publishes.
+    static void publish(Path target) throws IOException {
         Files.createDirectories(target.getParent());
         Path staging = Files.createTempDirectory(target.getParent(), "staging-");
         try {
