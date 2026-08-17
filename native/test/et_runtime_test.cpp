@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <cstdlib>
+#include <string>
 #include <vector>
 
 #include "dtype_size.h"
@@ -11,6 +13,22 @@
 #include "staging.h"
 
 using namespace measly::et;
+
+// The OpenVINO guard tests must mutate OPENVINO_LIB_PATH in-process. POSIX has setenv/unsetenv;
+// MSVC (this suite builds and runs on Windows too) exposes _putenv_s and _putenv instead. The
+// helpers keep the test bodies identical across the two.
+#ifdef _WIN32
+static void setEnvVar(const char* name, const char* value) { _putenv_s(name, value); }
+static void unsetEnvVar(const char* name) {
+  // "NAME=" removes the variable on MSVC; the entry string is copied by _putenv, so a temporary
+  // std::string is safe here.
+  const std::string entry = std::string(name) + "=";
+  _putenv(entry.c_str());
+}
+#else
+static void setEnvVar(const char* name, const char* value) { setenv(name, value, 1); }
+static void unsetEnvVar(const char* name) { unsetenv(name); }
+#endif
 
 #ifndef ADD_PTE_PATH
 #define ADD_PTE_PATH "add.pte"
@@ -442,14 +460,14 @@ TEST_CASE("backend detection: a missing file throws rather than reporting false"
 // this process, including correct ones. Catch2 runs all cases in one process, which is exactly the
 // blast radius this prevents.
 TEST_CASE("openvino: an unconfigured OPENVINO_LIB_PATH is refused before delegate init") {
-  unsetenv("OPENVINO_LIB_PATH");
+  unsetEnvVar("OPENVINO_LIB_PATH");
   REQUIRE_THROWS([] { EtRuntime rt(OPENVINO_TINY_PTE_PATH); }());
 }
 
 TEST_CASE("openvino: OPENVINO_LIB_PATH pointing at a directory is refused") {
   // Upstream's documented top mistake. The error the delegate would otherwise produce mentions
   // LD_LIBRARY_PATH, which reads like it wants a directory. It does not -- it wants the file.
-  setenv("OPENVINO_LIB_PATH", "/tmp", 1);
+  setEnvVar("OPENVINO_LIB_PATH", "/tmp");
   REQUIRE_THROWS([] { EtRuntime rt(OPENVINO_TINY_PTE_PATH); }());
-  unsetenv("OPENVINO_LIB_PATH");
+  unsetEnvVar("OPENVINO_LIB_PATH");
 }

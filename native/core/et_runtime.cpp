@@ -9,7 +9,12 @@
 #include <utility>
 #include <variant>
 
+// dlopen is POSIX-only; MSVC has no <dlfcn.h>. openVinoInferencePrecision() (below) is guarded
+// the same way, so the include is only needed where the body exists. The rest of this file uses
+// only C-standard and ExecuTorch APIs and must keep compiling on the Windows shim build.
+#ifndef _WIN32
 #include <dlfcn.h>
+#endif
 #include <sys/stat.h>
 
 #include <executorch/extension/module/module.h>
@@ -178,7 +183,9 @@ EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode)
           "through EtModel, which resolves it for you.");
     }
     struct stat st {};
-    if (stat(lib, &st) != 0 || !S_ISREG(st.st_mode)) {
+    // S_ISREG is a POSIX macro MSVC does not provide; S_IFMT/S_IFREG exist on both, and the
+    // expansion is identical, so this form keeps the Windows shim compiling.
+    if (stat(lib, &st) != 0 || (st.st_mode & S_IFMT) != S_IFREG) {
       throw std::runtime_error(
           std::string("OPENVINO_LIB_PATH does not name a readable file: '") + lib +
           "'. It must be the full path to the library FILE, not the directory containing it.");
@@ -413,6 +420,11 @@ bool pteUsesBackend(const std::string& ptePath, const std::string& backend) {
 }
 
 std::string openVinoInferencePrecision(const std::string& libPath) {
+  // OpenVINO is linux-x86_64 only and MSVC has no dlopen, so the probe body is POSIX-guarded and
+  // the Windows build reports "unavailable" -- which is also the honest answer there, since no
+  // vendored runtime exists to read from. The accessor's contract (EtEngine) is to degrade to
+  // "unavailable" rather than throw, so callers need no platform awareness.
+#ifndef _WIN32
   // dlopen'd rather than linked: we have no OpenVINO at link time, and the delegate resolves the
   // same library the same way. Refcounted, so opening it here is safe alongside the delegate's own
   // handle. RTLD_LOCAL so nothing here perturbs the delegate's symbol resolution.
@@ -452,6 +464,10 @@ std::string openVinoInferencePrecision(const std::string& libPath) {
   // registers plugin state that does not expect to be torn down and rebuilt. The handle is
   // process-lifetime by design; this is a diagnostic called a handful of times at most.
   return result;
+#else
+  (void)libPath;
+  return "unavailable";
+#endif
 }
 
 }  // namespace measly::et

@@ -448,7 +448,14 @@ Java_org_measly_executorch_jni_EtNative_setOpenVinoLibPathIfAbsent(
   if (value == nullptr) {
     return nullptr;  // OOM already pending; setenv with a null value would be UB
   }
+  // setenv is POSIX-only; MSVC exposes _putenv_s (same "set, overwrite, return 0 on success"
+  // contract, declared in <cstdlib> alongside setenv). OpenVINO is linux-only, so on Windows this
+  // is dead-but-compilable -- which is exactly the point of the branch: the shim builds there.
+#ifdef _WIN32
+  const int rc = _putenv_s("OPENVINO_LIB_PATH", value);
+#else
   const int rc = setenv("OPENVINO_LIB_PATH", value, 1);
+#endif
   std::string effective(value);
   // Released before the throw, not after: nothing is held across a JNI call that can fail.
   env->ReleaseStringUTFChars(path, value);
