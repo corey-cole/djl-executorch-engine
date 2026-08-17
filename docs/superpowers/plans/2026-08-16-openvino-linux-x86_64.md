@@ -1,6 +1,6 @@
 # OpenVINO Delegate Support Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make the OpenVINO delegate a supported feature of this engine — an opt-in qualified jar carrying the vendored OpenVINO runtime, `OPENVINO_LIB_PATH` resolved from JNI, a committed fixture, and a test suite that executes a delegated model.
 
@@ -57,7 +57,7 @@
 
 This must not construct an `EtRuntime`: that ctor calls `load_forward()`, which is delegate init, which is the thing we are trying to get ahead of. It builds a bare `Module` and asks `method_meta` instead.
 
-- [ ] **Step 1: Stage the fixture so the test has something to assert against**
+- [x] **Step 1: Stage the fixture so the test has something to assert against**
 
 The fixture proper is Task 7's job, but Task 1's test needs a `.pte` that uses the backend. Fetch just the one file now:
 
@@ -72,7 +72,7 @@ ls -la src/test/resources/models/openvino
 
 Expect four files: `openvino_tiny.pte`, `in.bin`, `out.bin`, `shape`.
 
-- [ ] **Step 2: Wire the fixture path into the Catch2 build**
+- [x] **Step 2: Wire the fixture path into the Catch2 build**
 
 In `native/CMakeLists.txt`, extend the `target_compile_definitions` block that already defines `ADD_PTE_PATH` / `CONV_PTE_PATH`:
 
@@ -81,7 +81,7 @@ In `native/CMakeLists.txt`, extend the `target_compile_definitions` block that a
     OPENVINO_TINY_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../src/test/resources/models/openvino/openvino_tiny.pte")
 ```
 
-- [ ] **Step 3: Write the failing test**
+- [x] **Step 3: Write the failing test**
 
 Append to `native/test/et_runtime_test.cpp`:
 
@@ -103,13 +103,13 @@ TEST_CASE("backend detection: a missing file throws rather than reporting false"
 }
 ```
 
-- [ ] **Step 4: Run to verify it fails**
+- [x] **Step 4: Run to verify it fails**
 
 Run: `./native/local_build_wrapper.sh native/build_qa.sh 2>&1 | grep -E "error:|assertions:"`
 
 Expected: FAIL to compile with `'pteUsesBackend' was not declared in this scope`.
 
-- [ ] **Step 5: Declare it**
+- [x] **Step 5: Declare it**
 
 In `native/core/et_runtime.h`, after the `xnnpackWorkspaceBytes()` declaration:
 
@@ -126,7 +126,7 @@ In `native/core/et_runtime.h`, after the `xnnpackWorkspaceBytes()` declaration:
 bool pteUsesBackend(const std::string& ptePath, const std::string& backend);
 ```
 
-- [ ] **Step 6: Implement it**
+- [x] **Step 6: Implement it**
 
 In `native/core/et_runtime.cpp`, beside `xnnpackWorkspaceBytes()`:
 
@@ -145,13 +145,13 @@ bool pteUsesBackend(const std::string& ptePath, const std::string& backend) {
 }
 ```
 
-- [ ] **Step 7: Run to verify it passes**
+- [x] **Step 7: Run to verify it passes**
 
 Run: `./native/local_build_wrapper.sh native/build_qa.sh 2>&1 | grep -E "error:|All tests passed|assertions:"`
 
 Expected: `All tests passed`. If `uses_backend` is not found, check `runtime/executor/method_meta.h:252-273` for the exact spelling in the pinned runtime and adjust.
 
-- [ ] **Step 8: Expose it through JNI**
+- [x] **Step 8: Expose it through JNI**
 
 In `native/jni/executorch_djl_jni.cpp`, after `Java_..._xnnpackWorkspaceBytes`:
 
@@ -188,7 +188,7 @@ Java_org_measly_executorch_jni_EtNative_pteUsesBackend(
 
 The null checks matter for a second reason. `GetStringUTFChars` returns null with an OOM pending, and `GetStringUTFChars` is *not* on the list of functions safe to call in that state — so calling the second one after the first failed is itself a violation. Constructing a `std::string` from a null pointer would also be UB, which the shim's UBSan gate would rightly abort on. This file already reasons about the same hazard for `FindClass` at lines 58-63.
 
-- [ ] **Step 9: Declare the Java side**
+- [x] **Step 9: Declare the Java side**
 
 In `src/main/java/org/measly/executorch/jni/EtNative.java`, after `xnnpackWorkspaceBytes()`:
 
@@ -210,7 +210,7 @@ In `src/main/java/org/measly/executorch/jni/EtNative.java`, after `xnnpackWorksp
     public static native boolean pteUsesBackend(String ptePath, String backend);
 ```
 
-- [ ] **Step 10: Rebuild the shim and run the JVM suite**
+- [x] **Step 10: Rebuild the shim and run the JVM suite**
 
 ```bash
 ./native/local_build_wrapper.sh
@@ -219,7 +219,7 @@ In `src/main/java/org/measly/executorch/jni/EtNative.java`, after `xnnpackWorksp
 
 Expected: BUILD SUCCESSFUL. Nothing calls the new method from Java yet; this proves the shim still loads and the new symbol did not break `-Xcheck:jni`.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add native/core/et_runtime.h native/core/et_runtime.cpp native/jni/executorch_djl_jni.cpp \
@@ -251,7 +251,7 @@ indistinguishable from 'needs no delegate'."
 - Consumes: nothing.
 - Produces: `libopenvino_backend.a` linked into `executorch_djl` wherever the target exists, and `OpenvinoBackend` registered at runtime. Task 4's guard depends on the registration being real.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `native/tests/openvino_linkage.sh`:
 
@@ -283,13 +283,13 @@ fi
 chmod +x native/tests/openvino_linkage.sh
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `./native/tests/openvino_linkage.sh`
 
 Expected: `FAIL: runtime ships libopenvino_backend.a but the shim carries no OpenvinoBackend symbols`.
 
-- [ ] **Step 3: Add the link block**
+- [x] **Step 3: Add the link block**
 
 In `native/CMakeLists.txt`, after the existing `target_link_libraries` for the shim:
 
@@ -316,7 +316,7 @@ endif()
 
 Whole-archive is required for the same reason XNNPACK needs it: backend registration happens in a static initializer with no referenced symbol, so a normal link drops the object file.
 
-- [ ] **Step 4: Rebuild and verify the test passes**
+- [x] **Step 4: Rebuild and verify the test passes**
 
 ```bash
 ./native/local_build_wrapper.sh
@@ -325,7 +325,7 @@ Whole-archive is required for the same reason XNNPACK needs it: backend registra
 
 Expected: `PASS: OpenVINO delegate linked`.
 
-- [ ] **Step 5: Measure the size cost (spec verify-item 2)**
+- [x] **Step 5: Measure the size cost (spec verify-item 2)**
 
 ```bash
 ls -l src/main/resources/native/linux-x86_64/libexecutorch_djl.so
@@ -333,7 +333,7 @@ ls -l src/main/resources/native/linux-x86_64/libexecutorch_djl.so
 
 Record the size against the pre-change 12 MB. If the growth is large enough to be objectionable for consumers who never use OpenVINO, **stop and escalate** — the spec's single-shim decision assumed it was small, and a second shim variant reopens as a design question rather than an implementation detail.
 
-- [ ] **Step 6: Confirm the whole suite still passes**
+- [x] **Step 6: Confirm the whole suite still passes**
 
 ```bash
 ./gradlew test
@@ -342,7 +342,7 @@ Record the size against the pre-change 12 MB. If the growth is large enough to b
 
 Expected: BUILD SUCCESSFUL and `All tests passed`. Linking a delegate nothing yet references must be inert.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add native/CMakeLists.txt native/tests/openvino_linkage.sh
@@ -374,7 +374,7 @@ linked where the runtime ships the archive, absent where it does not."
 - Consumes: `ET_RUNTIME_OPENVINO_URL` / `_SHA256` / `_VERSION` / `_PLATFORM` from `native/cmake/EtRuntimePin.cmake`.
 - Produces: `build/native-staging/<platform>/openvino/` containing the 7 libraries, `BUILDINFO`, `MANIFEST`, and `licenses/`; and a `nativeJar-<platform>-openvino` task publishing capability `org.measly:djl-executorch-engine-<platform>-openvino`. Task 5 reads `/native/<platform>/openvino/MANIFEST` from the classpath.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `native/tests/openvino_bundle_staging.sh`:
 
@@ -430,13 +430,13 @@ echo "PASS: openvino bundle staging"
 chmod +x native/tests/openvino_bundle_staging.sh
 ```
 
-- [ ] **Step 2: Run to verify it skips (nothing staged yet)**
+- [x] **Step 2: Run to verify it skips (nothing staged yet)**
 
 Run: `./native/tests/openvino_bundle_staging.sh`
 
 Expected: `SKIP: bundle not staged`. That is the correct red state here — the assertions cannot run until Step 3 produces something.
 
-- [ ] **Step 3: Stage the bundle in `native/build.sh`**
+- [x] **Step 3: Stage the bundle in `native/build.sh`**
 
 Add near the existing license-staging block, after the shim is copied:
 
@@ -479,7 +479,7 @@ else
 fi
 ```
 
-- [ ] **Step 4: Rebuild and verify the staging test passes**
+- [x] **Step 4: Rebuild and verify the staging test passes**
 
 ```bash
 ./native/local_build_wrapper.sh
@@ -488,7 +488,7 @@ fi
 
 Expected: `PASS: openvino bundle staging`.
 
-- [ ] **Step 5: Add the jar task and GMM variant**
+- [x] **Step 5: Add the jar task and GMM variant**
 
 In `build.gradle.kts`, after the `nativeJarTasks` block:
 
@@ -548,7 +548,7 @@ val openvinoVariants = nativePlatforms.map { platform ->
 
 Register these with the java component exactly as the existing `nativeVariants.forEach` block does, in the same `AdhocComponentWithVariants` `apply` block.
 
-- [ ] **Step 6: Verify the jar builds and contains what it should**
+- [x] **Step 6: Verify the jar builds and contains what it should**
 
 ```bash
 ./gradlew nativeJar-linux-x86_64-openvino
@@ -558,7 +558,7 @@ unzip -l build/libs/*linux-x86_64-openvino.jar | grep -c 'META-INF/licenses/open
 
 Expected: 7 libraries plus `BUILDINFO` and `MANIFEST` under `native/linux-x86_64/openvino/`, no `libopenvino_c.so` symlink entry, and 5 license files. Jar size ~21 MB.
 
-- [ ] **Step 7: Verify the standard jar did NOT grow**
+- [x] **Step 7: Verify the standard jar did NOT grow**
 
 ```bash
 ./gradlew nativeJar-linux-x86_64
@@ -567,7 +567,7 @@ unzip -l build/libs/*linux-x86_64.jar | grep -c openvino
 
 Expected: `0`. If any OpenVINO file appears in the standard jar, the opt-in property is broken and the whole packaging decision is void.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add native/build.sh build.gradle.kts native/tests/openvino_bundle_staging.sh
@@ -596,7 +596,7 @@ OPENVINO_LIB_PATH names the versioned file and \$ORIGIN resolves the rest."
 - Consumes: `pteUsesBackend` (Task 1), the linked delegate (Task 2).
 - Produces: an `EtRuntime` ctor that throws before delegate init when OpenVINO cannot possibly work. Task 5's Java layer relies on this as its backstop.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `native/test/et_runtime_test.cpp`:
 
@@ -620,13 +620,13 @@ TEST_CASE("openvino: OPENVINO_LIB_PATH pointing at a directory is refused") {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `./native/local_build_wrapper.sh native/build_qa.sh 2>&1 | grep -E "FAILED|assertions:"`
 
 Expected: both FAIL — no throw, because the load reaches the delegate. Note the run may also emit OpenVINO's own error output; that is the unguarded behaviour being replaced.
 
-- [ ] **Step 3: Add the backend-availability helper**
+- [x] **Step 3: Add the backend-availability helper**
 
 In `native/core/et_runtime.cpp`, as a file-local helper in the existing anonymous namespace, above the constructor (it must be defined before the guard in Step 4 uses it):
 
@@ -646,7 +646,7 @@ bool isBackendAvailable(const char* name) {
 }
 ```
 
-- [ ] **Step 4: Add the guard**
+- [x] **Step 4: Add the guard**
 
 In `native/core/et_runtime.cpp`, inside the `EtRuntime` constructor, immediately **before** the `state_->module.load_forward()` call at line ~138.
 
@@ -688,13 +688,13 @@ Note this calls `state_->module.method_meta("forward")` directly rather than rea
 
 Add `#include <sys/stat.h>`, `#include <cstdlib>` and `#include <cstring>` to the includes.
 
-- [ ] **Step 5: Run to verify the tests pass**
+- [x] **Step 5: Run to verify the tests pass**
 
 Run: `./native/local_build_wrapper.sh native/build_qa.sh 2>&1 | grep -E "All tests passed|FAILED|assertions:"`
 
 Expected: `All tests passed`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add native/core/et_runtime.cpp native/test/et_runtime_test.cpp
@@ -728,7 +728,7 @@ LD_LIBRARY_PATH and reads like it wants a directory."
 - Consumes: `EtNative.pteUsesBackend` (Task 1), the staged bundle resource `/native/<platform>/openvino/` (Task 3).
 - Produces: `OpenVinoRuntime.ensureReady(Path ptePath)`, called from `EtModel.load`; and `OpenVinoRuntime.bundleAvailable() -> boolean` and `OpenVinoRuntime.resolvedLibPath() -> String` for Task 8's diagnostics.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/test/java/org/measly/executorch/engine/OpenVinoRuntimeTest.java`:
 
@@ -792,13 +792,13 @@ Add to `src/test/java/org/measly/executorch/TestSupport.java`:
     }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `./gradlew openvinoTest --tests '*OpenVinoRuntimeTest*'`
 
 Expected: compilation failure — `OpenVinoRuntime` does not exist. (The `openvinoTest` task arrives in Step 6; until then use `./gradlew compileTestJava` to see the same failure.)
 
-- [ ] **Step 3: Make `cacheRoot` reachable**
+- [x] **Step 3: Make `cacheRoot` reachable**
 
 In `LibUtils.java`, change `static Path cacheRoot()` to keep package-private visibility (it already is) and add to its javadoc:
 
@@ -807,7 +807,7 @@ In `LibUtils.java`, change `static Path cacheRoot()` to keep package-private vis
      * subdirectory under the same root so one cache location covers every native payload.
 ```
 
-- [ ] **Step 4: Implement `OpenVinoRuntime`**
+- [x] **Step 4: Implement `OpenVinoRuntime`**
 
 Create `src/main/java/org/measly/executorch/engine/OpenVinoRuntime.java`:
 
@@ -1092,7 +1092,7 @@ public final class OpenVinoRuntime {
 }
 ```
 
-- [ ] **Step 5: Add the `setOpenVinoLibPathIfAbsent` JNI entry point**
+- [x] **Step 5: Add the `setOpenVinoLibPathIfAbsent` JNI entry point**
 
 In `native/jni/executorch_djl_jni.cpp`, beside the other free functions:
 
@@ -1161,7 +1161,7 @@ And in `EtNative.java`:
     public static native String setOpenVinoLibPathIfAbsent(String path);
 ```
 
-- [ ] **Step 6: Register the `openvinoTest` task**
+- [x] **Step 6: Register the `openvinoTest` task**
 
 In `build.gradle.kts`, add `"openvino"` to the `excludeTags` list at line 33, then register beside the other tag tasks:
 
@@ -1178,7 +1178,7 @@ tasks.register<Test>("openvinoTest") {
 }
 ```
 
-- [ ] **Step 7: Wire the probe into `EtModel.load`**
+- [x] **Step 7: Wire the probe into `EtModel.load`**
 
 In `EtModel.java`, immediately before the `EtNative.loadModule` call at line 66 (and before `loadStartNanos`, so extraction time is not charged to load latency):
 
@@ -1190,7 +1190,7 @@ In `EtModel.java`, immediately before the `EtNative.loadModule` call at line 66 
         OpenVinoRuntime.ensureReady(modelFile);
 ```
 
-- [ ] **Step 8: Rebuild and run the tests**
+- [x] **Step 8: Rebuild and run the tests**
 
 ```bash
 ./native/local_build_wrapper.sh
@@ -1200,7 +1200,7 @@ In `EtModel.java`, immediately before the `EtNative.loadModule` call at line 66 
 
 Expected: `test` BUILD SUCCESSFUL (unchanged behaviour for non-OpenVINO models); `openvinoTest` passes both cases, or skips cleanly if the bundle jar is not on the test classpath. If it skips, add the bundle jar output to the test runtime classpath before proceeding — a silently skipping suite proves nothing.
 
-- [ ] **Step 9: Verify the `System.getenv` snapshot assumption**
+- [x] **Step 9: Verify the `System.getenv` snapshot assumption**
 
 The set-if-absent decision lives natively *because* Java's environment view is a startup snapshot. That claim is load-bearing, so confirm it on this JDK rather than trusting it — if `System.getenv` did observe a JNI `setenv`, the native check would be redundant and the design should be simplified rather than left with a rationale that is not true here.
 
@@ -1221,7 +1221,7 @@ Run: `./gradlew openvinoTest --tests '*OpenVinoRuntimeTest*' -i`
 
 Expected: the native line shows a path; the `System.getenv` line shows `null`. That divergence is the whole reason the decision is native. **If both show the path**, stop and reconsider — the rationale in the JNI comment would be wrong on this JDK and must be corrected rather than left in place. Record what you observed in the commit message either way, then delete the test.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add src/main/java/org/measly/executorch/engine/OpenVinoRuntime.java \
@@ -1260,7 +1260,7 @@ the jar pay nothing. An operator-set OPENVINO_LIB_PATH always wins untouched."
 
 Four cases the spec's testing table requires and Task 5 leaves unproven. The first is the most important test in this plan: it is what stands between a correct implementation and one that silently poisons the process.
 
-- [ ] **Step 1: The no-poison guard**
+- [x] **Step 1: The no-poison guard**
 
 Append to `OpenVinoRuntimeTest.java`:
 
@@ -1288,13 +1288,13 @@ Add the imports it needs: `ai.djl.Model`, `org.measly.executorch.jni.EtNative`.
 
 This replaces the weaker guard the sibling project uses. Theirs asserts the XNNPACK workspace is 0 after a metadata call, intending to prove the method did not load — but the workspace only grows on the first *execute*, so that assertion would also pass if the method had loaded eagerly. Asserting the behaviour we actually depend on is both stronger and cheaper.
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `./gradlew openvinoTest --tests '*OpenVinoRuntimeTest*'`
 
 Expected: PASS. A failure here means `pteUsesBackend` is loading the method — stop and fix Task 1 rather than adjusting this test.
 
-- [ ] **Step 3: The caller-override and bundle-absent cases**
+- [x] **Step 3: The caller-override and bundle-absent cases**
 
 Append to `OpenVinoRuntimeTest.java`:
 
@@ -1360,13 +1360,13 @@ Append to `OpenVinoRuntimeTest.java`:
 
 Add imports: `org.junit.jupiter.api.Assumptions`, `ai.djl.engine.EngineException`, `java.nio.file.Files`, and the static imports `assertNull`, `assertDoesNotThrow`, `assertThrows`.
 
-- [ ] **Step 4: Run them**
+- [x] **Step 4: Run them**
 
 Run: `./gradlew openvinoTest --tests '*OpenVinoRuntimeTest*'`
 
 Expected: PASS. If `resolvedLibPath()` is non-null after loading a non-OpenVINO model, `ensureReady` is extracting unconditionally — the whole point of the conditional probe is lost, and Task 5's `pteUsesBackend` check is misplaced.
 
-- [ ] **Step 5: Concurrent extraction (spec verify-item 5)**
+- [x] **Step 5: Concurrent extraction (spec verify-item 5)**
 
 Create `src/test/java/org/measly/executorch/engine/OpenVinoConcurrentExtractionTest.java`:
 
@@ -1428,7 +1428,7 @@ class OpenVinoConcurrentExtractionTest {
 }
 ```
 
-- [ ] **Step 6: Run it**
+- [x] **Step 6: Run it**
 
 Run: `./gradlew openvinoTest --tests '*OpenVinoConcurrentExtraction*'`
 
@@ -1441,7 +1441,7 @@ rm -rf ~/.cache/executorch-djl/openvino
 wait
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/test/java/org/measly/executorch/engine/OpenVinoRuntimeTest.java \
@@ -1478,7 +1478,7 @@ published directory leaving no staging directory behind."
 - Consumes: everything from Tasks 1-5.
 - Produces: end-to-end proof that a delegated model runs and returns correct numbers.
 
-- [ ] **Step 1: Write the fixture manifest**
+- [x] **Step 1: Write the fixture manifest**
 
 Get the asset SHA and write `src/test/resources/models/openvino/MANIFEST`:
 
@@ -1495,7 +1495,7 @@ openvino_version=2025.4.1
 executorch_version=1.3.1
 ```
 
-- [ ] **Step 2: Write the failing parity test**
+- [x] **Step 2: Write the failing parity test**
 
 Create `src/test/java/org/measly/executorch/OpenVinoModelIT.java`:
 
@@ -1566,13 +1566,13 @@ class OpenVinoModelIT {
 }
 ```
 
-- [ ] **Step 3: Run to verify it fails**
+- [x] **Step 3: Run to verify it fails**
 
 Run: `./gradlew openvinoTest --tests '*OpenVinoModelIT*'`
 
 Expected: FAIL — `EtEngine.openVinoInferencePrecision()` does not exist yet (Task 8). To keep this task independently testable, comment out the precision line, confirm the parity assertions pass, then restore it and let Task 8 complete the picture. If parity itself fails, stop: that is a real defect in Tasks 1-5, not a missing accessor.
 
-- [ ] **Step 4: Write the version-coupling guard**
+- [x] **Step 4: Write the version-coupling guard**
 
 Create `native/tests/openvino_version_coupling.sh`:
 
@@ -1610,7 +1610,7 @@ chmod +x native/tests/openvino_version_coupling.sh
 
 Expected: `PASS: openvino version coupling (2025.4.1)`.
 
-- [ ] **Step 5: Write the version-bump runbook**
+- [x] **Step 5: Write the version-bump runbook**
 
 Create `docs/openvino-version-bump.md`. OpenVINO versions independently of ExecuTorch, so a bump can arrive with no pin bump and vice versa, and the touch points are spread across four directories. This is the list.
 
@@ -1668,7 +1668,7 @@ Add a pointer to it from `docs/README.md`'s reference list, and reference it fro
   || fail "fixture MANIFEST openvino_version=${fixture} != pin ${pin} (see docs/openvino-version-bump.md)"
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/test/resources/models/openvino/MANIFEST \
@@ -1702,7 +1702,7 @@ an OV re-roll can otherwise invalidate the committed fixture with no ET bump."
 - Consumes: `OpenVinoRuntime.resolvedLibPath()` (Task 5).
 - Produces: `EtEngine.openVinoInferencePrecision() -> String`, consumed by Task 7's parity test.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `OpenVinoRuntimeTest.java`:
 
@@ -1725,13 +1725,13 @@ Append to `OpenVinoRuntimeTest.java`:
 
 Add `import static org.junit.jupiter.api.Assertions.assertNotEquals;`.
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `./gradlew openvinoTest --tests '*OpenVinoRuntimeTest*'`
 
 Expected: compilation failure — `openVinoInferencePrecision` does not exist.
 
-- [ ] **Step 3: Implement the native read**
+- [x] **Step 3: Implement the native read**
 
 Declare in `native/core/et_runtime.h`:
 
@@ -1795,7 +1795,7 @@ std::string openVinoInferencePrecision(const std::string& libPath) {
 }
 ```
 
-- [ ] **Step 4: Bridge it to Java**
+- [x] **Step 4: Bridge it to Java**
 
 In `native/jni/executorch_djl_jni.cpp`:
 
@@ -1828,7 +1828,7 @@ In `EtNative.java`:
     public static native String openVinoInferencePrecision(String libPath);
 ```
 
-- [ ] **Step 5: Add the public accessor**
+- [x] **Step 5: Add the public accessor**
 
 In `EtEngine.java`:
 
@@ -1869,7 +1869,7 @@ In `EtEngine.java`:
     }
 ```
 
-- [ ] **Step 6: Rebuild and run**
+- [x] **Step 6: Rebuild and run**
 
 ```bash
 ./native/local_build_wrapper.sh
@@ -1878,7 +1878,7 @@ In `EtEngine.java`:
 
 Expected: all OpenVINO tests pass, and the parity test prints a precision line. Restore the precision line in `OpenVinoModelIT` if it was commented out in Task 7.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add native/core/et_runtime.h native/core/et_runtime.cpp native/jni/executorch_djl_jni.cpp \
@@ -1911,7 +1911,7 @@ than throwing, because a diagnostic that throws stops being called."
 **Interfaces:**
 - Consumes: everything above.
 
-- [ ] **Step 1: Write the off-platform test**
+- [x] **Step 1: Write the off-platform test**
 
 Create `src/test/java/org/measly/executorch/OpenVinoUnsupportedIT.java`:
 
@@ -1963,13 +1963,13 @@ class OpenVinoUnsupportedIT {
 
 Add `"openvino-unsupported"` to the `excludeTags` list at `build.gradle.kts:33` and register a task for it exactly like `openvinoTest` but with `includeTags("openvino-unsupported")`.
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `./gradlew openvinoUnsupportedTest`
 
 Expected: on linux-x86_64 with the bundle present it skips by assumption; the aarch64 leg is where it asserts. To exercise it locally, run without the bundle jar on the classpath.
 
-- [ ] **Step 3: Wire CI**
+- [x] **Step 3: Wire CI**
 
 In `.github/workflows/native-build-job.yml`, in the `linux-x86_64` row after the existing test steps:
 
@@ -1995,7 +1995,7 @@ Also add the two new shell tests wherever `cmake_resolution.sh` is already invok
       - run: ./native/tests/openvino_version_coupling.sh
 ```
 
-- [ ] **Step 4: Document it**
+- [x] **Step 4: Document it**
 
 In `CLAUDE.md`, after the workspace-metric bullet:
 
@@ -2021,7 +2021,7 @@ In `CLAUDE.md`, after the workspace-metric bullet:
 
 `docs/README.md` needs no edit: line 18 points at the `superpowers/` directory rather than listing individual specs, so the new spec is already covered. Confirm that is still true rather than assuming it.
 
-- [ ] **Step 5: Full verification**
+- [x] **Step 5: Full verification**
 
 ```bash
 ./native/local_build_wrapper.sh
@@ -2038,7 +2038,7 @@ ET_UBSAN_MODE=test ./native/ubsan_gate.sh
 
 All must pass. The UBSan gate is not optional here: this work adds three JNI entry points, and that gate is the only configuration that instruments the shim.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add .github/workflows CLAUDE.md docs/README.md \
