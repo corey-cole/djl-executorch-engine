@@ -177,10 +177,14 @@ EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode)
     const char* lib = std::getenv("OPENVINO_LIB_PATH");
     if (lib == nullptr || *lib == '\0') {
       throw std::runtime_error(
+          // Deliberately does NOT name a per-platform artifact. This layer knows neither the
+          // platform nor whether an OpenVINO bundle is published for it, and the delegate ships on
+          // platforms that have no bundle -- so naming one here told aarch64 users to fetch
+          // something that does not exist. EtModel's Java path knows both and says more.
           "This .pte uses the OpenvinoBackend delegate, but OPENVINO_LIB_PATH is not set. "
           "Set it to the FULL PATH OF THE LIBRARY FILE (not a directory) before the first "
-          "inference, or add the djl-executorch-engine <platform>-openvino artifact and load "
-          "through EtModel, which resolves it for you.");
+          "inference, or load through EtModel, which resolves a bundled runtime when one is "
+          "available for this platform.");
     }
     struct stat st {};
     // S_ISREG is a POSIX macro MSVC does not provide; S_IFMT/S_IFREG exist on both, and the
@@ -406,6 +410,10 @@ int64_t xnnpackWorkspaceBytes() {
   // us, which is an "unavailable" rather than a value worth guessing at.
   const int* value = std::get_if<int>(&opt.value);
   return (value == nullptr) ? -1 : static_cast<int64_t>(*value);
+}
+
+bool isBackendRegistered(const std::string& backend) {
+  return isBackendAvailable(backend.c_str());
 }
 
 bool pteUsesBackend(const std::string& ptePath, const std::string& backend) {

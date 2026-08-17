@@ -76,14 +76,49 @@ public final class OpenVinoRuntime {
         }
         String existing = System.getenv("OPENVINO_LIB_PATH");
         boolean overridden = existing != null && !existing.isEmpty();
-        if (!overridden && !bundleAvailable()) {
-            return; // nothing to configure and nothing to check; the native guard reports it
-        }
-        // The probe comes BEFORE the override check, not after. Validating an override for every
-        // model would fail a pure-XNNPACK workload that happens to carry a stale OPENVINO_LIB_PATH
-        // in its environment -- punishing a caller for a variable their models never touch.
+        // Probed unconditionally, including when no bundle is present. An earlier revision skipped
+        // the probe there to save "one extra .pte open" -- but measured, the probe is 6.5-10 us and
+        // essentially FLAT in model size (1.6 KB -> 2.7 MB), because method_meta reads program
+        // metadata and never the weights. Against model load it is 35% for a toy model and 1.5% for
+        // a 2.7 MB one, paid once per load rather than per inference. That is not worth trading a
+        // correct error message for -- and only this layer knows the platform and whether a bundle
+        // is on the classpath, so only this layer can produce one.
+        //
+        // The probe also comes BEFORE the override check. Validating an override for every model
+        // would fail a pure-XNNPACK workload that happens to carry a stale OPENVINO_LIB_PATH in its
+        // environment -- punishing a caller for a variable their models never touch.
         if (!EtNative.pteUsesBackend(ptePath.toString(), BACKEND)) {
-            return; // not an OpenVINO model; extract nothing, validate nothing
+            return; // not an OpenVINO model; extract nothing, validate nothing, report nothing
+        }
+        if (!EtNative.backendRegistered(BACKEND)) {
+            // No delegate in this build at all -- Windows today. No runtime can help: the model
+            // itself cannot execute here, so the only fix is to re-export. Kept distinct from the
+            // case below, which looks similar to a user and has the opposite remedy.
+            throw new EngineException(
+                    "This .pte uses the "
+                            + BACKEND
+                            + " delegate, which this build does not provide ("
+                            + LibUtils.platform()
+                            + "). The delegate ships only where the ExecuTorch runtime was built"
+                            + " with it. Re-export without the OpenVINO partitioner to run here.");
+        }
+        if (!overridden && !bundleAvailable()) {
+            // The delegate IS linked -- it ships in every Linux runtime tarball, including
+            // linux-aarch64, not just x86_64 -- so the model is runnable here the moment a runtime
+            // is present. What is missing is the OpenVINO runtime, which is published per-platform
+            // and may not exist for this one, so the message offers both routes rather than
+            // promising an artifact that might not be published.
+            throw new EngineException(
+                    "This .pte uses the "
+                            + BACKEND
+                            + " delegate, but no OpenVINO runtime is available for "
+                            + LibUtils.platform()
+                            + ". Add the djl-executorch-engine "
+                            + LibUtils.platform()
+                            + "-openvino artifact to the runtime classpath if one is published for"
+                            + " this platform, or set OPENVINO_LIB_PATH to the full path of an"
+                            + " OpenVINO C library file you supply. The delegate itself is linked in"
+                            + " this build, so the model runs once a runtime is resolved.");
         }
         if (overridden) {
             // An operator override always wins -- but a wrong one is worth catching here rather

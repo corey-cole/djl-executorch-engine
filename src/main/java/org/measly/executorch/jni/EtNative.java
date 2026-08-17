@@ -112,6 +112,22 @@ public final class EtNative {
     public static native boolean pteUsesBackend(String ptePath, String backend);
 
     /**
+     * Reports whether a backend's archive was linked into this build.
+     *
+     * <p>A link-time fact, not a configuration one: it answers "was the delegate compiled in",
+     * never "can it run right now". The two need different advice — a build without the delegate
+     * cannot run the model at all and the fix is to re-export, while a build with it but no
+     * OpenVINO runtime for this platform runs fine once a runtime is supplied. The OpenVINO
+     * delegate ships in every Linux runtime tarball, including {@code linux-aarch64}, while the
+     * OpenVINO runtime bundle is published for fewer platforms — so the second case is real.
+     *
+     * @param backend backend id, e.g. {@code OpenvinoBackend}
+     * @return true if the backend is registered in this build
+     */
+    public static native boolean backendRegistered(String backend);
+
+
+    /**
      * Sets {@code OPENVINO_LIB_PATH} if it is not already set, and returns the value in force.
      *
      * <p>The only mechanism available to a JVM: {@code System.getenv} is read-only, and glibc's

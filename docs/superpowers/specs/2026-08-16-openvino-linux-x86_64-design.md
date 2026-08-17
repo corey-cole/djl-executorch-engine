@@ -4,7 +4,17 @@
 **Status:** approved design
 **Follows:** the v1.3.1-10 pin bump and the XNNPACK workspace metric, in that order
 
-Makes the OpenVINO delegate — already compiled into the `linux-x86_64` runtime tarball as
+**Correction (verified after implementation):** this document was written on the premise, taken
+from upstream's consumer doc and the sibling project's spec, that the OpenVINO delegate ships on
+`linux-x86_64` only. That is false. `libopenvino_backend.a` is in the **`linux-aarch64` tarball
+too** — confirmed by listing the shipped archive, and by CI logging `OpenVINO delegate: linked` on
+that leg. What is `linux-x86_64`-only is the OpenVINO **runtime bundle**
+(`ET_RUNTIME_OPENVINO_PLATFORM`). Windows is the only platform with no delegate. Read every
+"linux-x86_64 only" below as applying to the runtime bundle, not the delegate. The practical
+consequence is a third state this design did not anticipate — delegate linked, no runtime available
+— which needs its own message, because re-exporting would be the wrong advice there.
+
+Makes the OpenVINO delegate — compiled into the Linux runtime tarballs as
 `lib/libopenvino_backend.a` — a supported feature of this engine: an opt-in qualified jar carrying
 the OpenVINO runtime, automatic `OPENVINO_LIB_PATH` resolution from JNI, a committed fixture, and CI
 that executes a delegated model rather than merely proving the archive linked.
@@ -64,14 +74,20 @@ anything in time. The two halves therefore sit in different places:
   `uses_backend` costs nothing extra, and every error case — backend unlinked, `OPENVINO_LIB_PATH`
   unset or not a file — is raised before delegate init. This is where all four errors come from.
 - **The Java probe is a separate `EtNative.pteUsesBackend(path, backend)` call before
-  `loadModule`,** because only Java can extract the bundle and only Java knows whether it is on the
-  classpath. It opens the `.pte` a second time, which is why it is **conditional**: it runs only
-  when the bundle is present *and* `OPENVINO_LIB_PATH` is not yet resolved.
+  `loadModule`,** because only Java can extract the bundle, and only Java knows the platform and
+  whether a bundle is on the classpath — which is what lets it say something the C++ guard cannot.
 
-That condition is what keeps the cost off everyone else. A platform with no delegate never probes —
-it gets its error from the C++ guard. A consumer without the bundle jar never probes. A consumer
-with the bundle pays one extra `.pte` open per JVM, until the first OpenVINO model resolves the path
-and the probe switches off for the rest of the process.
+**Revised after measuring (supersedes this design's original "conditional probe").** The probe was
+originally skipped when no bundle was present, to avoid "one extra `.pte` open" on platforms that
+could not act on it. Measured on a 4-core x86_64 host, that caution was unwarranted: the probe costs
+**6.5–10 µs and is essentially flat in model size** (1.6 KB → 2.7 MB), because `method_meta` reads
+program metadata and never the weights. Against model load it is 35% for a toy 1.6 KB model and
+**1.5% for a 2.7 MB one**, paid once per load rather than per inference — so it shrinks to noise
+exactly as models get realistic.
+
+The probe is therefore **unconditional**, which buys a correct error where the cheap version had to
+stay silent and let a less-informed layer report. It still returns immediately once configured, and
+still does nothing for a model that does not use the backend.
 
 **The C++ guard duplicates the Java check deliberately.** `EtNative` is public and bypasses
 `EtModel`, and our own tests use it directly. Without the guard a direct `EtNative` caller who
@@ -276,7 +292,8 @@ with no ET bump. This check is what makes that a build failure instead of a runt
 
 ## Portability: what a Windows delegate would require
 
-The delegate is linux-x86_64-only today, but upstream is actively exploring Windows. Nothing in this
+The OpenVINO *runtime bundle* is linux-x86_64-only today (the delegate is not — see the correction
+at the top), and upstream is actively exploring Windows. Nothing in this
 design may hardcode that assumption, and the parts that would still have to change are recorded here
 so the port is a known quantity rather than a discovery.
 

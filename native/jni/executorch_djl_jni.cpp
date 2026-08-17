@@ -396,6 +396,20 @@ Java_org_measly_executorch_jni_EtNative_xnnpackWorkspaceBytes(JNIEnv* env, jclas
 
 // Metadata-only backend probe. Unlike loadModule this does NOT construct an EtRuntime, so it
 // cannot trigger delegate init -- which is the only reason it exists as a separate entry point.
+// Whether a backend's archive was linked into this build. Distinguishes "this build cannot run the
+// model at all" from "it can, once an OpenVINO runtime is supplied" -- two states that need
+// different advice, and which the Java layer cannot otherwise tell apart.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_org_measly_executorch_jni_EtNative_backendRegistered(JNIEnv* env, jclass, jstring backend) {
+  const char* name = env->GetStringUTFChars(backend, nullptr);
+  if (name == nullptr) {
+    return JNI_FALSE;  // OOM already pending
+  }
+  std::string b(name);
+  env->ReleaseStringUTFChars(backend, name);
+  return measly::et::isBackendRegistered(b) ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_org_measly_executorch_jni_EtNative_pteUsesBackend(
     JNIEnv* env, jclass, jstring ptePath, jstring backend) {

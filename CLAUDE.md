@@ -243,8 +243,14 @@ double for no new defect class.
   Linear measure 0; only a conv allocates, which is why `native/spike/conv.pte` exists). The backing
   option is a **vendored patch in the pinned distribution**, not upstream ExecuTorch, and requires
   runtime `1.3.1-10`+; against a stock runtime the key does not resolve and this reads `-1`.
-- **OpenVINO delegate** (`linux-x86_64` only today; upstream is exploring Windows). The delegate is
-  compiled into the runtime tarball and linked whenever `TARGET openvino_backend` exists, but the
+- **OpenVINO delegate.** Two things ship separately and on *different* platform sets — conflating
+  them is the mistake this bullet exists to prevent. The **delegate** (`libopenvino_backend.a`) is in
+  every Linux runtime tarball, **including `linux-aarch64`**, and is linked whenever
+  `TARGET openvino_backend` exists; only Windows lacks it. The **OpenVINO runtime bundle** is
+  published for `linux-x86_64` alone (`ET_RUNTIME_OPENVINO_PLATFORM`). So aarch64 links the delegate
+  but has no runtime to resolve, which is a third state distinct from both "supported" and
+  "unsupported": the model is runnable there the moment a runtime is supplied, and telling that user
+  to re-export would be wrong. `EtNative.backendRegistered` is what separates the two, and the
   OpenVINO *runtime* is a separate ~21 MB opt-in jar
   (capability `org.measly:djl-executorch-engine-<platform>-openvino`) — it is not in the standard
   platform jar. Loading an OpenVINO `.pte` without it fails with a message naming the missing

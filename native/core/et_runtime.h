@@ -145,6 +145,16 @@ int64_t xnnpackWorkspaceBytes();
 // false there would be indistinguishable from "needs no delegate" and would hide the real error.
 bool pteUsesBackend(const std::string& ptePath, const std::string& backend);
 
+// True if `backend` is registered in this build, i.e. its archive was linked. Answers "was the
+// delegate compiled in", NOT "is it configured to run" -- registration is a link-time fact.
+//
+// Exposed because the two states need different advice and only the caller can tell them apart. A
+// build with no delegate cannot run the model at all (re-export is the fix); a build WITH the
+// delegate but no OpenVINO runtime for this platform can (supply a runtime). The delegate ships in
+// every Linux runtime tarball, including linux-aarch64, while the OpenVINO runtime bundle is
+// published for fewer platforms -- so the second case is real, not hypothetical.
+bool isBackendRegistered(const std::string& backend);
+
 // The numeric type OpenVINO will use for CPU inference on this host ("f32", "bf16", ...), or
 // "unavailable" if it cannot be determined.
 //
