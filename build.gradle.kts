@@ -30,7 +30,7 @@ dependencies {
 }
 
 tasks.test {
-    useJUnitPlatform { excludeTags("leak", "oom", "openvino", "intraop", "jmx-disabled", "stats-degraded", "stress", "stress-sweep", "stress-baseline") }
+    useJUnitPlatform { excludeTags("leak", "oom", "openvino", "openvino-unsupported", "intraop", "jmx-disabled", "stats-degraded", "stress", "stress-sweep", "stress-baseline") }
     jvmArgs("-XX:+HeapDumpOnOutOfMemoryError")
     finalizedBy(tasks.jacocoTestReport)
 }
@@ -113,6 +113,17 @@ tasks.register<Test>("openvinoTest") {
   testClassesDirs = sourceSets["test"].output.classesDirs
   classpath = sourceSets["test"].runtimeClasspath
   useJUnitPlatform { includeTags("openvino") }
+  forkEvery = 1
+}
+
+// The inverse leg of openvinoTest: asserts the platform error where the delegate is ABSENT. Shaped
+// exactly like openvinoTest (forked per class) so the two matrix legs stay symmetric.
+tasks.register<Test>("openvinoUnsupportedTest") {
+  group = "verification"
+  description = "OpenVINO delegate tests (linux-x86_64 with the openvino bundle)"
+  testClassesDirs = sourceSets["test"].output.classesDirs
+  classpath = sourceSets["test"].runtimeClasspath
+  useJUnitPlatform { includeTags("openvino-unsupported") }
   forkEvery = 1
 }
 

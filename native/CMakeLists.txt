@@ -167,6 +167,11 @@ target_link_libraries(et_runtime PUBLIC
   # Explicit, not transitive through xnnpack_backend: the core now calls
   # get_threadpool()/_unsafe_reset_threadpool itself (spec §5).
   extension_threadpool
+  # openVinoInferencePrecision() dlopens/dlsyms the vendored C API (Task 8). The dlopen usage is
+  # POSIX-only, and on glibc 2.28 (the manylinux floor) dlsym lives in libdl.so.2, so executables
+  # that link et_runtime (Catch2 units, harnesses) need -ldl. The shim tolerates the omission
+  # because shared libraries may carry undefined symbols, which is why this only surfaced in QA.
+  ${CMAKE_DL_LIBS}
 )
 
 # --- JNI shell shared library (loaded BY the JVM: JNI headers only, never libjvm/libjawt) ---
