@@ -35,13 +35,13 @@ class OpenVinoModelIT {
         float[] in = readFloats(DIR.resolve("in.bin"));
         float[] golden = readFloats(DIR.resolve("out.bin"));
 
-        // Reported, not asserted: atol=1e-2 alone cannot distinguish "correct in bf16" from
-        // "quietly degraded", so the run records which precision it actually got.
-        // Task 7: commented out because EtEngine.openVinoInferencePrecision() lands in Task 8.
-        // System.out.println("OpenVINO inference precision: " + EtEngine.openVinoInferencePrecision());
-
         try (Model model = Model.newInstance("openvino_tiny", "ExecuTorch")) {
             model.load(DIR, "openvino_tiny");
+            // Reported, not asserted: atol=1e-2 alone cannot distinguish "correct in bf16" from
+            // "quietly degraded", so the run records which precision it actually got. Printed AFTER
+            // load: before it, nothing has extracted the bundle, resolvedLibPath() is null, and the
+            // accessor would report "unavailable" -- recording nothing about the run that follows.
+            System.out.println("OpenVINO inference precision: " + EtEngine.openVinoInferencePrecision());
             try (NDManager manager = NDManager.newBaseManager("ExecuTorch");
                     NDList inputs = new NDList(manager.create(in, new Shape(1, in.length)));
                     NDList outputs = model.getBlock().forward(null, inputs, false)) {
