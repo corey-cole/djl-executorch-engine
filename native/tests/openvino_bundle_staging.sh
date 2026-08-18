@@ -9,7 +9,24 @@ cd "${REPO_ROOT}"
 fail() { echo "FAIL: $1"; exit 1; }
 
 DIR="build/native-staging/linux-x86_64/openvino"
-[ -d "${DIR}" ] || { echo "SKIP: bundle not staged"; exit 0; }
+# Absent is normally fine -- most builds never stage a bundle, and skipping keeps this runnable
+# everywhere. On the release path it is the opposite: a publish whose bundle silently failed to
+# arrive is exactly the failure this guards, so OPENVINO_BUNDLE_REQUIRED=1 turns absence into a
+# failure. publish.yml sets it.
+if [ ! -d "${DIR}" ]; then
+  if [ "${OPENVINO_BUNDLE_REQUIRED:-0}" = "1" ]; then
+    fail "no bundle at ${DIR}, but OPENVINO_BUNDLE_REQUIRED=1"
+  fi
+  echo "SKIP: bundle not staged"
+  exit 0
+fi
+
+# Presence first: everything below reads these, and a bundle that arrived truncated should say
+# which file is missing rather than fail inside a grep.
+[ -f "${DIR}/BUILDINFO" ] || fail "missing BUILDINFO"
+[ -f "${DIR}/MANIFEST" ]  || fail "missing MANIFEST"
+[ -d "${DIR}/licenses" ]  || fail "missing licenses/"
+[ -d "${DIR}/lib" ]       || fail "missing lib/"
 
 # The ABI suffix is DERIVED from BUILDINFO, never hardcoded: it tracks the OpenVINO version
 # (2025.4.1 -> 2541), so a hardcoded literal would make this test a thing to edit on every bump,
@@ -33,10 +50,6 @@ count="$(find "${DIR}/lib" -maxdepth 1 -type f | wc -l)"
 
 # Flat, not nested: RPATH=$ORIGIN is what resolves the graph.
 find "${DIR}/lib" -mindepth 1 -type d | grep -q . && fail "lib/ must be flat, found a subdirectory"
-
-[ -f "${DIR}/BUILDINFO" ] || fail "missing BUILDINFO"
-[ -f "${DIR}/MANIFEST" ]  || fail "missing MANIFEST"
-[ -d "${DIR}/licenses" ]  || fail "missing licenses/"
 
 pin_ver="$(grep -oP 'set\(ET_RUNTIME_OPENVINO_VERSION "\K[^"]+' native/cmake/EtRuntimePin.cmake)"
 man_ver="$(grep -oP '^openvino_version=\K.*' "${DIR}/MANIFEST")"

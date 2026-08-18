@@ -130,9 +130,14 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: executorch-libs-${{ matrix.platform }}
-          path: |
-            ${{ github.workspace }}/src/main/resources/native/**/*.so
-            ${{ github.workspace }}/src/main/resources/native/**/licenses/**
+          # Everything build.sh staged, rather than an enumeration of extensions. The OpenVINO
+          # bundle is mostly VERSIONED sonames (libopenvino.so.2541, libtbb.so.12, libhwloc.so.15)
+          # plus MANIFEST and BUILDINFO, and a *.so glob matches none of them. That gap reached the
+          # publish job, where it produced an OpenVINO jar holding one of seven libraries and no
+          # MANIFEST -- and it built clean, because the jar's own guard only checked for licenses.
+          # This directory contains nothing but staged artifacts, so uploading it whole is both
+          # simpler and immune to the next file that does not look like a library.
+          path: ${{ github.workspace }}/src/main/resources/native/**
           compression-level: 1 # May want to consider no compression
 
   # Windows amd64: a sibling job rather than a matrix row, because the linux rows are container-based
@@ -229,7 +234,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: executorch-libs-windows-x86_64
-          path: |
-            ${{ github.workspace }}/src/main/resources/native/**/*.dll
-            ${{ github.workspace }}/src/main/resources/native/**/licenses/**
+          # Whole staged tree, matching the Linux rows. Windows publishes no OpenVINO bundle today,
+          # but the shape is what keeps the two legs from drifting when it does.
+          path: ${{ github.workspace }}/src/main/resources/native/**
           compression-level: 1
