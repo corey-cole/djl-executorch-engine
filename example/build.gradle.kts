@@ -1,3 +1,5 @@
+import java.util.zip.ZipFile
+
 plugins {
     application
     alias(libs.plugins.jmh)
@@ -101,13 +103,87 @@ tasks.named<JavaExec>("run") {
     systemProperty("example.models.dir", modelsDir.get().asFile.absolutePath)
 }
 
-// The plugin's standard fat jar writes META-INF/services/ai.djl.engine.EngineProvider
-// twice — this project's ExecuTorch provider and djl-api's built-in RPC provider — as two
-// separate zip entries. java.util.zip.ZipFile resolves duplicate names last-entry-wins.
-// EXCLUDE keeps the first entry; project classes are added before the runtime
-// classpath, so the surviving entry is the ExecuTorch provider.
+// The JMH fat jar collides on META-INF/services/ai.djl.engine.EngineProvider: THREE dependencies
+// declare one — this project's ExecuTorch provider, djl-api's built-in RPC provider, and
+// djl-pytorch-engine's PyTorch provider.
+//
+// A DuplicatesStrategy picks exactly one and drops the rest, which is wrong for a service file:
+// ServiceLoader semantics are a UNION, not a choice. With EXCLUDE the surviving entry was the
+// ExecuTorch provider, so the PYTORCH benchmark arm lost its registration and failed at RUNTIME
+// with "Deep learning engine not found: PyTorch" — PtEngineProvider.class sitting in the jar the
+// whole time, merely unregistered. Nothing fails at build time, which is what let it go unnoticed.
+//
+// So: drop every copy and add back their union. Computed from the classpath rather than hardcoded,
+// so a future engine dependency registers itself instead of silently reintroducing this bug.
+val engineProviderService = "META-INF/services/ai.djl.engine.EngineProvider"
+
+val mergeJmhEngineProviders = tasks.register("mergeJmhEngineProviders") {
+    description = "Unions every ai.djl.engine.EngineProvider registration for the JMH fat jar."
+    // The same sources jmhJar packs: the resolved runtime classpath plus this project's own output.
+    val sources = files(
+        configurations.named("jmhRuntimeClasspath"),
+        sourceSets["main"].output,
+        sourceSets["jmh"].output,
+    )
+    val outDir = layout.buildDirectory.dir("generated/jmh-engine-providers")
+    val resource = engineProviderService
+    inputs.files(sources).withPropertyName("sources")
+    outputs.dir(outDir).withPropertyName("outDir")
+    doLast {
+        val found = linkedSetOf<String>()
+        sources.forEach { f ->
+            when {
+                f.isDirectory ->
+                    File(f, resource).takeIf { it.isFile }?.readLines()?.let { found += it }
+                f.isFile && f.name.endsWith(".jar") ->
+                    ZipFile(f).use { zip ->
+                        zip.getEntry(resource)?.let { entry ->
+                            zip.getInputStream(entry).bufferedReader().use { found += it.readLines() }
+                        }
+                    }
+            }
+        }
+        // Service files allow comments and blank lines; strip them so the merged file is valid.
+        val merged = found
+            .map { it.substringBefore('#').trim() }
+            .filter { it.isNotEmpty() }
+        require(merged.isNotEmpty()) {
+            "No ai.djl.engine.EngineProvider found on the JMH runtime classpath -- every benchmark " +
+                "arm would fail with \"Deep learning engine not found\"."
+        }
+        // Written under a name that cannot match the exclude pattern below; jmhJar renames it into
+        // place. A file already at the service path would be excluded along with the originals.
+        val target = outDir.get().file("merged-engine-providers.txt").asFile
+        target.parentFile.mkdirs()
+        target.writeText(merged.joinToString("\n", postfix = "\n"))
+        logger.info("merged {} EngineProvider registration(s): {}", merged.size, merged)
+    }
+}
+
 tasks.named<Jar>("jmhJar") {
+    // Still needed: the fat jar has other legitimate duplicates beyond the service file.
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    exclude(engineProviderService)
+    from(mergeJmhEngineProviders) {
+        into("META-INF/services")
+        rename { "ai.djl.engine.EngineProvider" }
+    }
+    val expected = listOf(
+        "org.measly.executorch.engine.EtEngineProvider",
+        "ai.djl.pytorch.engine.PtEngineProvider",
+    )
+    val jarFile = archiveFile
+    val resource = engineProviderService
+    doLast { // The failure this fixes is invisible until a benchmark runs, so assert at build time
+        val registered = ZipFile(jarFile.get().asFile).use { zip ->
+            val entry = requireNotNull(zip.getEntry(resource)) { "jmh jar has no $resource" }
+            zip.getInputStream(entry).bufferedReader().use { it.readLines() }
+        }
+        val missing = expected.filterNot { registered.contains(it) }
+        require(missing.isEmpty()) {
+            "jmh jar is missing EngineProvider registration(s) $missing; registered=$registered"
+        }
+    }
 }
 
 jmh {
