@@ -36,7 +36,18 @@ jobs:
           pattern: ${{ needs.build-executorch-shim.outputs.artifact-pattern }}
           path: build/native-staging/
           merge-multiple: true
-      
+
+      # The release gate for the OpenVINO bundle. Everything above this point can succeed with a
+      # bundle that arrived truncated -- the jar task builds clean from a partial directory, so the
+      # first sign of trouble would be a consumer whose correctly-declared capability jar reports
+      # "no OpenVINO runtime is available". This asserts the downloaded tree is complete (all
+      # libraries, MANIFEST, BUILDINFO, flat lib/, version agreeing with the pin) BEFORE anything is
+      # signed or uploaded. REQUIRED=1 so an absent bundle fails rather than skipping.
+      - name: Verify the OpenVINO bundle survived the artifact round-trip
+        env:
+          OPENVINO_BUNDLE_REQUIRED: "1"
+        run: ./native/tests/openvino_bundle_staging.sh
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:

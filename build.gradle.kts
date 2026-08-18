@@ -286,11 +286,26 @@ val openvinoJarTasks = nativePlatforms.map { platform ->
       into("META-INF/licenses/openvino-runtime")
     }
     val bundleDir = nativeStaging.get().dir(platform).dir("openvino").asFile
-    onlyIf { bundleDir.isDirectory }
-    doFirst { // A jar with the libraries but no notices is not shippable
+    // A licenses/ subtree alone used to satisfy this, which is how a bundle carrying one of seven
+    // libraries and no MANIFEST once got as far as being publishable. Key on MANIFEST instead: it
+    // is what OpenVinoRuntime.bundleAvailable() looks for, so its presence is the same question a
+    // consumer asks.
+    onlyIf { File(bundleDir, "MANIFEST").isFile }
+    doFirst { // Neither a jar without notices nor one without the files the runtime needs is shippable
       require(File(bundleDir, "licenses").isDirectory) {
         "Missing OpenVINO third-party notices for ${platform}: ${bundleDir}/licenses"
       }
+      // Deliberately NOT a copy of the library list -- native/tests/openvino_bundle_staging.sh owns
+      // that enumeration and publish.yml runs it as the release gate. This only catches a bundle
+      // truncated badly enough to be obvious, so the jar cannot be built from an empty lib/.
+      listOf("MANIFEST", "BUILDINFO").forEach { name ->
+        require(File(bundleDir, name).isFile) {
+          "Missing OpenVINO ${name} for ${platform}: ${bundleDir}/${name}" +
+            " (the staged bundle is incomplete; see docs/openvino-version-bump.md)"
+        }
+      }
+      val libs = File(bundleDir, "lib").listFiles()?.size ?: 0
+      require(libs > 0) { "Staged OpenVINO bundle for ${platform} has no libraries: ${bundleDir}/lib" }
     }
   }
 }
