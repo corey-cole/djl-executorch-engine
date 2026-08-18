@@ -46,8 +46,22 @@ dependencies {
 }
 ```
 
-Swap `linux-x86_64` for `linux-aarch64` or `windows-x86_64` (or add several) as needed. Maven consumers add the
-classifier form alongside the main (classifier-less) dependency:
+Swap `linux-x86_64` for `linux-aarch64` or `windows-x86_64` (or add several) as needed.
+
+Models lowered to the **OpenVINO** delegate need one more capability. The OpenVINO runtime is ~21 MB
+and ships as its own opt-in variant rather than inside the platform jar, so it is requested
+separately and only where it is published (`linux-x86_64`):
+
+```kotlin
+runtimeOnly("org.measly:djl-executorch-engine:<version>") {
+    capabilities { requireCapability("org.measly:djl-executorch-engine-linux-x86_64-openvino") }
+}
+```
+
+Loading an OpenVINO `.pte` without it fails with a message naming the missing artifact. Models that
+use only XNNPACK need nothing extra.
+
+Maven consumers add the classifier form alongside the main (classifier-less) dependency:
 
 ```xml
 <dependency>

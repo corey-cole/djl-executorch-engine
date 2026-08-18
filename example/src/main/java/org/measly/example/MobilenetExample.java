@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import org.measly.executorch.engine.EtEngine;
 
 /** Classifies a bundled image with MobileNetV2 through the ExecuTorch engine and prints top-5. */
 public final class MobilenetExample {
@@ -32,8 +33,7 @@ public final class MobilenetExample {
             return;
         }
 
-        String artifact = variant == Variant.PYTORCH ? "mobilenet_v2.pt" : "mobilenet_v2.pte";
-        Path models = ModelArtifacts.require(artifact).getParent();
+        Path models = ModelArtifacts.require(variant.artifact()).getParent();
         List<String> synset = loadSynset();
 
         try (CloseableImageTranslator translator = variant.newTranslator(synset);
@@ -44,13 +44,20 @@ public final class MobilenetExample {
                                 .setTypes(Image.class, Classifications.class)
                                 .optEngine(variant.engine)
                                 .optModelPath(models)
-                                .optModelName("mobilenet_v2")
+                                .optModelName(variant.modelName())
                                 .optTranslator(translator)
                                 .build()
                                 .loadModel();
                 Predictor<Image, Classifications> predictor = model.newPredictor()) {
             Image image = ImageFactory.getInstance().fromInputStream(imageStream);
             Classifications result = predictor.predict(image);
+            if (variant == Variant.ET_OPENVINO) {
+                // Printed AFTER load, when the bundle has been extracted and the delegate has
+                // resolved a runtime. OpenVINO picks f32 or bf16 from the CPU it lands on, which
+                // moves both the numbers and the throughput -- and is otherwise invisible.
+                System.out.println(
+                        "OpenVINO inference precision: " + EtEngine.openVinoInferencePrecision());
+            }
             System.out.println("Top-5 (" + variant + " / MobileNetV2):");
             for (Classifications.Classification c : result.topK(5)) {
                 System.out.printf("  %-30s %.4f%n", c.getClassName(), c.getProbability());
