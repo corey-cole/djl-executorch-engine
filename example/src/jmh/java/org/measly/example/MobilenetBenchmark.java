@@ -23,12 +23,19 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 
 /**
- * Races three arms on the same MobileNetV2 weights, all in DJL {@code Criteria}/{@code Predictor}:
- * {@code ET_HYBRID} (ExecuTorch forward, PyTorch-backed preprocessing), {@code PYTORCH} (LibTorch),
- * and {@code ET_NATIVE} (ExecuTorch forward, plain-Java preprocessing — no LibTorch at all). Each
- * arm's engine + translator come from {@link Variant}. JMH runs each {@code @Param} value in its own
- * fork, so the {@code ET_NATIVE} fork — which never constructs a PyTorch manager — loads no LibTorch.
+ * Races four arms on the same MobileNetV2 weights, all in DJL {@code Criteria}/{@code Predictor}:
+ * {@code ET_HYBRID} (ExecuTorch/XNNPACK forward, PyTorch-backed preprocessing), {@code PYTORCH}
+ * (LibTorch), {@code ET_NATIVE} (ExecuTorch forward, plain-Java preprocessing — no LibTorch at
+ * all), and {@code ET_OPENVINO} (ExecuTorch forward through the OpenVINO delegate, same
+ * preprocessing as ET_HYBRID so the difference is attributable to the delegate). Each arm's engine,
+ * artifact, and translator come from {@link Variant}. JMH runs each {@code @Param} value in its own
+ * fork, so the {@code ET_NATIVE} fork — which never constructs a PyTorch manager — loads no
+ * LibTorch, and the {@code ET_OPENVINO} fork gets its own once-per-process delegate dlopen.
  * Every state closes its translator last, after predictor and model.
+ *
+ * <p>{@code ET_OPENVINO} needs {@code :example:exportOpenVinoModel} and runs on linux-x86_64 only;
+ * elsewhere its cells fail at setup rather than silently measuring something else. Select the other
+ * arms with {@code -p variant=...} on a platform without an OpenVINO runtime.
  */
 public class MobilenetBenchmark {
 
@@ -36,24 +43,24 @@ public class MobilenetBenchmark {
     @State(Scope.Benchmark)
     public static class Config {
         @Param public Variant variant;
-        /** Selects the ExecuTorch .pte export mode; ignored for PYTORCH (always the .pt). */
+        /**
+         * Selects the ExecuTorch .pte export mode. Arms with no unplanned counterpart (PYTORCH,
+         * ET_OPENVINO) resolve both values to the same artifact, so those cells duplicate.
+         */
         @Param({"planned", "unplanned"}) public String exportMode;
 
         Path modelsDir;
         Image image;
         List<String> synset;
 
-        /** Model name for the arm; PYTORCH always uses the .pt's name. */
+        /** Model name for the arm under the selected export mode. */
         String modelName() {
-            return variant == Variant.PYTORCH
-                    ? "mobilenet_v2"
-                    : ("unplanned".equals(exportMode) ? "mobilenet_v2_unplanned" : "mobilenet_v2");
+            return variant.modelName(exportMode);
         }
 
         @Setup(Level.Trial)
         public void setup() throws Exception {
-            String artifact = modelName() + (variant == Variant.PYTORCH ? ".pt" : ".pte");
-            modelsDir = ModelArtifacts.require(artifact).getParent();
+            modelsDir = ModelArtifacts.require(variant.artifact(exportMode)).getParent();
             try (InputStream in = MobilenetBenchmark.class.getResourceAsStream("/kitten.jpg")) {
                 image = ImageFactory.getInstance().fromInputStream(in);
             }
