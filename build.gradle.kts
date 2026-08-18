@@ -336,7 +336,18 @@ val nativeVariants = nativePlatforms.map { platform ->
     }
 }
 
-val openvinoVariants = nativePlatforms.map { platform ->
+// Registered ONLY where a bundle is actually staged, which is not every platform -- the pin decides,
+// and today that is linux-x86_64 alone. Registering it everywhere publishes Gradle Module Metadata
+// naming a jar that nativeJar-<platform>-openvino correctly declined to build, and
+// generateMetadataFileForMavenPublication then dies on FileNotFoundException. That failed the v1.5.0
+// release outright (before any upload, so nothing reached Central).
+//
+// Same condition as the jar task's onlyIf, deliberately: a variant must exist if and only if its
+// artifact does. Silently dropping the variant on a platform that SHOULD have one is caught earlier
+// and louder -- publish.yml gates the release on native/tests/openvino_bundle_staging.sh.
+val openvinoVariants = nativePlatforms.filter { platform ->
+    nativeStaging.get().dir(platform).dir("openvino").file("MANIFEST").asFile.isFile
+}.map { platform ->
     val osFamily = platform.substringBefore("-")
     val arch = platform.substringAfter("-")
     configurations.consumable("openvinoRuntimeElements-${platform}") {
