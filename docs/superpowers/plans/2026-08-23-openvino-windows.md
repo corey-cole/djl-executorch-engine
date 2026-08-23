@@ -58,7 +58,11 @@ git push -u origin feature/openvino-windows     # from the Linux box, after Task
 ```
 
 ```powershell
-git fetch origin; git checkout feature/openvino-windows; git reset --hard origin/feature/openvino-windows
+$repo = "<the djl-executorch-engine checkout path on winbox>"
+Set-Location $repo
+git fetch origin
+git checkout feature/openvino-windows
+git reset --hard origin/feature/openvino-windows
 ```
 
 Task 6 needs the branch pushed for CI regardless, so this costs nothing extra. If a work-in-progress
@@ -71,6 +75,28 @@ winbox** — `scp` with absolute forward-slash targets is the only copy mechanis
 bundle by URL from the pin. The clone at `~/workspace/executorch-runtime-dist` on the Linux box is
 for reading producer documentation only. winbox does need **network access** to GitHub releases for
 both downloads.
+
+**Every remote block must set its own working directory.** A remote `pwsh` session starts in the
+user's **home directory**, not the checkout — so a bare `./native/build_qa.sh` or `.\gradlew.bat`
+fails with a path error that reads like a missing file. Worse, `Launch-VsDevShell.ps1` *changes the
+working directory* unless given `-SkipAutomaticLocation`, so even a block that started correctly can
+be moved out from under itself.
+
+Bind the checkout path once at the start of the session and open every subsequent block with it:
+
+```powershell
+$repo = "<the djl-executorch-engine checkout path on winbox>"
+Set-Location $repo
+```
+
+The actual path is machine-specific and deliberately not recorded in this repo — the winbox
+hostname, user, and key path live in `windows-jni-handoff.md`, outside version control. Every
+PowerShell block in Tasks 1 and 9 below assumes `$repo` is bound and begins with `Set-Location $repo`
+for that reason; do not drop those lines as noise.
+
+`scp` with no path lands in the remote user's home directory, which is why the helper script below
+is invoked through `$env:USERPROFILE` rather than a `/tmp` path — Windows OpenSSH and Git-Bash do not
+agree on what `/tmp` means.
 
 **Driving it.**
 
@@ -234,13 +260,16 @@ ls -1 /tmp/ovwin/b/lib
 # bare-filename branch and search somewhere else entirely.
 echo "SMOKE_LIB=$(cygpath -w /tmp/ovwin/b/lib/openvino_c.dll)"
 EOF
-scp /tmp/ov-smoke-stage.sh winbox:/tmp/ov-smoke-stage.sh
+scp /tmp/ov-smoke-stage.sh winbox:ov-smoke-stage.sh   # no path: lands in the remote home dir
 ```
 
-Stage the bundle first, as its own short call with stdin redirected:
+Stage the bundle first, as its own short call with stdin redirected. The script reads
+`native/cmake/EtRuntimePin.cmake` by relative path, so the working directory must be the checkout —
+the session starts in the home directory instead:
 
 ```powershell
-& "C:\Program Files\Git\bin\bash.exe" /tmp/ov-smoke-stage.sh </dev/null
+Set-Location $repo
+& "C:\Program Files\Git\bin\bash.exe" "$env:USERPROFILE/ov-smoke-stage.sh" </dev/null
 ```
 
 Expected: exactly six DLLs listed, and a `SMOKE_LIB=C:\...\openvino_c.dll` line.
@@ -250,6 +279,7 @@ itself (`./native/asan/et_runtime_test.exe --order decl`), so the smoke case run
 there is no binary to invoke by hand, and no sanitizers on this platform despite the directory name:
 
 ```powershell
+Set-Location $repo
 $env:ET_OPENVINO_SMOKE_LIB = "<the SMOKE_LIB value printed above>"
 & "C:\Program Files\Git\bin\bash.exe" -c './native/build_qa.sh' </dev/null
 ```
@@ -1016,33 +1046,60 @@ This verifies the capability on a real Windows host. It is *not* sign-off: winbo
 Community against the runner's VS 17 Enterprise, so the `windows-2022` job from Task 6 is the
 acceptance gate. What this catches that CI cannot is anything needing a human to look at it.
 
-- [ ] **Step 1: Get the branch onto winbox**
+- [ ] **Step 1 (winbox): Get the branch onto winbox**
 
-Push the branch from the Linux box, then on winbox `git fetch origin` and hard-reset to it — see
-"Working on winbox" for both halves and the `git bundle` fallback. Delete `native/build` and any QA
-tree afterwards. Drive the session in short chunks with `</dev/null`.
-
-- [ ] **Step 2: Activate the MSVC dev shell**
+Push the branch from the Linux box, then bind `$repo` and update the checkout — see "Working on
+winbox" for both halves and the `git bundle` fallback. `$repo` must stay bound for the rest of this
+task; every block below re-issues `Set-Location $repo` because a remote session starts in the home
+directory.
 
 ```powershell
-& (& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath | ForEach-Object { "$_\Common7\Tools\Launch-VsDevShell.ps1" }) -Arch amd64
+$repo = "<the djl-executorch-engine checkout path on winbox>"
+Set-Location $repo
+git fetch origin
+git checkout feature/openvino-windows
+git reset --hard origin/feature/openvino-windows
+Remove-Item -Recurse -Force native\build, native\asan -ErrorAction SilentlyContinue
 ```
 
-- [ ] **Step 3: Build and stage**
+A stale CMake cache is worth deleting rather than debugging: one configured for a different source
+root or ExecuTorch version produces failures that read like compiler bugs. Drive the session in
+short chunks with `</dev/null`.
+
+- [ ] **Step 2 (winbox): Activate the MSVC dev shell**
+
+`-SkipAutomaticLocation` is required, not optional: without it `Launch-VsDevShell.ps1` changes the
+working directory to the Visual Studio default, and every relative path afterwards resolves against
+the wrong root. CI passes it for the same reason.
 
 ```powershell
+$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+& "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -SkipAutomaticLocation
+Set-Location $repo
+```
+
+- [ ] **Step 3 (winbox): Build and stage**
+
+```powershell
+Set-Location $repo
 & "C:\Program Files\Git\bin\bash.exe" -c './native/build.sh' </dev/null
 ```
 
 Expected: `executorch_djl.dll` staged, and — for the first time on this platform — `OpenVINO bundle staged:` naming `src/main/resources/native/windows-x86_64/openvino`. Confirm the six DLLs and the MANIFEST keys:
 
 ```powershell
-& "C:\Program Files\Git\bin\bash.exe" -c 'ls -1 src/main/resources/native/windows-x86_64/openvino/lib && cat src/main/resources/native/windows-x86_64/openvino/MANIFEST' </dev/null
+Set-Location $repo
+Get-ChildItem src\main\resources\native\windows-x86_64\openvino\lib | Select-Object -ExpandProperty Name
+Get-Content src\main\resources\native\windows-x86_64\openvino\MANIFEST
 ```
 
-- [ ] **Step 4: Run the CRT check and the shell tests**
+Done in PowerShell rather than Git-Bash: a `bash -c` string chaining two commands with `&&` is
+exactly the quoting hazard described above.
+
+- [ ] **Step 4 (winbox): Run the CRT check and the shell tests**
 
 ```powershell
+Set-Location $repo
 $bash = "${env:ProgramFiles}\Git\bin\bash.exe"
 & $bash -c './native/tests/check_windows_crt.sh native/build src/main/resources/native/windows-x86_64/executorch_djl.dll' </dev/null
 New-Item -ItemType Directory -Force -Path build\native-staging\windows-x86_64 | Out-Null
@@ -1054,23 +1111,25 @@ Copy-Item -Recurse -Force src\main\resources\native\windows-x86_64\* build\nativ
 Expected: PASS from each. One simple command per Git-Bash call, for the quoting reason in "Working
 on winbox".
 
-- [ ] **Step 5: Run the OpenVINO JVM tests**
+- [ ] **Step 5 (winbox): Run the OpenVINO JVM tests**
 
 ```powershell
+Set-Location $repo
 .\gradlew.bat --no-daemon --console=plain openvinoTest </dev/null
 ```
 
 Expected: green — `OpenVinoRuntimeTest` (extraction into `%LOCALAPPDATA%\executorch-djl\openvino\<sha>\`), `OpenVinoConcurrentExtractionTest` (the atomic-rename publication, which matters most on the platform that refuses to delete a loaded library), and `OpenVinoModelIT` (parity at `atol=1e-2`).
 
-- [ ] **Step 6: Run the full Windows suite**
+- [ ] **Step 6 (winbox): Run the full Windows suite**
 
 ```powershell
+Set-Location $repo
 .\gradlew.bat --no-daemon --console=plain test </dev/null
 ```
 
 Expected: green. This is the regression check that Task 3's extractor rewrite did not disturb anything else.
 
-- [ ] **Step 7: Record the results**
+- [ ] **Step 7 (winbox): Record the results**
 
 No commit. Note each outcome, and record which precision `openVinoInferencePrecision()` reported on winbox — it is useful context for reading any future parity failure.
 
