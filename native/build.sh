@@ -210,15 +210,34 @@ if [ "${STAGE_SO}" = "1" ]; then
     mkdir -p "${OV_OUT}"
     # --strip-components=1 drops the single top-level dir, keeping lib/, licenses/ and BUILDINFO.
     tar xzf "${TARBALL}" --strip-components=1 -C "${OV_OUT}"
-    # The symlink is deliberately not shipped: jars do not preserve symlinks, and it is unnecessary --
-    # OPENVINO_LIB_PATH names the versioned file directly and $ORIGIN resolves the rest. Verified
-    # against this exact bundle.
-    rm -f "${OV_OUT}/lib/libopenvino_c.so"
+    # Linux only: the bundle ships an unversioned compatibility symlink beside the versioned file.
+    # Jars do not preserve symlinks and nothing needs it -- OPENVINO_LIB_PATH names the versioned
+    # file directly and $ORIGIN resolves the rest. Guarded rather than left to `rm -f` missing on
+    # Windows, so the intent survives someone reading only this line.
+    if [ -L "${OV_OUT}/lib/libopenvino_c.so" ]; then
+      rm -f "${OV_OUT}/lib/libopenvino_c.so"
+    fi
+
+    # The bundle declares its own contents. The Java extractor copies these names verbatim instead
+    # of reconstructing them from an ABI suffix, which is what lets one code path serve an
+    # ABI-versioned Linux bundle and an unversioned Windows one -- the Windows BUILDINFO carries no
+    # ov_abi key at all. Generated from what actually landed in lib/, so it cannot disagree with the
+    # tree. Computed AFTER the symlink removal above, or the symlink would be listed.
+    # ls -1, not find -printf: this runs under Git-Bash on Windows too, and lib/ is flat by
+    # contract -- the staging test asserts it.
+    OV_LIBS="$(ls -1 "${OV_OUT}/lib" | LC_ALL=C sort | tr '\n' ' ')"
+    OV_LIBS="${OV_LIBS% }"
+    [ -n "${OV_LIBS}" ] || { echo "staged OpenVINO bundle has no libraries"; exit 1; }
+
+    OV_CLIB="$(printf '%s\n' ${OV_LIBS} | grep -E '^(lib)?openvino_c\.(so|dll)' | head -1)"
+    [ -n "${OV_CLIB}" ] || { echo "no OpenVINO C API library in the staged bundle"; exit 1; }
 
     {
       echo "openvino_version=${OV_VER}"
       echo "tarball_sha256=${OV_SHA}"
       echo "tarball_url=${OV_URL}"
+      echo "libs=${OV_LIBS}"
+      echo "c_library=${OV_CLIB}"
     } > "${OV_OUT}/MANIFEST"
 
     echo "OpenVINO bundle staged: ${OV_OUT} ($(du -sh "${OV_OUT}" | cut -f1))"

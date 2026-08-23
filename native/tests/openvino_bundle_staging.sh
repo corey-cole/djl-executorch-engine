@@ -55,4 +55,26 @@ pin_ver="$(grep -oP 'set\(ET_RUNTIME_OPENVINO_VERSION "\K[^"]+' native/cmake/EtR
 man_ver="$(grep -oP '^openvino_version=\K.*' "${DIR}/MANIFEST")"
 [ "${pin_ver}" = "${man_ver}" ] || fail "MANIFEST openvino_version=${man_ver} != pin ${pin_ver}"
 
+# The bundle declares its own contents so the Java extractor copies names rather than reconstructing
+# them -- which is what lets one code path serve an ABI-versioned Linux bundle and an unversioned
+# Windows one. Asserted against the actual lib/ directory, not just for presence: a MANIFEST that
+# disagrees with the tree would send the extractor after a file that is not there, failing at
+# dlopen rather than here.
+man_libs="$(grep -oP '^libs=\K.*' "${DIR}/MANIFEST" || true)"
+[ -n "${man_libs}" ] || fail "MANIFEST carries no libs"
+
+actual_libs="$(ls -1 "${DIR}/lib" | LC_ALL=C sort | tr '\n' ' ')"
+[ "${man_libs} " = "${actual_libs}" ] \
+  || fail "MANIFEST libs disagree with lib/: manifest='${man_libs}' actual='${actual_libs%% }'"
+
+man_clib="$(grep -oP '^c_library=\K.*' "${DIR}/MANIFEST" || true)"
+[ -n "${man_clib}" ] || fail "MANIFEST carries no c_library"
+[ -f "${DIR}/lib/${man_clib}" ] || fail "c_library names a file that is not in lib/: ${man_clib}"
+# It must be the C API library specifically -- pointing OPENVINO_LIB_PATH at any other library in
+# the bundle loads something that resolves no ov_* symbols.
+case "${man_clib}" in
+  libopenvino_c.so.*|openvino_c.dll) ;;
+  *) fail "c_library is not the OpenVINO C API library: ${man_clib}" ;;
+esac
+
 echo "PASS: openvino bundle staging"
