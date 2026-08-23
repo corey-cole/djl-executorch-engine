@@ -20,7 +20,8 @@ decide() {  # <platform> [supported-set]; echoes the OV_RESOLUTION line
   fi
 }
 
-# The shipped default: linux-x86_64 is the one platform whose bundle OpenVinoRuntime can extract.
+# The shipped default: linux-x86_64 and windows-x86_64 are the platforms whose bundles
+# OpenVinoRuntime can extract.
 out="$(decide linux-x86_64)"
 grep -q 'decision=stage'   <<<"${out}" || fail "linux-x86_64 must stage: ${out}"
 grep -q 'url=https://'     <<<"${out}" || fail "linux-x86_64 url must be literal: ${out}"
