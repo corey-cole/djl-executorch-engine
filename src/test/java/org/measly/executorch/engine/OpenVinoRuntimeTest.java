@@ -142,6 +142,21 @@ class OpenVinoRuntimeTest {
     }
 
     @Test
+    void reportsTheInferencePrecisionOpenVinoWillUseOnThisHost() throws Exception {
+        TestSupport.assumeOpenVinoBundleAvailable();
+        OpenVinoRuntime.ensureExtracted();
+
+        String precision = EtEngine.openVinoInferencePrecision();
+        // The VALUE is not asserted -- it is a property of the CPU this happens to run on, and
+        // asserting it would assert the hardware. What is asserted is that the read succeeded, i.e.
+        // the vendored C API loaded and answered. "unavailable" means it did not.
+        assertNotEquals("unavailable", precision, "the C API should have loaded and answered");
+        assertTrue(
+                precision.equals("f32") || precision.equals("bf16") || precision.equals("f16"),
+                "unexpected precision: " + precision);
+    }
+
+    @Test
     void theNoDelegateErrorDirectsTheUserToReExport() {
         // The condition guarding this message (!backendRegistered) is false on every SHIPPED
         // platform: all three runtime tarballs carry the delegate. It stays reachable through the
