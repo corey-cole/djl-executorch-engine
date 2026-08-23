@@ -2,12 +2,12 @@
 # Build + run the thread-scaling harness: does concurrent forward() on independent EtRuntime
 # instances actually scale, or does it serialize on the XNNPACK shared-workspace mutex?
 #
-# ExecuTorch 1.3.1 defaults EXECUTORCH_XNNPACK_SHARED_WORKSPACE=ON, and our runtime tarball is
+# ExecuTorch 1.4.1 defaults EXECUTORCH_XNNPACK_SHARED_WORKSPACE=ON, and our runtime tarball is
 # built `--preset linux` (BUILDINFO cmake_flags) which does not override it -- so the shipped
 # runtime uses WorkspaceSharingMode::Global, whose XNNWorkspace::acquire() takes a mutex on every
 # delegate call. This sweep is what turns that reading of the source into a number.
 #
-# Sweeps thread count x workspace sharing mode. The mode is a RUNTIME backend option in 1.3.1, so
+# Sweeps thread count x workspace sharing mode. The mode is a RUNTIME backend option in 1.4.1, so
 # every arm comes from the same binary and the same runtime tarball -- no rebuild, no pin bump.
 #
 #   default  - leave the runtime alone (Global). This is what ships today.

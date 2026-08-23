@@ -14,7 +14,7 @@ public final class EtEngine extends Engine {
     /** The DJL engine name this plugin registers: {@value}. */
     public static final String ENGINE_NAME = "ExecuTorch";
     static final int RANK = 10;
-    static final String EXECUTORCH_VERSION = "1.3.1"; // pinned ExecuTorch runtime version
+    static final String EXECUTORCH_VERSION = "1.4.1"; // pinned ExecuTorch runtime version
 
     /**
      * JVM flag controlling the intra-op (XNNPACK) thread pool size, e.g.
