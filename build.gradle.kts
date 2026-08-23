@@ -114,6 +114,14 @@ tasks.register<Test>("openvinoTest") {
   classpath = sourceSets["test"].runtimeClasspath
   useJUnitPlatform { includeTags("openvino") }
   forkEvery = 1
+  // Every case is gated on a bundle being on the classpath, so a green run and a run that skipped
+  // everything look identical from the outside -- and the cases that matter most here are the ones
+  // asserting a load actually resolved. Naming what ran, and what did not, is what makes this task
+  // readable as evidence rather than just as a pass.
+  testLogging {
+    events("passed", "skipped", "failed")
+    showStandardStreams = false
+  }
 }
 
 // The inverse leg of openvinoTest: asserts the platform error where the delegate is ABSENT. Shaped
