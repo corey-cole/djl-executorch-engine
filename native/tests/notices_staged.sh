@@ -13,9 +13,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 fail() { echo "FAIL: $1"; exit 1; }
 
-DIR="src/main/resources/native/linux-x86_64/licenses"
+DIR="${NOTICES_DIR:-src/main/resources/native/linux-x86_64/licenses}"
 # Absent is fine on a host that has not staged a build. The release path is the opposite: publish.yml
-# must never ship a jar whose notices silently failed to arrive, so it sets NOTICES_REQUIRED=1.
+# must never ship a jar whose notices silently failed to arrive, so it sets NOTICES_REQUIRED=1 and
+# points NOTICES_DIR at the staged artifact tree (build/native-staging/linux-x86_64/licenses). The
+# default keeps local runs and native-build-job.yml (which stages into the source tree) unchanged.
 if [ ! -d "${DIR}" ]; then
   if [ "${NOTICES_REQUIRED:-0}" = "1" ]; then
     fail "no notices at ${DIR}, but NOTICES_REQUIRED=1"

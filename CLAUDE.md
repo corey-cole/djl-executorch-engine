@@ -43,8 +43,11 @@ The engine links against the ExecuTorch runtime, but that runtime is **downloade
   `native/CMakeLists.txt` resolves rows through it. Do not rebuild `ET_RUNTIME_URL_<variant>_<row>`
   names by hand: an unpublished pair expands to an empty string and surfaces as an opaque
   `FetchContent` error, where the selector fails at configure time naming the pair it could not find.
-- The pin also carries `ET_RUNTIME_OPENVINO_*` rows (an OpenVINO CPU runtime bundle, linux-x86_64
-  only). This engine does not link the OpenVINO delegate, so those rows are unconsumed.
+- The pin also carries per-platform `ET_RUNTIME_OPENVINO_URL_<platform>`/`SHA256_<platform>` rows
+  for an OpenVINO CPU runtime bundle: `linux-x86_64`, `windows-x86_64`, plus a
+  `windows-x86_64-static` alias. A deprecated singular legacy form (`ET_RUNTIME_OPENVINO_PLATFORM`)
+  is no longer read. `native/build.sh` consumes the per-platform rows through
+  `ET_OPENVINO_SUPPORTED_PLATFORMS` (default `linux-x86_64`).
 - Two runtime behaviours worth knowing: `EXECUTORCH_XNNPACK_SHARED_WORKSPACE` is pinned **ON**, so
   one workspace arena is shared across delegate instances; and the `devtools` variant is built
   **with** logging, so it is not a logging-free comparison point in `native/build_variants.sh` —
@@ -244,10 +247,13 @@ double for no new defect class.
   option is a **vendored patch in the pinned distribution**, not upstream ExecuTorch, and requires the pinned
   runtime distribution; against a stock ExecuTorch the key does not resolve and this reads `-1`.
 - **OpenVINO delegate.** Two things ship separately and on *different* platform sets — conflating
-  them is the mistake this bullet exists to prevent. The **delegate** (`libopenvino_backend.a`) is in
-  every Linux runtime tarball, **including `linux-aarch64`**, and is linked whenever
-  `TARGET openvino_backend` exists; only Windows lacks it. The **OpenVINO runtime bundle** is
-  published for `linux-x86_64` alone (`ET_RUNTIME_OPENVINO_PLATFORM`). So aarch64 links the delegate
+  them is the mistake this bullet exists to prevent. The **delegate** is in every Linux runtime
+  tarball, **including `linux-aarch64`** (`libopenvino_backend.a`), and in the Windows tarballs
+  (`openvino_backend.lib`, linked incidentally); it is linked whenever `TARGET openvino_backend`
+  exists. The **OpenVINO runtime bundle** is published per platform (the pin's
+  `ET_RUNTIME_OPENVINO_URL_<platform>`/`SHA256_<platform>` rows for `linux-x86_64` and
+  `windows-x86_64`); the engine stages one only for platforms in its supported set (see the
+  engine-side-decision paragraph below). So aarch64 links the delegate
   but has no runtime to resolve, which is a third state distinct from both "supported" and
   "unsupported": the model is runnable there the moment a runtime is supplied, and telling that user
   to re-export would be wrong. `EtNative.backendRegistered` is what separates the two, and the
