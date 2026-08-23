@@ -3,7 +3,6 @@ package org.measly.executorch.engine;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -143,21 +142,6 @@ class OpenVinoRuntimeTest {
         // platform, including ones with no bundle, because that is the case whose error path
         // matters most.
         assertDoesNotThrow(OpenVinoRuntime::bundleAvailable);
-    }
-
-    @Test
-    void reportsTheInferencePrecisionOpenVinoWillUseOnThisHost() throws Exception {
-        TestSupport.assumeOpenVinoBundleAvailable();
-        OpenVinoRuntime.ensureExtracted();
-
-        String precision = EtEngine.openVinoInferencePrecision();
-        // The VALUE is not asserted -- it is a property of the CPU this happens to run on, and
-        // asserting it would assert the hardware. What is asserted is that the read succeeded, i.e.
-        // the vendored C API loaded and answered. "unavailable" means it did not.
-        assertNotEquals("unavailable", precision, "the C API should have loaded and answered");
-        assertTrue(
-                precision.equals("f32") || precision.equals("bf16") || precision.equals("f16"),
-                "unexpected precision: " + precision);
     }
 
     @Test

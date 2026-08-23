@@ -432,59 +432,102 @@ bool pteUsesBackend(const std::string& ptePath, const std::string& backend) {
   return meta->uses_backend(backend.c_str());
 }
 
-std::string openVinoInferencePrecision(const std::string& libPath) {
-  // The probe exists on both shipped platforms: POSIX resolves the vendored OpenVINO C API via
-  // dlopen, Windows via LoadLibrary/GetProcAddress against the same bundle. The accessor's
-  // contract (EtEngine) is to degrade to "unavailable" rather than throw, so callers need no
-  // platform awareness -- and "unavailable" is the honest answer when no vendored runtime exists
-  // to read from.
+namespace {
+
+// The platform arm of openVinoInferencePrecision(). Isolated so the ov_* call sequence below
+// exists exactly once: the two loaders differ only in how a module is opened and a symbol found,
+// and a fix applied to one copy but not the other would be invisible on the platform that did not
+// get it.
+//
+// Returns nullptr when the library, or anything it depends on, cannot be resolved.
+void* ovLoadLibrary(const std::string& libPath) {
 #ifndef _WIN32
   // dlopen'd rather than linked: we have no OpenVINO at link time, and the delegate resolves the
   // same library the same way. Refcounted, so opening it here is safe alongside the delegate's own
   // handle. RTLD_LOCAL so nothing here perturbs the delegate's symbol resolution.
-  void* handle = dlopen(libPath.c_str(), RTLD_LAZY | RTLD_LOCAL);
-  if (handle == nullptr) {
-    return "unavailable";
-  }
-  using CoreCreate = int (*)(void**);
-  using CoreGetProperty = int (*)(void*, const char*, const char*, char**);
-  using CoreFree = void (*)(void*);
-  using Free = void (*)(const char*);
-
-  auto create = reinterpret_cast<CoreCreate>(dlsym(handle, "ov_core_create"));
-  auto getProperty = reinterpret_cast<CoreGetProperty>(dlsym(handle, "ov_core_get_property"));
-  auto coreFree = reinterpret_cast<CoreFree>(dlsym(handle, "ov_core_free"));
-  auto ovFree = reinterpret_cast<Free>(dlsym(handle, "ov_free"));
-  if (create == nullptr || getProperty == nullptr || coreFree == nullptr) {
-    dlclose(handle);
-    return "unavailable";
-  }
-
-  void* core = nullptr;
-  if (create(&core) != 0 || core == nullptr) {
-    dlclose(handle);
-    return "unavailable";
-  }
-  char* value = nullptr;
-  std::string result = "unavailable";
-  if (getProperty(core, "CPU", "INFERENCE_PRECISION_HINT", &value) == 0 && value != nullptr) {
-    result = value;
-    if (ovFree != nullptr) {
-      ovFree(value);
-    }
-  }
-  coreFree(core);
-  // Not dlclose'd on the success path: the delegate may hold the same library, and OpenVINO
-  // registers plugin state that does not expect to be torn down and rebuilt. The handle is
-  // process-lifetime by design; this is a diagnostic called a handful of times at most.
-  return result;
+  return dlopen(libPath.c_str(), RTLD_LAZY | RTLD_LOCAL);
 #else
-  // Mirror of the POSIX body: LoadLibrary/GetProcAddress instead of dlopen/dlsym. libPath is a
-  // Windows-style absolute path to the vendored openvino_c.dll. Plain LoadLibraryA does not
-  // search the DLL's own directory for dependencies (no LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR), so
-  // the probe relies on the delegate having already loaded the bundle's DLLs; a cold probe
-  // would degrade to "unavailable", within the accessor's contract.
-  HMODULE handle = LoadLibraryA(libPath.c_str());
+  // libPath is a Windows-style absolute path to the vendored openvino_c.dll, UTF-8 as it arrives
+  // from JNI.
+  //
+  // DO NOT SIMPLIFY THIS CALL. Every part of its shape has a measured failure behind it, recorded
+  // by executorch-runtime-dist's test/openvino/win_origin_probe.c, which runs the same load against
+  // a flat bundle under three modes:
+  //
+  //   LoadLibraryW(abs)                                  FAILS, error 126. Windows has no $ORIGIN:
+  //                                                      the loader searches for a DLL's
+  //                                                      dependencies by module name, from the
+  //                                                      EXE's directory and PATH, NEVER from the
+  //                                                      directory the DLL itself came out of. So
+  //                                                      openvino.dll and tbb12.dll are not found
+  //                                                      beside openvino_c.dll. If this form ever
+  //                                                      appears to work, some OTHER OpenVINO was
+  //                                                      found on PATH or in System32 -- that is
+  //                                                      the probe's negative control, and a pass
+  //                                                      there means a contaminated environment,
+  //                                                      not a working load.
+  //   LoadLibraryExW(.., SEARCH_DLL_LOAD_DIR)            FAILS, same error 126. Passing ANY
+  //                                                      LOAD_LIBRARY_SEARCH_* flag switches the
+  //                                                      loader to the alternate search order,
+  //                                                      which drops System32 -- where the CRT the
+  //                                                      OpenVINO wheel was built against
+  //                                                      (MSVCP140, VCRUNTIME140, VCRUNTIME140_1)
+  //                                                      lives. Dropping the flag that looks
+  //                                                      redundant is what breaks it.
+  //   LoadLibraryExW(.., DLL_LOAD_DIR | DEFAULT_DIRS)    Works, and works COLD -- before anything
+  //                                                      else has loaded the graph.
+  //
+  // Both flags are therefore load-bearing, and OpenVinoColdProbeTest is the executable statement of
+  // that: it probes in a JVM where no model has been loaded, so any of the failing shapes above
+  // turns it red instead of passing on a graph the delegate happened to load first.
+  //
+  // The A-suffixed entry points are wrong here for a second, independent reason: they convert
+  // through the process ANSI codepage, and libPath runs through %LOCALAPPDATA%, which carries the
+  // Windows profile name. A non-ASCII profile is unrepresentable in most codepages, so the path
+  // would not survive the conversion.
+  int wideLen = MultiByteToWideChar(CP_UTF8, 0, libPath.c_str(), -1, nullptr, 0);
+  if (wideLen == 0) {
+    return nullptr;
+  }
+  std::wstring widePath(static_cast<size_t>(wideLen), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, libPath.c_str(), -1, widePath.data(), wideLen);
+  return LoadLibraryExW(
+      widePath.c_str(),
+      nullptr,
+      LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+#endif
+}
+
+void* ovSymbol(void* handle, const char* name) {
+#ifndef _WIN32
+  return dlsym(handle, name);
+#else
+  // GetProcAddress returns FARPROC; the hop through void* is what keeps MSVC's C4191 quiet on the
+  // real function types.
+  return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(handle), name));
+#endif
+}
+
+// Only ever called on a failure path. On success the handle is deliberately leaked: the delegate
+// may hold the same library, and OpenVINO registers plugin state that does not expect to be torn
+// down and rebuilt. It is process-lifetime by design, and this is a diagnostic called a handful of
+// times at most.
+void ovUnloadLibrary(void* handle) {
+#ifndef _WIN32
+  dlclose(handle);
+#else
+  FreeLibrary(static_cast<HMODULE>(handle));
+#endif
+}
+
+}  // namespace
+
+std::string openVinoInferencePrecision(const std::string& libPath) {
+  // The probe exists on both shipped platforms, resolving the vendored OpenVINO C API through
+  // ovLoadLibrary() above. The accessor's contract (EtEngine) is to degrade to "unavailable"
+  // rather than throw, so callers need no platform awareness -- and "unavailable" is the honest
+  // answer when no vendored runtime exists to read from.
+  void* handle = ovLoadLibrary(libPath);
   if (handle == nullptr) {
     return "unavailable";
   }
@@ -493,19 +536,18 @@ std::string openVinoInferencePrecision(const std::string& libPath) {
   using CoreFree = void (*)(void*);
   using Free = void (*)(const char*);
 
-  // GetProcAddress returns FARPROC; cast through void* to avoid MSVC C4191 on the real types.
-  auto create = reinterpret_cast<CoreCreate>(reinterpret_cast<void*>(GetProcAddress(handle, "ov_core_create")));
-  auto getProperty = reinterpret_cast<CoreGetProperty>(reinterpret_cast<void*>(GetProcAddress(handle, "ov_core_get_property")));
-  auto coreFree = reinterpret_cast<CoreFree>(reinterpret_cast<void*>(GetProcAddress(handle, "ov_core_free")));
-  auto ovFree = reinterpret_cast<Free>(reinterpret_cast<void*>(GetProcAddress(handle, "ov_free")));
+  auto create = reinterpret_cast<CoreCreate>(ovSymbol(handle, "ov_core_create"));
+  auto getProperty = reinterpret_cast<CoreGetProperty>(ovSymbol(handle, "ov_core_get_property"));
+  auto coreFree = reinterpret_cast<CoreFree>(ovSymbol(handle, "ov_core_free"));
+  auto ovFree = reinterpret_cast<Free>(ovSymbol(handle, "ov_free"));
   if (create == nullptr || getProperty == nullptr || coreFree == nullptr) {
-    FreeLibrary(handle);
+    ovUnloadLibrary(handle);
     return "unavailable";
   }
 
   void* core = nullptr;
   if (create(&core) != 0 || core == nullptr) {
-    FreeLibrary(handle);
+    ovUnloadLibrary(handle);
     return "unavailable";
   }
   char* value = nullptr;
@@ -517,11 +559,7 @@ std::string openVinoInferencePrecision(const std::string& libPath) {
     }
   }
   coreFree(core);
-  // Not FreeLibrary'd on the success path: same process-lifetime reasoning as the POSIX body --
-  // the delegate may hold the same DLL, and OpenVINO registers plugin state that does not expect
-  // to be torn down and rebuilt.
   return result;
-#endif
 }
 
 }  // namespace measly::et

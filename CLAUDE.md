@@ -280,7 +280,17 @@ double for no new defect class.
   `LD_LIBRARY_PATH` (glibc reads it once at process start), so `OPENVINO_LIB_PATH` set from JNI is
   the only mechanism — and a caller-set value always wins. Bundle extraction is content-addressed on
   the upstream tarball SHA under the `LibUtils` cache root, published by atomic directory rename;
-  nothing is ever loaded out of the staging directory. `EtEngine.openVinoInferencePrecision()`
+  nothing is ever loaded out of the staging directory. **Windows has no `$ORIGIN`**, so the loader
+  arm that resolves the bundle must be `LoadLibraryExW` with **both**
+  `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`: a plain `LoadLibrary`
+  cannot find the bundle's siblings, and dropping the second flag switches the loader to the
+  alternate search order, which loses System32 and the OpenVINO wheel's CRT. A plain `LoadLibrary`
+  still *passes* wherever another OpenVINO sits on `PATH`, so the shape is guarded twice:
+  `native/tests/openvino_loader_flags.sh` bans it at the source (and runs on Linux, the cheapest
+  row), and `OpenVinoColdProbeTest` probes from a JVM that has loaded no model — which is why it is
+  alone in its class, since `openvinoTest` forks per class and any delegated load in the same
+  process makes a later probe succeed on an already-resident graph.
+  `EtEngine.openVinoInferencePrecision()`
   reports whether this host computes in `f32` or `bf16`, which is what keeps the parity test's
   `atol=1e-2` honest — **never tighten it**, both values are correct and the bound would then assert
   which machine CI allocated. Bumping the vendored OpenVINO version touches four places across the

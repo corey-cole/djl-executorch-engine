@@ -85,12 +85,15 @@ jobs:
       # would SKIP and openvino_version_coupling.sh's staged-bundle branch would be dead. The
       # runtime tarball (native/build/_deps/...) persists from the container build steps above,
       # which is what openvino_linkage.sh checks against.
-      - name: OpenVINO shell tests (linkage, staging, version coupling)
+      - name: OpenVINO shell tests (linkage, staging, version coupling, loader flags)
         if: matrix.platform == 'linux-x86_64'
         run: |
           mkdir -p build/native-staging/linux-x86_64
           cp -r src/main/resources/native/linux-x86_64/. build/native-staging/linux-x86_64/
           ./native/tests/openvino_pin_selector.sh
+          # Source-only, so it guards the WINDOWS loader shape from the cheapest job in the matrix.
+          # The behavioural gate (OpenVinoColdProbeTest) needs a staged bundle and a Windows host.
+          ./native/tests/openvino_loader_flags.sh
           ./native/tests/openvino_linkage.sh
           ./native/tests/openvino_bundle_staging.sh
           ./native/tests/openvino_version_coupling.sh
