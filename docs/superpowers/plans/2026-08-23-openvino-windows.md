@@ -118,7 +118,7 @@ $run  = "$env:USERPROFILE/winbox-run.sh"
 Each call is then one command with plain arguments — no `&&` chain, no inherited-cwd assumption:
 
 ```powershell
-& $bash $run $repo ./native/build_qa.sh </dev/null
+& $bash $run $repo ./native/build_qa.sh
 ```
 
 The checkout path is machine-specific and deliberately not recorded in this repo — the winbox
@@ -132,16 +132,22 @@ through `$env:USERPROFILE` — Windows OpenSSH and Git-Bash do not agree on what
 
 **Driving it.**
 
-- `ssh winbox` is key-based; the default remote shell is `cmd`, so PowerShell is driven via
-  base64 UTF-16LE `-EncodedCommand`.
+- `ssh winbox` is key-based and lands directly in **PowerShell 7 Core** (`pwsh`), so the blocks
+  below are typed as-is — no `-EncodedCommand` wrapping. Write PowerShell 7 syntax (`$env:VAR`,
+  `Test-Path`, `Get-ChildItem -Name`); `cmd` syntax fails outright. Windows PowerShell 5.1 is also
+  installed and is **not** what you get: anything invoked as `powershell.exe -Command ...` runs 5.1
+  instead, where `&&` and `?:` do not exist and `>` writes UTF-16LE rather than UTF-8.
 - **A `bash -c '...'` one-liner does not survive PowerShell→native-exe quoting.** Keep every
   Git-Bash invocation to one simple command with plain arguments, or write a `.sh` file and invoke
   that. Never chain with `&&` inside `bash -c`.
 - Invoke Git-Bash by explicit path (`${env:ProgramFiles}\Git\bin\bash.exe`); a bare `bash` can
   select WSL's `System32\bash.exe`. Use `-c`, never `-lc` — a login shell resets PATH and drops the
   VS environment.
-- Redirect stdin (`</dev/null`) on every remote call, and prefer several short calls over one long
-  one: from outside, a blocked run and a slow one look identical.
+- Redirect stdin on the **local `ssh` invocation** — `ssh winbox ... < /dev/null` — so nothing can
+  block waiting for input. It does not go inside the remote command: PowerShell has no `<`
+  redirection operator and answers `The '<' operator is reserved for future use.`
+- Prefer several short calls over one long one: from outside, a blocked run and a slow one look
+  identical, and a first `gradlew` run silently downloading a distribution looks exactly like a hang.
 - Run Gradle as `& "$repo\gradlew.bat" -p $repo --no-daemon --console=plain <task>`: absolute wrapper
   path and an explicit project directory, for the same reason as the helper. `--no-daemon` matters
   independently — a lingering daemon looks like a stuck process to whoever is watching the box.
@@ -301,7 +307,7 @@ Stage the bundle, as its own short call with stdin redirected. It reads
 everything else — `$repo`, `$bash` and `$run` are the bindings from "Working on winbox":
 
 ```powershell
-& $bash $run $repo "$env:USERPROFILE/ov-smoke-stage.sh" </dev/null
+& $bash $run $repo "$env:USERPROFILE/ov-smoke-stage.sh"
 ```
 
 Expected: exactly six DLLs listed, and a `SMOKE_LIB=C:\...\openvino_c.dll` line.
@@ -312,12 +318,12 @@ there is no binary to invoke by hand, and no sanitizers on this platform despite
 
 ```powershell
 $env:ET_OPENVINO_SMOKE_LIB = "<the SMOKE_LIB value printed above>"
-& $bash $run $repo ./native/build_qa.sh </dev/null
+& $bash $run $repo ./native/build_qa.sh
 ```
 
 Expected: the suite green, including `openvino: a bundle in one flat directory loads and executes`
 as a PASS rather than a skip. If it reports a skip, `ET_OPENVINO_SMOKE_LIB` did not reach the
-Git-Bash child — check it with `& $bash -c 'echo $ET_OPENVINO_SMOKE_LIB' </dev/null`.
+Git-Bash child — check it with `& $bash -c 'echo $ET_OPENVINO_SMOKE_LIB'`.
 
 **If this fails, stop.** Capture the exact error and `GetLastError` value. An import failure means the flat-directory layout does not resolve plugins on Windows, which is a producer bundle-layout issue and invalidates the rest of this plan — report it rather than working around it in Java.
 
@@ -1099,7 +1105,7 @@ Remove-Item -Recurse -Force "$repo\native\build", "$repo\native\asan" -ErrorActi
 
 A stale CMake cache is worth deleting rather than debugging: one configured for a different source
 root or ExecuTorch version produces failures that read like compiler bugs. Drive the session in
-short chunks with `</dev/null`.
+short chunks, redirecting stdin on the local `ssh` call rather than inside the remote command.
 
 - [ ] **Step 2 (winbox): Activate the MSVC dev shell**
 
@@ -1119,7 +1125,7 @@ the profile and drops it.
 - [ ] **Step 3 (winbox): Build and stage**
 
 ```powershell
-& $bash $run $repo ./native/build.sh </dev/null
+& $bash $run $repo ./native/build.sh
 ```
 
 Expected: `executorch_djl.dll` staged, and — for the first time on this platform — `OpenVINO bundle staged:` naming `src/main/resources/native/windows-x86_64/openvino`. Confirm the six DLLs and the MANIFEST keys:
@@ -1135,11 +1141,11 @@ exactly the quoting hazard described above.
 - [ ] **Step 4 (winbox): Run the CRT check and the shell tests**
 
 ```powershell
-& $bash $run $repo ./native/tests/check_windows_crt.sh native/build src/main/resources/native/windows-x86_64/executorch_djl.dll </dev/null
+& $bash $run $repo ./native/tests/check_windows_crt.sh native/build src/main/resources/native/windows-x86_64/executorch_djl.dll
 New-Item -ItemType Directory -Force -Path "$repo\build\native-staging\windows-x86_64" | Out-Null
 Copy-Item -Recurse -Force "$repo\src\main\resources\native\windows-x86_64\*" "$repo\build\native-staging\windows-x86_64\"
-& $bash $run $repo ./native/tests/openvino_bundle_staging.sh windows-x86_64 </dev/null
-& $bash $run $repo ./native/tests/openvino_version_coupling.sh windows-x86_64 </dev/null
+& $bash $run $repo ./native/tests/openvino_bundle_staging.sh windows-x86_64
+& $bash $run $repo ./native/tests/openvino_version_coupling.sh windows-x86_64
 ```
 
 Expected: PASS from each. One command with plain arguments per call — no `&&` chain, and no reliance
@@ -1148,7 +1154,7 @@ on what working directory PowerShell handed the child.
 - [ ] **Step 5 (winbox): Run the OpenVINO JVM tests**
 
 ```powershell
-& "$repo\gradlew.bat" -p $repo --no-daemon --console=plain openvinoTest </dev/null
+& "$repo\gradlew.bat" -p $repo --no-daemon --console=plain openvinoTest
 ```
 
 Expected: green — `OpenVinoRuntimeTest` (extraction into `%LOCALAPPDATA%\executorch-djl\openvino\<sha>\`), `OpenVinoConcurrentExtractionTest` (the atomic-rename publication, which matters most on the platform that refuses to delete a loaded library), and `OpenVinoModelIT` (parity at `atol=1e-2`).
@@ -1156,7 +1162,7 @@ Expected: green — `OpenVinoRuntimeTest` (extraction into `%LOCALAPPDATA%\execu
 - [ ] **Step 6 (winbox): Run the full Windows suite**
 
 ```powershell
-& "$repo\gradlew.bat" -p $repo --no-daemon --console=plain test </dev/null
+& "$repo\gradlew.bat" -p $repo --no-daemon --console=plain test
 ```
 
 Expected: green. This is the regression check that Task 3's extractor rewrite did not disturb anything else.
