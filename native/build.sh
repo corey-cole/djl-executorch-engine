@@ -11,6 +11,75 @@ case "$(uname -s)" in
   MINGW*|MSYS*) ET_HOST_OS=windows ;;
   *)            ET_HOST_OS=linux ;;
 esac
+# Platform identity of the artifact this run produces. Derived from the host alone, so it is safe to
+# compute here -- PRINT_OPENVINO_RESOLUTION reads it without building anything.
+if [ "${ET_HOST_OS}" = "windows" ]; then
+  OUT_PLATFORM="windows-x86_64"; OUT_LIB="executorch_djl.dll"
+else
+  case "$(uname -m)" in
+    aarch64|arm64) OUT_PLATFORM="linux-aarch64" ;;
+    *)             OUT_PLATFORM="linux-x86_64"  ;;
+  esac
+  OUT_LIB="libexecutorch_djl.so"
+fi
+
+PIN="native/cmake/EtRuntimePin.cmake"
+
+# The engine's OpenVINO support set: what the JAVA layer can load, which is not the same question as
+# what the pin publishes. The producer ships a windows-x86_64 bundle that OpenVinoRuntime cannot
+# extract -- its library list, ABI-suffix naming and OPENVINO_LIB_PATH handling are all .so-shaped --
+# so staging it would put ~21 MB in a jar nothing can use. Adding a platform here is the LAST step of
+# supporting it, never the first.
+ET_OPENVINO_SUPPORTED_PLATFORMS="${ET_OPENVINO_SUPPORTED_PLATFORMS:-linux-x86_64}"
+
+# Sets OV_DECISION (stage | unsupported | unpublished) and, when staging, OV_URL / OV_SHA / OV_VER.
+#
+# Keyed on the PLATFORM identity, not the pin row -- the opposite of the ExecuTorch tarball, which is
+# row-keyed because the CRT flavour is part of its identity. An OpenVINO bundle is per platform: the
+# wheel's DLLs are /MD however a consumer links, so one bundle serves both Windows rows and the pin
+# expresses that with an ALIAS row whose value is a CMake variable reference. Shell cannot
+# dereference that, so a row-keyed grep would return the literal text rather than a URL.
+#
+# An absent row is legitimate (linux-aarch64 has no bundle upstream), so this mirrors the pin's
+# et_runtime_openvino_url(): empty, not an error. The deprecated singular
+# ET_RUNTIME_OPENVINO_{PLATFORM,URL,SHA256} vars are deliberately not read.
+et_openvino_resolve() {
+  local platform="$1"
+  OV_URL=""; OV_SHA=""; OV_VER=""
+
+  case " ${ET_OPENVINO_SUPPORTED_PLATFORMS} " in
+    *" ${platform} "*) ;;
+    *) OV_DECISION="unsupported"; return 0 ;;
+  esac
+
+  OV_URL="$(grep -oPz "set\(ET_RUNTIME_OPENVINO_URL_${platform}\s+\"\K[^\"]+" "${PIN}" | tr -d '\0' || true)"
+  OV_SHA="$(grep -oPz "set\(ET_RUNTIME_OPENVINO_SHA256_${platform}\s+\"\K[^\"]+" "${PIN}" | tr -d '\0' || true)"
+  OV_VER="$(grep -oP 'set\(ET_RUNTIME_OPENVINO_VERSION "\K[^"]+' "${PIN}" || true)"
+
+  if [ -z "${OV_URL}" ] || [ -z "${OV_SHA}" ]; then
+    OV_DECISION="unpublished"
+    return 0
+  fi
+
+  # A non-literal value means the lookup reached an alias row. Fail loudly rather than handing curl
+  # an unexpanded cmake reference, which would 404 with a message naming none of this.
+  case "${OV_URL}" in
+    https://*) ;;
+    *) echo "OpenVINO pin row for ${platform} is not a literal URL: ${OV_URL}"; exit 1 ;;
+  esac
+
+  OV_DECISION="stage"
+}
+
+# Fast diagnostic: print the staging decision for a platform and exit, mirroring PRINT_BUILD_CONFIG.
+# ET_STAGE_PLATFORM overrides the host's identity so native/tests/openvino_pin_selector.sh can assert
+# a foreign platform's decision -- the pin is a file, so no foreign hardware is involved.
+if [ -n "${PRINT_OPENVINO_RESOLUTION:-}" ]; then
+  ov_platform="${ET_STAGE_PLATFORM:-${OUT_PLATFORM}}"
+  et_openvino_resolve "${ov_platform}"
+  echo "OV_RESOLUTION platform=${ov_platform} decision=${OV_DECISION} version=${OV_VER} url=${OV_URL}"
+  exit 0
+fi
 
 # --- Shim build config. The ExecuTorch runtime is NOT built here anymore: native/CMakeLists.txt
 #     resolves it (FetchContent the pinned tarball, or -DET_INSTALL escape hatch). The runtime
@@ -105,16 +174,6 @@ cmake -B "${NATIVE_BUILD_DIR}" -S native -G Ninja \
   -DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT}" "${BUILD_TYPE_ARG[@]}" "${ET_INSTALL_ARG[@]}"
 cmake --build "${NATIVE_BUILD_DIR}" -j"${JOBS}"
 
-if [ "${ET_HOST_OS}" = "windows" ]; then
-  OUT_PLATFORM="windows-x86_64"; OUT_LIB="executorch_djl.dll"
-else
-  case "$(uname -m)" in
-    aarch64|arm64) OUT_PLATFORM="linux-aarch64" ;;
-    *)             OUT_PLATFORM="linux-x86_64"  ;;
-  esac
-  OUT_LIB="libexecutorch_djl.so"
-fi
-
 if [ "${STAGE_SO}" = "1" ]; then
   OUT="src/main/resources/native/${OUT_PLATFORM}"
   mkdir -p "${OUT}"
@@ -136,14 +195,10 @@ if [ "${STAGE_SO}" = "1" ]; then
 
   # --- OpenVINO runtime bundle (optional, published as a separate opt-in jar) ---
   # Fetched here rather than by CMake because nothing links against it: the delegate dlopens the C
-  # API at runtime. Guarded on the pin declaring a bundle for THIS row, so a release that published
-  # none, or a platform the bundle does not cover, stages nothing and the jar task skips.
-  PIN="native/cmake/EtRuntimePin.cmake"
-  OV_PLATFORM="$(grep -oP 'set\(ET_RUNTIME_OPENVINO_PLATFORM "\K[^"]+' "${PIN}" || true)"
-  if [ -n "${OV_PLATFORM}" ] && [ "${OV_PLATFORM}" = "${OUT_PLATFORM}" ]; then
-    OV_URL="$(grep -oPz 'set\(ET_RUNTIME_OPENVINO_URL\s*\n?\s*"\K[^"]+' "${PIN}" | tr -d '\0')"
-    OV_SHA="$(grep -oP 'set\(ET_RUNTIME_OPENVINO_SHA256 "\K[^"]+' "${PIN}")"
-    OV_VER="$(grep -oP 'set\(ET_RUNTIME_OPENVINO_VERSION "\K[^"]+' "${PIN}")"
+  # API at runtime. The decision is made by et_openvino_resolve above; this only acts on it.
+  et_openvino_resolve "${OUT_PLATFORM}"
+  case "${OV_DECISION}" in
+  stage)
     OV_OUT="${OUT}/openvino"
     TARBALL="native/build/openvino-runtime.tar.gz"
 
@@ -167,9 +222,14 @@ if [ "${STAGE_SO}" = "1" ]; then
     } > "${OV_OUT}/MANIFEST"
 
     echo "OpenVINO bundle staged: ${OV_OUT} ($(du -sh "${OV_OUT}" | cut -f1))"
-  else
-    echo "OpenVINO bundle: pin declares none for ${OUT_PLATFORM}; skipping"
-  fi
+    ;;
+  unsupported)
+    echo "OpenVINO bundle: ${OUT_PLATFORM} is not in the engine's supported set (${ET_OPENVINO_SUPPORTED_PLATFORMS}); skipping"
+    ;;
+  unpublished)
+    echo "OpenVINO bundle: the pin publishes no bundle for ${OUT_PLATFORM}; skipping"
+    ;;
+  esac
 else
   echo "STAGE_SO=0: built shim but not staging into resources"
   ls -lh "${NATIVE_BUILD_DIR}/${OUT_LIB}"

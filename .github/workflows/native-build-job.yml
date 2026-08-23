@@ -90,6 +90,7 @@ jobs:
         run: |
           mkdir -p build/native-staging/linux-x86_64
           cp -r src/main/resources/native/linux-x86_64/. build/native-staging/linux-x86_64/
+          ./native/tests/openvino_pin_selector.sh
           ./native/tests/openvino_linkage.sh
           ./native/tests/openvino_bundle_staging.sh
           ./native/tests/openvino_version_coupling.sh
