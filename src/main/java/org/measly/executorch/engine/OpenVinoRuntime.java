@@ -40,17 +40,6 @@ public final class OpenVinoRuntime {
     private static final String MANIFEST = "MANIFEST";
     private static final String BUILDINFO = "BUILDINFO";
 
-    // The libraries, in no particular order; all must land in one flat directory because each
-    // carries RPATH=$ORIGIN and $ORIGIN does not search subdirectories.
-    private static final List<String> LIBS = List.of(
-            "libopenvino.so",
-            "libopenvino_c.so",
-            "libopenvino_intel_cpu_plugin.so",
-            "libopenvino_ir_frontend.so",
-            "libtbb.so.12",
-            "libtbbbind_2_5.so.3",
-            "libhwloc.so.15");
-
     private static Path extracted;
     private static String libPath;
     private static boolean configured;
@@ -222,10 +211,7 @@ public final class OpenVinoRuntime {
         if (extracted == null) {
             return null;
         }
-        // The ABI suffix comes from BUILDINFO, never hardcoded: it changes with the OpenVINO
-        // version and a stale literal would fail at dlopen with a confusing "file not found".
-        String abi = buildInfo().getProperty("ov_abi");
-        libPath = extracted.resolve("libopenvino_c.so." + abi).toAbsolutePath().toString();
+        libPath = extracted.resolve(bundleCLibrary()).toAbsolutePath().toString();
         return libPath;
     }
 
@@ -239,19 +225,11 @@ public final class OpenVinoRuntime {
         Files.createDirectories(target.getParent());
         Path staging = Files.createTempDirectory(target.getParent(), "staging-");
         try {
-            String abi = buildInfo().getProperty("ov_abi");
-            for (String lib : LIBS) {
-                // Versioned names carry the ABI; already-versioned ones (libtbb.so.12) do not.
-                // One exception: libopenvino_intel_cpu_plugin.so ships UNVERSIONED in the bundle
-                // (verified against 2025.4.1; the Task 3 staging test asserts the same), so the
-                // ABI suffix is appended only when the versioned resource actually exists, with a
-                // fallback to the plain name. The ABI stays derived from BUILDINFO, never
-                // hardcoded.
-                String name = lib.endsWith(".so") ? lib + "." + abi : lib;
-                if (OpenVinoRuntime.class.getResource(resourceBase() + "lib/" + name) == null) {
-                    name = lib;
-                }
-                copy(resourceBase() + "lib/" + name, staging.resolve(name));
+            // The bundle names its own files, so nothing here reconstructs a versioned filename.
+            // That is what removes the ABI concept from this path: the Windows bundle ships six
+            // unversioned DLLs and carries no ov_abi key at all.
+            for (String lib : bundleLibs()) {
+                copy(resourceBase() + "lib/" + lib, staging.resolve(lib));
             }
             copy(resourceBase() + BUILDINFO, staging.resolve(BUILDINFO));
             try {
@@ -296,8 +274,24 @@ public final class OpenVinoRuntime {
         return readProperties(resourceBase() + MANIFEST);
     }
 
-    private static Properties buildInfo() {
-        return readProperties(resourceBase() + BUILDINFO);
+    /** @return the library filenames the staged bundle declares, in the order it listed them */
+    private static List<String> bundleLibs() {
+        String libs = manifest().getProperty("libs");
+        if (libs == null || libs.isBlank()) {
+            throw new IllegalStateException(
+                    "OpenVINO bundle MANIFEST carries no libs; restage with native/build.sh");
+        }
+        return List.of(libs.trim().split("\\s+"));
+    }
+
+    /** @return the filename of the OpenVINO C API library the delegate must dlopen */
+    private static String bundleCLibrary() {
+        String name = manifest().getProperty("c_library");
+        if (name == null || name.isBlank()) {
+            throw new IllegalStateException(
+                    "OpenVINO bundle MANIFEST carries no c_library; restage with native/build.sh");
+        }
+        return name;
     }
 
     private static Properties readProperties(String resource) {

@@ -1,6 +1,7 @@
 package org.measly.executorch.engine;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -47,9 +48,15 @@ class OpenVinoRuntimeTest {
         String lib = OpenVinoRuntime.resolvedLibPath();
         assertNotNull(lib);
         assertTrue(Files.isRegularFile(Paths.get(lib)), "must name a file, not a directory: " + lib);
-        // The versioned file, never an unversioned symlink: jars do not carry symlinks, so the
-        // extraction never creates one and the resolved path must not depend on one existing.
-        assertTrue(lib.contains(".so."), "must resolve the versioned library: " + lib);
+        // The library the BUNDLE declared, not one this test reconstructs: that is the whole point
+        // of c_library, and it is what makes this assertion identical on Windows.
+        java.util.Properties man = new java.util.Properties();
+        try (var is = OpenVinoRuntime.class.getResourceAsStream(
+                "/native/" + LibUtils.platform() + "/openvino/MANIFEST")) {
+            man.load(new java.io.InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8));
+        }
+        assertEquals(dir.resolve(man.getProperty("c_library")).toAbsolutePath().toString(), lib);
+        assertFalse(Files.isSymbolicLink(Paths.get(lib)), "must never resolve through a symlink");
     }
 
     @Test
