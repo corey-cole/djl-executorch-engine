@@ -59,10 +59,9 @@ git push -u origin feature/openvino-windows     # from the Linux box, after Task
 
 ```powershell
 $repo = "<the djl-executorch-engine checkout path on winbox>"
-Set-Location $repo
-git fetch origin
-git checkout feature/openvino-windows
-git reset --hard origin/feature/openvino-windows
+git -C $repo fetch origin
+git -C $repo checkout feature/openvino-windows
+git -C $repo reset --hard origin/feature/openvino-windows
 ```
 
 Task 6 needs the branch pushed for CI regardless, so this costs nothing extra. If a work-in-progress
@@ -76,27 +75,60 @@ bundle by URL from the pin. The clone at `~/workspace/executorch-runtime-dist` o
 for reading producer documentation only. winbox does need **network access** to GitHub releases for
 both downloads.
 
-**Every remote block must set its own working directory.** A remote `pwsh` session starts in the
-user's **home directory**, not the checkout — so a bare `./native/build_qa.sh` or `.\gradlew.bat`
-fails with a path error that reads like a missing file. Worse, `Launch-VsDevShell.ps1` *changes the
-working directory* unless given `-SkipAutomaticLocation`, so even a block that started correctly can
-be moved out from under itself.
+**Nothing may depend on the working directory.** A remote `pwsh` session starts in the user's
+**home directory**, not the checkout. `Launch-VsDevShell.ps1` then changes the location again unless
+given `-SkipAutomaticLocation`. And `Set-Location` is *not* a dependable fix for a native child
+process: it changes PowerShell's provider location, which is a different thing from the process
+working directory a launched `.exe` inherits. That is not a distinction worth discovering over SSH.
 
-Bind the checkout path once at the start of the session and open every subsequent block with it:
+It matters because the two script families differ:
+
+- `native/tests/*.sh` **root themselves** — each one does `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; cd "${REPO_ROOT}"`, so it only needs to be *found*.
+- `native/build.sh` and `native/build_qa.sh` **do not.** They source `container_env.sh` relative to
+  their own path and then use repo-relative paths (`native/build`, `src/main/resources/native/...`,
+  `native/cmake/EtRuntimePin.cmake`) throughout. They must be *invoked from* the repo root. On Linux
+  `local_build_wrapper.sh` guarantees that with `-w /workspace`; on Windows nothing does.
+
+So make the `cd` explicit, in bash, where it is unambiguous. Write this helper locally once and
+`scp` it over at the start of the session:
+
+```bash
+cat > /tmp/winbox-run.sh <<'EOF'
+#!/usr/bin/env bash
+# Usage: winbox-run.sh <repo-path-in-windows-form> <script> [args...]
+# Runs a repo script from the repo root, so nothing depends on what working directory PowerShell
+# handed the bash child. native/build.sh and native/build_qa.sh need this; native/tests/*.sh cd
+# themselves but are harmless to run through it, so everything goes through one path.
+set -euo pipefail
+cd "$(cygpath -u "$1")"
+shift
+exec "$@"
+EOF
+scp /tmp/winbox-run.sh winbox:winbox-run.sh   # no path: lands in the remote home directory
+```
+
+Bind the checkout path once per session and invoke everything through the helper:
 
 ```powershell
 $repo = "<the djl-executorch-engine checkout path on winbox>"
-Set-Location $repo
+$bash = "${env:ProgramFiles}\Git\bin\bash.exe"
+$run  = "$env:USERPROFILE/winbox-run.sh"
 ```
 
-The actual path is machine-specific and deliberately not recorded in this repo — the winbox
-hostname, user, and key path live in `windows-jni-handoff.md`, outside version control. Every
-PowerShell block in Tasks 1 and 9 below assumes `$repo` is bound and begins with `Set-Location $repo`
-for that reason; do not drop those lines as noise.
+Each call is then one command with plain arguments — no `&&` chain, no inherited-cwd assumption:
 
-`scp` with no path lands in the remote user's home directory, which is why the helper script below
-is invoked through `$env:USERPROFILE` rather than a `/tmp` path — Windows OpenSSH and Git-Bash do not
-agree on what `/tmp` means.
+```powershell
+& $bash $run $repo ./native/build_qa.sh </dev/null
+```
+
+The checkout path is machine-specific and deliberately not recorded in this repo — the winbox
+hostname, user, and key path live in `windows-jni-handoff.md`, outside version control.
+
+Gradle gets the same treatment through its own flag rather than the helper: invoke the wrapper by
+absolute path and pass `-p $repo`, so the project directory is stated rather than inferred.
+
+`scp` with no path lands in the remote user's home directory, which is why both helpers are reached
+through `$env:USERPROFILE` — Windows OpenSSH and Git-Bash do not agree on what `/tmp` means.
 
 **Driving it.**
 
@@ -110,8 +142,9 @@ agree on what `/tmp` means.
   VS environment.
 - Redirect stdin (`</dev/null`) on every remote call, and prefer several short calls over one long
   one: from outside, a blocked run and a slow one look identical.
-- Use `.\gradlew.bat --no-daemon --console=plain` for remote runs; a lingering daemon looks like a
-  stuck process to whoever is watching the box.
+- Run Gradle as `& "$repo\gradlew.bat" -p $repo --no-daemon --console=plain <task>`: absolute wrapper
+  path and an explicit project directory, for the same reason as the helper. `--no-daemon` matters
+  independently — a lingering daemon looks like a stuck process to whoever is watching the box.
 - **winbox is for iteration, not acceptance.** It runs VS 18 Community against the runner's VS 17
   Enterprise. The `windows-2022` runner is the sole acceptance gate — which is why Task 6 exists and
   why Task 9 is verification rather than sign-off.
@@ -263,13 +296,12 @@ EOF
 scp /tmp/ov-smoke-stage.sh winbox:ov-smoke-stage.sh   # no path: lands in the remote home dir
 ```
 
-Stage the bundle first, as its own short call with stdin redirected. The script reads
-`native/cmake/EtRuntimePin.cmake` by relative path, so the working directory must be the checkout —
-the session starts in the home directory instead:
+Stage the bundle, as its own short call with stdin redirected. It reads
+`native/cmake/EtRuntimePin.cmake` by relative path, so it goes through `winbox-run.sh` like
+everything else — `$repo`, `$bash` and `$run` are the bindings from "Working on winbox":
 
 ```powershell
-Set-Location $repo
-& "C:\Program Files\Git\bin\bash.exe" "$env:USERPROFILE/ov-smoke-stage.sh" </dev/null
+& $bash $run $repo "$env:USERPROFILE/ov-smoke-stage.sh" </dev/null
 ```
 
 Expected: exactly six DLLs listed, and a `SMOKE_LIB=C:\...\openvino_c.dll` line.
@@ -279,14 +311,13 @@ itself (`./native/asan/et_runtime_test.exe --order decl`), so the smoke case run
 there is no binary to invoke by hand, and no sanitizers on this platform despite the directory name:
 
 ```powershell
-Set-Location $repo
 $env:ET_OPENVINO_SMOKE_LIB = "<the SMOKE_LIB value printed above>"
-& "C:\Program Files\Git\bin\bash.exe" -c './native/build_qa.sh' </dev/null
+& $bash $run $repo ./native/build_qa.sh </dev/null
 ```
 
 Expected: the suite green, including `openvino: a bundle in one flat directory loads and executes`
 as a PASS rather than a skip. If it reports a skip, `ET_OPENVINO_SMOKE_LIB` did not reach the
-Git-Bash child — check it with `& "C:\Program Files\Git\bin\bash.exe" -c 'echo $ET_OPENVINO_SMOKE_LIB' </dev/null`.
+Git-Bash child — check it with `& $bash -c 'echo $ET_OPENVINO_SMOKE_LIB' </dev/null`.
 
 **If this fails, stop.** Capture the exact error and `GetLastError` value. An import failure means the flat-directory layout does not resolve plugins on Windows, which is a producer bundle-layout issue and invalidates the rest of this plan — report it rather than working around it in Java.
 
@@ -1050,16 +1081,20 @@ acceptance gate. What this catches that CI cannot is anything needing a human to
 
 Push the branch from the Linux box, then bind `$repo` and update the checkout — see "Working on
 winbox" for both halves and the `git bundle` fallback. `$repo` must stay bound for the rest of this
-task; every block below re-issues `Set-Location $repo` because a remote session starts in the home
-directory.
+task, along with `$bash` and `$run`; every block below passes `$repo` explicitly rather than relying
+on a working directory.
+
+Bind the session variables from "Working on winbox" and `scp` the helper over, then update the
+checkout. `git -C` takes the repo explicitly, so this block needs no working directory either:
 
 ```powershell
 $repo = "<the djl-executorch-engine checkout path on winbox>"
-Set-Location $repo
-git fetch origin
-git checkout feature/openvino-windows
-git reset --hard origin/feature/openvino-windows
-Remove-Item -Recurse -Force native\build, native\asan -ErrorAction SilentlyContinue
+$bash = "${env:ProgramFiles}\Git\bin\bash.exe"
+$run  = "$env:USERPROFILE/winbox-run.sh"
+git -C $repo fetch origin
+git -C $repo checkout feature/openvino-windows
+git -C $repo reset --hard origin/feature/openvino-windows
+Remove-Item -Recurse -Force "$repo\native\build", "$repo\native\asan" -ErrorAction SilentlyContinue
 ```
 
 A stale CMake cache is worth deleting rather than debugging: one configured for a different source
@@ -1075,22 +1110,23 @@ the wrong root. CI passes it for the same reason.
 ```powershell
 $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
 & "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -SkipAutomaticLocation
-Set-Location $repo
 ```
+
+It mutates *this* PowerShell process's environment in place, so the Git-Bash children launched by
+later steps inherit the MSVC toolchain. That is also why `-c`, never `-lc`: a login shell re-sources
+the profile and drops it.
 
 - [ ] **Step 3 (winbox): Build and stage**
 
 ```powershell
-Set-Location $repo
-& "C:\Program Files\Git\bin\bash.exe" -c './native/build.sh' </dev/null
+& $bash $run $repo ./native/build.sh </dev/null
 ```
 
 Expected: `executorch_djl.dll` staged, and — for the first time on this platform — `OpenVINO bundle staged:` naming `src/main/resources/native/windows-x86_64/openvino`. Confirm the six DLLs and the MANIFEST keys:
 
 ```powershell
-Set-Location $repo
-Get-ChildItem src\main\resources\native\windows-x86_64\openvino\lib | Select-Object -ExpandProperty Name
-Get-Content src\main\resources\native\windows-x86_64\openvino\MANIFEST
+Get-ChildItem "$repo\src\main\resources\native\windows-x86_64\openvino\lib" | Select-Object -ExpandProperty Name
+Get-Content "$repo\src\main\resources\native\windows-x86_64\openvino\MANIFEST"
 ```
 
 Done in PowerShell rather than Git-Bash: a `bash -c` string chaining two commands with `&&` is
@@ -1099,23 +1135,20 @@ exactly the quoting hazard described above.
 - [ ] **Step 4 (winbox): Run the CRT check and the shell tests**
 
 ```powershell
-Set-Location $repo
-$bash = "${env:ProgramFiles}\Git\bin\bash.exe"
-& $bash -c './native/tests/check_windows_crt.sh native/build src/main/resources/native/windows-x86_64/executorch_djl.dll' </dev/null
-New-Item -ItemType Directory -Force -Path build\native-staging\windows-x86_64 | Out-Null
-Copy-Item -Recurse -Force src\main\resources\native\windows-x86_64\* build\native-staging\windows-x86_64\
-& $bash -c './native/tests/openvino_bundle_staging.sh windows-x86_64' </dev/null
-& $bash -c './native/tests/openvino_version_coupling.sh windows-x86_64' </dev/null
+& $bash $run $repo ./native/tests/check_windows_crt.sh native/build src/main/resources/native/windows-x86_64/executorch_djl.dll </dev/null
+New-Item -ItemType Directory -Force -Path "$repo\build\native-staging\windows-x86_64" | Out-Null
+Copy-Item -Recurse -Force "$repo\src\main\resources\native\windows-x86_64\*" "$repo\build\native-staging\windows-x86_64\"
+& $bash $run $repo ./native/tests/openvino_bundle_staging.sh windows-x86_64 </dev/null
+& $bash $run $repo ./native/tests/openvino_version_coupling.sh windows-x86_64 </dev/null
 ```
 
-Expected: PASS from each. One simple command per Git-Bash call, for the quoting reason in "Working
-on winbox".
+Expected: PASS from each. One command with plain arguments per call — no `&&` chain, and no reliance
+on what working directory PowerShell handed the child.
 
 - [ ] **Step 5 (winbox): Run the OpenVINO JVM tests**
 
 ```powershell
-Set-Location $repo
-.\gradlew.bat --no-daemon --console=plain openvinoTest </dev/null
+& "$repo\gradlew.bat" -p $repo --no-daemon --console=plain openvinoTest </dev/null
 ```
 
 Expected: green — `OpenVinoRuntimeTest` (extraction into `%LOCALAPPDATA%\executorch-djl\openvino\<sha>\`), `OpenVinoConcurrentExtractionTest` (the atomic-rename publication, which matters most on the platform that refuses to delete a loaded library), and `OpenVinoModelIT` (parity at `atol=1e-2`).
@@ -1123,8 +1156,7 @@ Expected: green — `OpenVinoRuntimeTest` (extraction into `%LOCALAPPDATA%\execu
 - [ ] **Step 6 (winbox): Run the full Windows suite**
 
 ```powershell
-Set-Location $repo
-.\gradlew.bat --no-daemon --console=plain test </dev/null
+& "$repo\gradlew.bat" -p $repo --no-daemon --console=plain test </dev/null
 ```
 
 Expected: green. This is the regression check that Task 3's extractor rewrite did not disturb anything else.
