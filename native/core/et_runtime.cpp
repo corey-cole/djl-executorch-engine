@@ -485,7 +485,10 @@ std::string openVinoInferencePrecision(const std::string& libPath) {
   return result;
 #else
   // Mirror of the POSIX body: LoadLibrary/GetProcAddress instead of dlopen/dlsym. libPath is a
-  // Windows-style absolute path to the vendored openvino_c.dll; LoadLibraryA resolves it as-is.
+  // Windows-style absolute path to the vendored openvino_c.dll. Plain LoadLibraryA does not
+  // search the DLL's own directory for dependencies (no LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR), so
+  // the probe relies on the delegate having already loaded the bundle's DLLs; a cold probe
+  // would degrade to "unavailable", within the accessor's contract.
   HMODULE handle = LoadLibraryA(libPath.c_str());
   if (handle == nullptr) {
     return "unavailable";

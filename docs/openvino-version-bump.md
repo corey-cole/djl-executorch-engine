@@ -27,8 +27,9 @@ a runtime the committed fixture's blob cannot be imported by fails at *model loa
 ## What must NOT change
 
 - **The ABI suffix is never hardcoded anywhere.** It tracks the version (`2025.4.1` → `2541`) and is
-  read from the bundle's `BUILDINFO` (`ov_abi`) by both the extractor and the staging test. If you
-  find yourself editing a `2541` literal, something has regressed.
+  read from the bundle's `BUILDINFO` (`ov_abi`) by the staging test's Linux arm; Java reads
+  `c_library` from the `MANIFEST`. If you find yourself editing a `2541` literal, something has
+  regressed.
 - **No symlink is ever created.** `OPENVINO_LIB_PATH` names the versioned file; `$ORIGIN` resolves
   the rest. Verified against the shipped bundle.
 - **`atol=1e-2` in the parity test.** A new OpenVINO does not justify tightening it — the bound is
@@ -40,11 +41,11 @@ a runtime the committed fixture's blob cannot be imported by fails at *model loa
 ## Verifying the bump
 
 ```bash
-./native/local_build_wrapper.sh                     # restages the bundle from the new pin
-./native/tests/openvino_version_coupling.sh         # pin == fixture == staged bundle
-./native/tests/openvino_bundle_staging.sh           # library set and ABI derivation
-./native/tests/openvino_bundle_staging.sh windows-x86_64   # on winbox, after staging there
-./gradlew openvinoTest                              # parity against the new fixture
+./native/local_build_wrapper.sh                             # restages the bundle from the new pin
+./native/tests/openvino_version_coupling.sh                 # pin == fixture == staged bundle
+./native/tests/openvino_bundle_staging.sh                   # library set and ABI derivation
+./native/tests/openvino_bundle_staging.sh windows-x86_64    # on winbox, after staging there
+./gradlew openvinoTest                                      # parity against the new fixture
 ```
 
 If parity fails but everything else passes, the fixture and the runtime disagree — you almost
