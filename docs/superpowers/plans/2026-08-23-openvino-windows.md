@@ -1237,14 +1237,23 @@ gh issue create --title "winbox mechanics are duplicated and contradictory acros
 
 Each of these cost real time in the OpenVINO Windows work, and two of them produced commands that could not have run.
 
-**Proposal, not blanket deletion.** These documents are worth keeping for their reasoning, per the docs convention in CLAUDE.md. What is missing is one piece of *current guidance* they can defer to:
+**Proposal, not blanket deletion.** These documents are worth keeping for their reasoning, per the docs convention in CLAUDE.md. What is missing is one piece of *current guidance* they can defer to, and a pointer to it:
 
-1. Add `docs/windows-iteration-host.md` as the single current reference: shell (pwsh 7, no `<` redirection), VS activation with `-SkipAutomaticLocation`, the Git-Bash handoff and its quoting limits, scp path rules, the absence of rsync, what toolchains are present, and that winbox is an iteration host while the `windows-2022` runner is the acceptance gate.
-2. Add it to `docs/README.md`.
-3. Put a one-line superseded banner at the top of each plan above pointing at it, rather than editing their bodies — they are point-in-time records and rewriting them would falsify what was known then.
-4. Consider whether `docs/research/handover-windows-static-cxx17-findings.md` should also carry one.
+1. Add `docs/windows-iteration-host.md` as the single current reference: shell (pwsh 7, no `<` redirection), VS activation with `-SkipAutomaticLocation`, the Git-Bash handoff and its quoting limits, scp path rules, the absence of rsync, what toolchains are present (VS, Git-Bash, JDK 17), and that winbox is an iteration host while the `windows-2022` runner is the acceptance gate.
+2. Add a routing line to `CLAUDE.md`. This is the highest-leverage item and the cheapest: CLAUDE.md is loaded every session, so it is what actually prevents the next occurrence. Roughly: `docs/superpowers/plans/` and `specs/` record what was true when written and are not current guidance; for Windows host mechanics see `docs/windows-iteration-host.md`.
+3. Add the new doc to `docs/README.md`.
+4. Put a one-line superseded banner at the top of each plan above pointing at it, rather than editing their bodies — they are point-in-time records and rewriting them would falsify what was known then.
+5. Consider whether `docs/research/handover-windows-static-cxx17-findings.md` should also carry one.
 
-The machine-specific parts (hostname, user, key path) stay out of the repo, in `windows-jni-handoff.md`, as today.'
+The machine-specific parts (hostname, user, key path) stay out of the repo, in `windows-jni-handoff.md`, as today.
+
+**Considered and rejected: hiding the stale files from Claude.** There is no `.claudignore` in Claude Code; the equivalent is a `permissions.deny` entry such as `Read(./docs/superpowers/plans/2026-07-18-windows-static-crt.md)` in `.claude/settings.json`. It is the wrong tool here for three reasons, the first decisive:
+
+- Staleness is **per claim, not per file**. The document carrying the false `cmd` claim is the only place recording the true scp rule, and hiding it would have suppressed the fix along with the bug.
+- A denied read fails **silently** — the reader cannot know the document exists, so it cannot route to a better one. A superseded banner fails loudly and points forward.
+- The deny list would go stale exactly as the docs did, and less visibly, so it adds a second thing to maintain instead of maintaining the first. It also does nothing for humans, who grep these files too and are misled identically.
+
+A deny rule is only right for a document that is entirely dead, and then deleting it is better, since git keeps the history.'
 ```
 
 - [ ] **Step 4: File the general Windows JVM CI issue**
