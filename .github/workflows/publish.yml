@@ -48,6 +48,9 @@ jobs:
           OPENVINO_BUNDLE_REQUIRED: "1"
         run: ./native/tests/openvino_bundle_staging.sh
 
+      - name: Assert the staged license notices arrived
+        run: NOTICES_REQUIRED=1 ./native/tests/notices_staged.sh
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:

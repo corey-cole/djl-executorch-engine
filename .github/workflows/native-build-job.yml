@@ -93,6 +93,7 @@ jobs:
           ./native/tests/openvino_linkage.sh
           ./native/tests/openvino_bundle_staging.sh
           ./native/tests/openvino_version_coupling.sh
+          ./native/tests/notices_staged.sh
 
       # The inverse leg: linux-aarch64 ships no OpenVINO delegate, so assert that a .pte needing
       # one produces OUR platform error rather than the generic corrupt-model message.
