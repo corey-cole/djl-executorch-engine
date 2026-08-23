@@ -23,6 +23,29 @@
 - **Comment convention:** comments state what *is*, not what *was*.
 - **Out of scope:** `linux-aarch64` (links the delegate, no bundle published — the deliberate third state); the `example/` JMH OpenVINO comparison; any OpenVINO version change.
 
+## Where each task runs
+
+Only two tasks touch Windows. Everything else is Linux, and several steps below deliberately use
+Linux-only paths and tools — that is not an oversight, it is the location.
+
+| Task | Runs on | Why |
+|---|---|---|
+| 1 Steps 1-4 | Linux | Write the Catch2 case and prove it works where a bundle already exists |
+| 1 Step 5 | **winbox** | The actual risk: does a flat directory resolve plugins on Windows |
+| 2 | Linux | `build.sh` MANIFEST generation, verified against the Linux bundle |
+| 3 | Linux | Java extractor rewrite |
+| 4 | Linux | Pure-function test of an error message |
+| 5 | Linux | `build.sh` support set and shell-test parameterization |
+| 6 | Linux | Workflow YAML edit |
+| 7 | Linux | Gradle variant proof against a synthetic tree |
+| 8 | Linux | Documentation |
+| 9 | **winbox** | Build, stage, and run the JVM suites on the real platform |
+| 10 | Linux | Regression gate, issues, PR |
+
+A Linux step that names a `.so`, uses `native/local_build_wrapper.sh`, or reads
+`src/main/resources/native/linux-x86_64/` is correct **because it is a Linux step**. Windows steps
+are marked `**On winbox:**` and use `.dll` paths and PowerShell.
+
 ## Working on winbox
 
 Tasks 1 and 9 run on the Windows box. These are recorded constraints, not preferences — each one
@@ -75,9 +98,12 @@ This is the spec's front-loaded risk (§7) and it runs **before any refactoring*
 
 The existing Catch2 OpenVINO cases only assert **refusals** — unset path, directory path. There is no case proving a *successful* load, on either platform. This task adds one, which is a real coverage gap independent of Windows.
 
+**Location:** Steps 1-4 on **Linux**; Step 5 on **winbox**. The Linux half proves the case is real
+against the bundle that already ships there; the Windows half is the risk being retired.
+
 **Files:**
 - Modify: `native/test/et_runtime_test.cpp` (append at end of file)
-- Modify: `native/CMakeLists.txt:300-303` (no change needed if `openvino_backend` already linked into `et_runtime_test` — verify)
+- Modify: `native/local_build_wrapper.sh` (add one `-e` passthrough)
 
 **Interfaces:**
 - Produces: a Catch2 case gated on the environment variable `ET_OPENVINO_SMOKE_LIB`. A distinct variable name is required: the existing guard cases call `unsetEnvVar("OPENVINO_LIB_PATH")`, so anything read from `OPENVINO_LIB_PATH` at case-run time would already be gone.
@@ -119,36 +145,57 @@ TEST_CASE("openvino: a bundle in one flat directory loads and executes") {
 
 `EtRuntime::methodMeta()` returns a `MethodMeta` with a `numInputs` field (`native/core/et_runtime.h:34,89`); other cases in this file read it the same way. The assertion's only job is to prove construction completed — construction is where `load_forward()` runs delegate init, and therefore where plugin resolution happens.
 
-- [ ] **Step 2: Run it to verify it skips, then fails for the right reason**
+- [ ] **Step 2 (Linux): Let the wrapper pass the variable through**
+
+`native/build_qa.sh` runs the whole Catch2 suite itself (`./native/asan/et_runtime_test --order decl`),
+so the smoke case needs no hand-invocation — it just needs its variable to exist inside the
+container. `local_build_wrapper.sh` forwards a **fixed allowlist** of `-e` flags, so add one beside
+the others:
+
+```bash
+    -e ET_OPENVINO_SMOKE_LIB \
+```
+
+Running the binary on the host instead is not an alternative: it is built in the container against
+that image's ASan runtime.
+
+- [ ] **Step 3 (Linux): Run it — skip, then fail, then pass**
+
+First with the variable unset:
 
 ```bash
 ./native/local_build_wrapper.sh native/build_qa.sh
 ```
 
-Expected: the new case reports SKIP (no `ET_OPENVINO_SMOKE_LIB` set) and the rest of the suite is green. Then point it at a bundle that is missing a library, to prove the case can fail:
+Expected: the new case reports SKIP and the rest of the suite is green.
+
+Then prove it can fail, by pointing it at a bundle with a library removed. The path must be inside
+the repo — the wrapper bind-mounts `$REPO_ROOT` and nothing else, so a `/tmp` path would not exist
+in the container:
 
 ```bash
-cp -r src/main/resources/native/linux-x86_64/openvino/lib /tmp/ov-broken
-rm /tmp/ov-broken/libopenvino_ir_frontend.so.*
-ET_OPENVINO_SMOKE_LIB=/tmp/ov-broken/libopenvino_c.so.2541 \
-  ./native/build/../asan/et_runtime_test "openvino: a bundle in one flat directory loads and executes"
+rm -rf native/build/ov-broken && cp -r src/main/resources/native/linux-x86_64/openvino/lib native/build/ov-broken
+rm native/build/ov-broken/libopenvino_ir_frontend.so.*
+ET_OPENVINO_SMOKE_LIB="/workspace/native/build/ov-broken/$(ls native/build/ov-broken | grep '^libopenvino_c\.so\.')" \
+  ./native/local_build_wrapper.sh native/build_qa.sh
 ```
 
-Expected: FAIL with an import error. Use the actual `et_runtime_test` path that `build_qa.sh` printed. If the binary is not where you expect, `find native -name et_runtime_test -type f`.
+Expected: FAIL with an import error naming device `CPU`. Note the `/workspace/...` prefix: the
+variable is read inside the container, where the repo is mounted at `/workspace`.
 
-- [ ] **Step 3: Run it against a good Linux bundle to verify it passes**
+Then against the intact bundle:
 
 ```bash
-ET_OPENVINO_SMOKE_LIB="$PWD/src/main/resources/native/linux-x86_64/openvino/lib/$(ls src/main/resources/native/linux-x86_64/openvino/lib | grep '^libopenvino_c\.so\.')" \
-  <path-to>/et_runtime_test "openvino: a bundle in one flat directory loads and executes"
+ET_OPENVINO_SMOKE_LIB="/workspace/src/main/resources/native/linux-x86_64/openvino/lib/$(ls src/main/resources/native/linux-x86_64/openvino/lib | grep '^libopenvino_c\.so\.')" \
+  ./native/local_build_wrapper.sh native/build_qa.sh
 ```
 
-Expected: PASS.
+Expected: PASS. Then `rm -rf native/build/ov-broken`.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4 (Linux): Commit**
 
 ```bash
-git add native/test/et_runtime_test.cpp
+git add native/test/et_runtime_test.cpp native/local_build_wrapper.sh
 git commit -m "test(native): prove an OpenVINO bundle loads from one flat directory
 
 Every other OpenVINO case here asserts a refusal, which passes just as well
@@ -160,7 +207,7 @@ Gated on ET_OPENVINO_SMOKE_LIB, not OPENVINO_LIB_PATH: the guard cases above
 unset the latter, so an exported value would be gone by the time this runs."
 ```
 
-- [ ] **Step 5: Run it on winbox — this is the go/no-go**
+- [ ] **Step 5 (winbox): Run it on Windows — this is the go/no-go**
 
 Push the branch and check it out on winbox (see "Working on winbox" above). Then write this
 throwaway script **locally** and `scp` it over, rather than pasting a command chain — a chained
@@ -190,28 +237,34 @@ EOF
 scp /tmp/ov-smoke-stage.sh winbox:/tmp/ov-smoke-stage.sh
 ```
 
-Run it, then build the QA tree, each as its own short call with stdin redirected:
+Stage the bundle first, as its own short call with stdin redirected:
 
 ```powershell
-& "C:\Program Files\Git\bin\bash.exe" /tmp/ov-smoke-stage.sh   </dev/null
-& "C:\Program Files\Git\bin\bash.exe" -c './native/build_qa.sh' </dev/null
+& "C:\Program Files\Git\bin\bash.exe" /tmp/ov-smoke-stage.sh </dev/null
 ```
 
-Expected: exactly six DLLs listed, and a `SMOKE_LIB=C:\...\openvino_c.dll` line. Take that value
-and run the smoke case:
+Expected: exactly six DLLs listed, and a `SMOKE_LIB=C:\...\openvino_c.dll` line.
+
+Then set that value and run the QA build. `build_qa.sh` builds and runs the whole Catch2 suite
+itself (`./native/asan/et_runtime_test.exe --order decl`), so the smoke case runs as part of it —
+there is no binary to invoke by hand, and no sanitizers on this platform despite the directory name:
 
 ```powershell
 $env:ET_OPENVINO_SMOKE_LIB = "<the SMOKE_LIB value printed above>"
-& .\native\asan\et_runtime_test.exe "openvino: a bundle in one flat directory loads and executes" </dev/null
+& "C:\Program Files\Git\bin\bash.exe" -c './native/build_qa.sh' </dev/null
 ```
 
-Expected: PASS. Adjust the binary path to whatever `build_qa.sh` produced — `Get-ChildItem -Recurse -Filter et_runtime_test.exe native` will find it.
+Expected: the suite green, including `openvino: a bundle in one flat directory loads and executes`
+as a PASS rather than a skip. If it reports a skip, `ET_OPENVINO_SMOKE_LIB` did not reach the
+Git-Bash child — check it with `& "C:\Program Files\Git\bin\bash.exe" -c 'echo $ET_OPENVINO_SMOKE_LIB' </dev/null`.
 
 **If this fails, stop.** Capture the exact error and `GetLastError` value. An import failure means the flat-directory layout does not resolve plugins on Windows, which is a producer bundle-layout issue and invalidates the rest of this plan — report it rather than working around it in Java.
 
 ---
 
 ### Task 2: The bundle declares its own contents
+
+**Location:** Linux. The code being edited also *runs* on Windows under Git-Bash, which is why the listing below avoids `find -printf`.
 
 **Files:**
 - Modify: `native/build.sh:216-222` (the symlink removal and `MANIFEST` write inside the `stage)` arm)
@@ -235,7 +288,7 @@ Append to `native/tests/openvino_bundle_staging.sh`, before its final `echo "PAS
 man_libs="$(grep -oP '^libs=\K.*' "${DIR}/MANIFEST" || true)"
 [ -n "${man_libs}" ] || fail "MANIFEST carries no libs"
 
-actual_libs="$(find "${DIR}/lib" -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')"
+actual_libs="$(ls -1 "${DIR}/lib" | sort | tr '\n' ' ')"
 [ "${man_libs} " = "${actual_libs}" ] \
   || fail "MANIFEST libs disagree with lib/: manifest='${man_libs}' actual='${actual_libs%% }'"
 
@@ -281,7 +334,9 @@ In the `stage)` arm, replace the symlink-removal line and the `MANIFEST` write b
     # ABI-versioned Linux bundle and an unversioned Windows one -- the Windows BUILDINFO carries no
     # ov_abi key at all. Generated from what actually landed in lib/, so it cannot disagree with the
     # tree. Computed AFTER the symlink removal above, or the symlink would be listed.
-    OV_LIBS="$(find "${OV_OUT}/lib" -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')"
+    # ls -1, not find -printf: this runs under Git-Bash on Windows too, and lib/ is flat by
+    # contract -- the staging test asserts it.
+    OV_LIBS="$(ls -1 "${OV_OUT}/lib" | sort | tr '\n' ' ')"
     OV_LIBS="${OV_LIBS% }"
     [ -n "${OV_LIBS}" ] || { echo "staged OpenVINO bundle has no libraries"; exit 1; }
 
@@ -329,6 +384,8 @@ from a truncated bundle would describe that truncation accurately."
 ---
 
 ### Task 3: `OpenVinoRuntime` reads the manifest instead of reconstructing names
+
+**Location:** Linux.
 
 **Files:**
 - Modify: `src/main/java/org/measly/executorch/engine/OpenVinoRuntime.java` — delete `LIBS` (lines 44-52), rewrite `publish()`'s copy loop, rewrite `resolvedLibPath()`, delete `buildInfo()`
@@ -436,6 +493,8 @@ absence."
 
 ### Task 4: Correct the no-delegate error branch and cover it
 
+**Location:** Linux.
+
 **Files:**
 - Modify: `src/main/java/org/measly/executorch/engine/OpenVinoRuntime.java:94-104` (the `!EtNative.backendRegistered(BACKEND)` branch)
 - Modify: `src/main/java/org/measly/executorch/engine/OpenVinoRuntime.java` — `validateOverride`'s directory message
@@ -443,68 +502,79 @@ absence."
 
 The branch's comment says "No delegate in this build at all -- Windows today". That is now false, and it is exactly how a future reader concludes Windows has no delegate. The branch itself stays: it is still reachable through the `ET_INSTALL` escape hatch, which links a caller-supplied runtime tree that may have been built without OpenVINO.
 
-- [ ] **Step 1: Write the failing test**
+**The condition is trivial and the message is the asset**, so the message is what gets tested. Extracting it into a pure function makes it testable on every platform, which an assumption-gated test guarding `!backendRegistered(...)` would not be — that assumption is false on all three shipped platforms, so such a test would skip everywhere and prove nothing.
 
-Add to `OpenVinoRuntimeTest`. The method name must sort **after** the existing `anOperatorSetLibPathIsHonouredUntouched` test, because the class is `@TestMethodOrder(MethodOrderer.MethodName.class)` and that test asserts `resolvedLibPath()` is still null:
+- [ ] **Step 1 (Linux): Write the failing test**
+
+Add to `OpenVinoRuntimeTest`. It calls the message builder directly, so it needs no native state, no
+bundle, and no assumption — it runs and asserts on every platform:
 
 ```java
     @Test
-    void rejectsAnOpenVinoModelWhenTheBuildLinksNoDelegate() {
-        // The branch is unreachable on every SHIPPED platform -- the delegate is in all three
-        // runtime tarballs. It stays reachable through the ET_INSTALL escape hatch, which links a
-        // caller-supplied runtime tree that may have been built without OpenVINO. Asserted here so
-        // it does not decay into an untested string.
-        Assumptions.assumeFalse(
-                EtNative.backendRegistered(OpenVinoRuntime.BACKEND),
-                "this build links the delegate; the branch under test cannot fire");
-        Path pte = Paths.get("src/test/resources/models/openvino/openvino_tiny.pte");
-        EngineException e =
-                assertThrows(EngineException.class, () -> OpenVinoRuntime.ensureReady(pte));
-        assertTrue(
-                e.getMessage().contains("Re-export"),
-                "must direct the user to re-export, not to add a runtime artifact: "
-                        + e.getMessage());
+    void theNoDelegateErrorDirectsTheUserToReExport() {
+        // The condition guarding this message (!backendRegistered) is false on every SHIPPED
+        // platform: all three runtime tarballs carry the delegate. It stays reachable through the
+        // ET_INSTALL escape hatch, which links a caller-supplied runtime tree that may have been
+        // built without OpenVINO -- so the message must stay correct, and a test gated on the
+        // condition would skip everywhere and prove nothing. The message is the asset; test it.
+        String msg = OpenVinoRuntime.noDelegateMessage().getMessage();
+        assertTrue(msg.contains(OpenVinoRuntime.BACKEND), "must name the backend: " + msg);
+        assertTrue(msg.contains(LibUtils.platform()), "must name the platform: " + msg);
+        // The remedy is the whole point of keeping this distinct from the no-runtime error: one
+        // says re-export the model, the other says add a runtime artifact. Asserting the remedy is
+        // what stops the two from converging.
+        assertTrue(msg.contains("Re-export"), "must direct the user to re-export: " + msg);
+        assertFalse(
+                msg.contains("-openvino artifact"),
+                "must not offer the runtime artifact; no runtime can help here: " + msg);
     }
 ```
 
-This assumes-out on every platform that links the delegate, which today is all of them. That is deliberate and is why Step 3 drives it a second way.
-
-- [ ] **Step 2: Run it to verify it is honest**
+- [ ] **Step 2 (Linux): Run it to verify it fails**
 
 ```bash
 ./gradlew openvinoTest --tests 'org.measly.executorch.engine.OpenVinoRuntimeTest'
 ```
 
-Expected: the new test reports as skipped (assumption failed), everything else green. A skipped test proves nothing yet — Step 3 is what gives it teeth.
+Expected: compilation failure — `noDelegateMessage()` does not exist.
 
-- [ ] **Step 3: Prove the branch by running against a delegate-free shim**
+- [ ] **Step 3 (Linux): Extract the message and correct its comment**
 
-`native/build_qa.sh` builds a tree that does not link the shim at all, so it cannot serve. Instead build a shim with the delegate excluded, using the escape hatch the branch exists for. Configure a shim build with `openvino_backend` unavailable by pointing `ET_INSTALL` at a runtime tree with the OpenVINO archive removed:
-
-```bash
-cp -r native/build/_deps/et_runtime-src /tmp/et-no-ov
-rm -f /tmp/et-no-ov/lib/libopenvino_backend.a
-rm -rf /tmp/no-ov-build
-ET_INSTALL=/tmp/et-no-ov NATIVE_BUILD_DIR=/tmp/no-ov-build STAGE_SO=0 ./native/build.sh
-EXECUTORCH_LIBRARY_PATH=/tmp/no-ov-build/libexecutorch_djl.so \
-  ./gradlew openvinoTest --tests 'org.measly.executorch.engine.OpenVinoRuntimeTest' --rerun-tasks
-```
-
-Expected: the new test now RUNS (the assumption holds) and PASSES, while the tests that need a real bundle assume-out. If the CMake configure fails because `find_package(executorch)` needs the archive it just lost, delete only the imported-target line for `openvino_backend` from the runtime tree's `lib/cmake/ExecuTorch/*.cmake` instead of the archive, and note which file you edited in the commit message.
-
-This build is throwaway — it links host glibc and is never staged. `EXECUTORCH_LIBRARY_PATH` is already declared as a `Test` task input in `build.gradle.kts`, so nothing in `src/main/resources/native/` is touched.
-
-- [ ] **Step 4: Correct the comment and the override message**
-
-Replace the branch's comment with the real condition:
+Replace the branch body with a call to a new package-private builder, and move the explanation onto
+the builder where the message lives:
 
 ```java
         if (!EtNative.backendRegistered(BACKEND)) {
-            // This build links no OpenVINO delegate. Every shipped runtime tarball carries one, so
-            // in practice this means a runtime tree supplied through the ET_INSTALL escape hatch
-            // that was built without it. No runtime artifact can help: the model cannot execute
-            // here at all, so the only fix is to re-export. Kept distinct from the case below,
-            // which looks similar to a user and has the opposite remedy.
+            throw noDelegateMessage();
+        }
+```
+
+Add the builder beside `validateOverride`:
+
+```java
+    /**
+     * The error for a build that links no OpenVINO delegate.
+     *
+     * <p>Every shipped runtime tarball carries the delegate, so in practice this means a runtime
+     * tree supplied through the {@code ET_INSTALL} escape hatch that was built without it. No
+     * runtime artifact can help — the model cannot execute here at all, so the only remedy is to
+     * re-export. Deliberately distinct from the no-runtime error, which looks similar to a user and
+     * has the opposite remedy.
+     *
+     * <p>Package-private and separate from its guard so it can be asserted directly: the guard is
+     * false on every shipped platform, so a test gated on it would skip everywhere.
+     *
+     * @return the exception to throw
+     */
+    static EngineException noDelegateMessage() {
+        return new EngineException(
+                "This .pte uses the "
+                        + BACKEND
+                        + " delegate, which this build does not provide ("
+                        + LibUtils.platform()
+                        + "). The delegate ships only where the ExecuTorch runtime was built"
+                        + " with it. Re-export without the OpenVINO partitioner to run here.");
+    }
 ```
 
 In `validateOverride`, the directory-mistake message hardcodes a `.so` example. Make it name the bundle's own library when one is present:
@@ -523,15 +593,18 @@ In `validateOverride`, the directory-mistake message hardcodes a `.so` example. 
 
 `bundleCLibrary()` is private and in the same class, so no visibility change is needed.
 
-- [ ] **Step 5: Run the tests to verify they still pass**
+- [ ] **Step 4 (Linux): Run the tests to verify they pass**
 
 ```bash
 ./gradlew openvinoTest
 ```
 
-Expected: green. The existing `validateOverride` directory test asserts on the message; if it greps for the old `.so` example text, update it to assert the behaviour — that the message names a FILE and includes the offending value — rather than the example string.
+Expected: green, with the new test now running rather than skipping. The existing `validateOverride`
+directory test asserts on the message; if it greps for the old `.so` example text, update it to
+assert the behaviour — that the message names a FILE and includes the offending value — rather than
+the example string.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5 (Linux): Commit**
 
 ```bash
 git add src/main/java/org/measly/executorch/engine/OpenVinoRuntime.java \
@@ -540,8 +613,11 @@ git commit -m "fix(openvino): state the real condition for the no-delegate error
 
 The comment said 'Windows today', which the 1.4.1 runtime made false -- every
 shipped tarball now carries the delegate. The branch stays because ET_INSTALL
-can link a runtime tree built without it, and it now has a test that drives it
-against exactly such a tree.
+can link a runtime tree built without it.
+
+Its message moves into a package-private builder so it can be asserted
+directly. Gating a test on the guard instead would skip on every shipped
+platform, which is how a user-facing string rots.
 
 The override message no longer offers a .so example on a platform that has no
 .so files."
@@ -550,6 +626,8 @@ The override message no longer offers a .so example on a platform that has no
 ---
 
 ### Task 5: Stage the Windows bundle
+
+**Location:** Linux. The Windows branch added here is *exercised* on winbox in Task 9 and in CI in Task 6; on this host it correctly reports `SKIP: bundle not staged`.
 
 **Files:**
 - Modify: `native/build.sh:33` (`ET_OPENVINO_SUPPORTED_PLATFORMS` default) and its comment at lines 28-32
@@ -646,6 +724,8 @@ case "${PLATFORM}" in
   windows-x86_64)
     # No ov_abi key at all here, and its ABSENCE is asserted rather than tolerated: the DLLs are
     # unversioned, so a bundle that grew one would mean the upstream layout changed under us.
+    # `grep && fail` is safe under set -e -- a failing non-final member of an AND-list does not
+    # exit, which is the same idiom docs_present.sh uses for its policy bans.
     grep -q '^ov_abi=' "${DIR}/BUILDINFO" && fail "windows BUILDINFO must carry no ov_abi"
     # Six, not seven: hwloc is folded into tbbbind_2_5.dll on Windows.
     expected="openvino_c.dll openvino.dll openvino_intel_cpu_plugin.dll openvino_ir_frontend.dll"
@@ -661,7 +741,7 @@ done
 # Nothing may be shipped that no one enumerated: an unlisted library means the bundle grew and the
 # expectations above have not caught up.
 want="$(printf '%s\n' ${expected} | wc -l)"
-count="$(find "${DIR}/lib" -maxdepth 1 -type f | wc -l)"
+count="$(ls -1 "${DIR}/lib" | wc -l)"
 [ "${count}" -eq "${want}" ] \
   || fail "expected ${want} libraries, found ${count} -- the bundle changed; see docs/openvino-version-bump.md"
 ```
@@ -703,6 +783,8 @@ skipping the check there."
 ---
 
 ### Task 6: Run `openvinoTest` on Windows in CI
+
+**Location:** Linux — this is a workflow YAML edit. The steps it adds run on the `windows-2022` runner, which is the acceptance gate; winbox is not.
 
 **Files:**
 - Modify: `.github/workflows/native-build-job.yml` — add steps to `build-executorch-shim-windows` after the CRT check (around line 233) and before the artifact upload
@@ -788,6 +870,9 @@ The job binds JDK 8 for jni.h, so the test steps bring their own JDK 17."
 
 ### Task 7: Verify the Gradle variant registers for Windows
 
+**Location:** Linux. The variant is a Gradle metadata question, not a runtime one, so a synthetic
+staged tree on this host answers it — no Windows machine is involved.
+
 `nativePlatforms` already contains `windows-x86_64`, and both `nativeJar-<platform>-openvino`'s `onlyIf` and the `openvinoVariants` filter key on a staged `MANIFEST`. So the Windows variant should register itself with no Gradle edit. That is a prediction, and a wrong one fails at `generateMetadataFileForMavenPublication` — a release-time failure. Prove it locally instead.
 
 **Files:**
@@ -841,6 +926,8 @@ No commit if no change was needed; note the outcome in the task notes. If `build
 ---
 
 ### Task 8: Documentation
+
+**Location:** Linux.
 
 **Files:**
 - Modify: `CLAUDE.md` (the OpenVINO bullet's platform statements and the supported-set paragraph)
@@ -923,7 +1010,11 @@ read."
 
 ### Task 9: Windows end-to-end verification on winbox
 
-No source changes. This is what decides whether the capability actually ships.
+**Location:** **winbox**, every step. No source changes.
+
+This verifies the capability on a real Windows host. It is *not* sign-off: winbox runs VS 18
+Community against the runner's VS 17 Enterprise, so the `windows-2022` job from Task 6 is the
+acceptance gate. What this catches that CI cannot is anything needing a human to look at it.
 
 - [ ] **Step 1: Get the branch onto winbox**
 
@@ -986,6 +1077,8 @@ No commit. Note each outcome, and record which precision `openVinoInferencePreci
 ---
 
 ### Task 10: Linux regression, follow-ups, and the PR
+
+**Location:** Linux.
 
 - [ ] **Step 1: Full Linux gate**
 
