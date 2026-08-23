@@ -11,9 +11,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.djl.Model;
 import ai.djl.engine.EngineException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Properties;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Tag;
@@ -50,10 +54,10 @@ class OpenVinoRuntimeTest {
         assertTrue(Files.isRegularFile(Paths.get(lib)), "must name a file, not a directory: " + lib);
         // The library the BUNDLE declared, not one this test reconstructs: that is the whole point
         // of c_library, and it is what makes this assertion identical on Windows.
-        java.util.Properties man = new java.util.Properties();
-        try (var is = OpenVinoRuntime.class.getResourceAsStream(
+        Properties man = new Properties();
+        try (InputStream is = OpenVinoRuntime.class.getResourceAsStream(
                 "/native/" + LibUtils.platform() + "/openvino/MANIFEST")) {
-            man.load(new java.io.InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8));
+            man.load(new InputStreamReader(is, StandardCharsets.UTF_8));
         }
         assertEquals(dir.resolve(man.getProperty("c_library")).toAbsolutePath().toString(), lib);
         assertFalse(Files.isSymbolicLink(Paths.get(lib)), "must never resolve through a symlink");

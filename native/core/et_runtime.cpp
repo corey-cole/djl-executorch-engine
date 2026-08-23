@@ -9,11 +9,6 @@
 #include <utility>
 #include <variant>
 
-// The platform dynamic-loading headers: dlopen is POSIX-only (MSVC has no <dlfcn.h>) and
-// LoadLibrary is Windows-only. openVinoInferencePrecision() (below) is guarded the same way, so
-// each include is only needed where its body exists. NOMINMAX and WIN32_LEAN_AND_MEAN keep
-// windows.h from polluting this translation unit, which also uses C-standard and ExecuTorch APIs
-// and must keep compiling on the Windows shim build.
 #ifndef _WIN32
 #include <dlfcn.h>
 #else

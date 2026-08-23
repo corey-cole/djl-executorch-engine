@@ -289,24 +289,26 @@ public final class OpenVinoRuntime {
         return readProperties(resourceBase() + MANIFEST);
     }
 
+    /**
+     * @return the trimmed value the staged bundle's MANIFEST declares for {@code key}
+     * @throws IllegalStateException if the MANIFEST carries no such key
+     */
+    private static String bundleManifestValue(String key) {
+        String value = manifest().getProperty(key);
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("OpenVINO bundle MANIFEST carries no " + key);
+        }
+        return value.trim();
+    }
+
     /** @return the library filenames the staged bundle declares, in the order it listed them */
     private static List<String> bundleLibs() {
-        String libs = manifest().getProperty("libs");
-        if (libs == null || libs.isBlank()) {
-            throw new IllegalStateException(
-                    "OpenVINO bundle MANIFEST carries no libs; restage with native/build.sh");
-        }
-        return List.of(libs.trim().split("\\s+"));
+        return List.of(bundleManifestValue("libs").split("\\s+"));
     }
 
     /** @return the filename of the OpenVINO C API library the delegate must dlopen */
     private static String bundleCLibrary() {
-        String name = manifest().getProperty("c_library");
-        if (name == null || name.isBlank()) {
-            throw new IllegalStateException(
-                    "OpenVINO bundle MANIFEST carries no c_library; restage with native/build.sh");
-        }
-        return name;
+        return bundleManifestValue("c_library");
     }
 
     private static Properties readProperties(String resource) {
