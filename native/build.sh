@@ -26,11 +26,10 @@ fi
 PIN="native/cmake/EtRuntimePin.cmake"
 
 # The engine's OpenVINO support set: what the JAVA layer can load, which is not the same question as
-# what the pin publishes. The producer ships a windows-x86_64 bundle that OpenVinoRuntime cannot
-# extract -- its library list, ABI-suffix naming and OPENVINO_LIB_PATH handling are all .so-shaped --
-# so staging it would put ~21 MB in a jar nothing can use. Adding a platform here is the LAST step of
-# supporting it, never the first.
-ET_OPENVINO_SUPPORTED_PLATFORMS="${ET_OPENVINO_SUPPORTED_PLATFORMS:-linux-x86_64}"
+# what the pin publishes. A platform belongs here once OpenVinoRuntime can extract its bundle and a
+# test proves it -- adding it is the LAST step of supporting a platform, never the first.
+# linux-aarch64 is absent because upstream publishes no bundle for it, not because of anything here.
+ET_OPENVINO_SUPPORTED_PLATFORMS="${ET_OPENVINO_SUPPORTED_PLATFORMS:-linux-x86_64 windows-x86_64}"
 
 # Sets OV_DECISION (stage | unsupported | unpublished) and, when staging, OV_URL / OV_SHA / OV_VER.
 #

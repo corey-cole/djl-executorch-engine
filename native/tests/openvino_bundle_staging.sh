@@ -8,7 +8,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 fail() { echo "FAIL: $1"; exit 1; }
 
-DIR="build/native-staging/linux-x86_64/openvino"
+# Platform-parameterized: CI runs this once per row that stages a bundle. Default keeps every
+# existing caller working unchanged.
+PLATFORM="${1:-linux-x86_64}"
+DIR="build/native-staging/${PLATFORM}/openvino"
 # Absent is normally fine -- most builds never stage a bundle, and skipping keeps this runnable
 # everywhere. On the release path it is the opposite: a publish whose bundle silently failed to
 # arrive is exactly the failure this guards, so OPENVINO_BUNDLE_REQUIRED=1 turns absence into a
@@ -28,25 +31,43 @@ fi
 [ -d "${DIR}/licenses" ]  || fail "missing licenses/"
 [ -d "${DIR}/lib" ]       || fail "missing lib/"
 
-# The ABI suffix is DERIVED from BUILDINFO, never hardcoded: it tracks the OpenVINO version
-# (2025.4.1 -> 2541), so a hardcoded literal would make this test a thing to edit on every bump,
-# and a stale one would fail with "missing library" rather than "you bumped OpenVINO".
-abi="$(grep -oP '^ov_abi=\K.*' "${DIR}/BUILDINFO")"
-[ -n "${abi}" ] || fail "BUILDINFO carries no ov_abi"
+# The expected member SET is the part worth reviewing on a version bump -- an OpenVINO release can
+# add or drop a transitive dependency, and a missing one fails at model load with an error naming
+# none of this. Kept independent of MANIFEST on purpose: a manifest generated from a truncated
+# bundle would describe that truncation accurately. See docs/openvino-version-bump.md.
+case "${PLATFORM}" in
+  linux-x86_64)
+    # The ABI suffix is DERIVED from BUILDINFO, never hardcoded: it tracks the OpenVINO version
+    # (2025.4.1 -> 2541), so a literal would be a thing to edit on every bump.
+    abi="$(grep -oP '^ov_abi=\K.*' "${DIR}/BUILDINFO")"
+    [ -n "${abi}" ] || fail "BUILDINFO carries no ov_abi"
+    expected="libopenvino_c.so.${abi} libopenvino.so.${abi} libopenvino_intel_cpu_plugin.so"
+    expected="${expected} libopenvino_ir_frontend.so.${abi} libtbb.so.12 libtbbbind_2_5.so.3"
+    expected="${expected} libhwloc.so.15"
+    ;;
+  windows-x86_64)
+    # No ov_abi key at all here, and its ABSENCE is asserted rather than tolerated: the DLLs are
+    # unversioned, so a bundle that grew one would mean the upstream layout changed under us.
+    # `grep && fail` is safe under set -e -- a failing non-final member of an AND-list does not
+    # exit, which is the same idiom docs_present.sh uses for its policy bans.
+    grep -q '^ov_abi=' "${DIR}/BUILDINFO" && fail "windows BUILDINFO must carry no ov_abi"
+    # Six, not seven: hwloc is folded into tbbbind_2_5.dll on Windows.
+    expected="openvino_c.dll openvino.dll openvino_intel_cpu_plugin.dll openvino_ir_frontend.dll"
+    expected="${expected} tbb12.dll tbbbind_2_5.dll"
+    ;;
+  *) fail "no expected library set for platform '${PLATFORM}'" ;;
+esac
 
-# The SET of libraries is the part worth reviewing on a version bump -- an OpenVINO release can add
-# or drop a transitive dependency, and a missing one fails at model load with an error naming none
-# of this. Keep in sync with OpenVinoRuntime.LIBS; docs/openvino-version-bump.md is the checklist.
-for f in "libopenvino_c.so.${abi}" "libopenvino.so.${abi}" libopenvino_intel_cpu_plugin.so \
-         "libopenvino_ir_frontend.so.${abi}" libtbb.so.12 libtbbbind_2_5.so.3 libhwloc.so.15; do
+for f in ${expected}; do
   [ -f "${DIR}/lib/${f}" ] || fail "missing library: ${f} (see docs/openvino-version-bump.md)"
 done
 
-# Nothing may be shipped that no one enumerated: an unlisted library means the bundle grew and
-# OpenVinoRuntime.LIBS will not extract it, which fails at dlopen rather than here.
-count="$(find "${DIR}/lib" -maxdepth 1 -type f | wc -l)"
-[ "${count}" -eq 7 ] \
-  || fail "expected 7 libraries, found ${count} -- the bundle changed; see docs/openvino-version-bump.md"
+# Nothing may be shipped that no one enumerated: an unlisted library means the bundle grew and the
+# expectations above have not caught up.
+want="$(printf '%s\n' ${expected} | wc -l)"
+count="$(ls -1 "${DIR}/lib" | wc -l)"
+[ "${count}" -eq "${want}" ] \
+  || fail "expected ${want} libraries, found ${count} -- the bundle changed; see docs/openvino-version-bump.md"
 
 # Flat, not nested: RPATH=$ORIGIN is what resolves the graph.
 find "${DIR}/lib" -mindepth 1 -type d | grep -q . && fail "lib/ must be flat, found a subdirectory"
