@@ -47,6 +47,7 @@ docker run --rm \
     -e ET_STRESS_SECONDS \
     -e CLEAN \
     -e ET_UBSAN_MODE \
+    -e ET_OPENVINO_SMOKE_LIB \
     -v "${REPO_ROOT}":/workspace \
     -w /workspace \
     "${ET_BUILD_IMAGE}" \

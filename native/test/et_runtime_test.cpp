@@ -492,3 +492,32 @@ TEST_CASE("openvino: OPENVINO_LIB_PATH pointing at a directory is refused") {
       Catch::Matchers::ContainsSubstring(ET_EXPECT_DIRECTORY_MSG));
   unsetEnvVar("OPENVINO_LIB_PATH");
 }
+
+// The only case that proves a SUCCESSFUL OpenVINO load. Everything else in this file asserts the
+// guard's refusals, which pass just as well when the runtime cannot actually resolve its plugins.
+//
+// Gated on ET_OPENVINO_SMOKE_LIB rather than OPENVINO_LIB_PATH because the guard cases above
+// unsetEnvVar("OPENVINO_LIB_PATH"), so a value the operator exported would be gone by the time this
+// runs. Point it at the C library file inside an extracted bundle:
+//   ET_OPENVINO_SMOKE_LIB=/path/to/bundle/lib/libopenvino_c.so.2541   (linux)
+//   ET_OPENVINO_SMOKE_LIB=C:\path\to\bundle\lib\openvino_c.dll        (windows)
+//
+// What this really tests is the FLAT DIRECTORY assumption: the bundle carries no plugins.xml, so
+// the CPU plugin and the IR frontend must be found as siblings of the C library. A failure here
+// surfaces as "failed to import model for device 'CPU'" while device enumeration still succeeds,
+// which is why a plugin-loading check would not catch it.
+TEST_CASE("openvino: a bundle in one flat directory loads and executes") {
+#ifndef ET_OPENVINO_LINKED
+  SKIP("this build links no OpenVINO delegate");
+#else
+  const char* smoke = std::getenv("ET_OPENVINO_SMOKE_LIB");
+  if (smoke == nullptr || smoke[0] == '\0') {
+    SKIP("set ET_OPENVINO_SMOKE_LIB to a bundle's OpenVINO C library file");
+  }
+  setEnvVar("OPENVINO_LIB_PATH", smoke);
+  EtRuntime rt(OPENVINO_TINY_PTE_PATH);
+  const auto meta = rt.methodMeta();
+  REQUIRE(meta.numInputs > 0);
+  unsetEnvVar("OPENVINO_LIB_PATH");
+#endif
+}
