@@ -45,18 +45,18 @@ is not distributable.**
 - `manylinux_2_28` → glibc 2.28 (covers RHEL 8+, modern Ubuntu/Debian). **This is the floor — see below.**
 - `manylinux2014` → glibc 2.17 (maximum reach; matches what PyTorch/ONNX Runtime ship) — **not achievable for us, see below.**
 
-**The floor is decided *for* us by a build-time dependency, not chosen.** ExecuTorch 1.3.1 hard-pins
-`torch==2.12.0` (`install_requirements.py`; `.ci/docker/ci_commit_pins/pytorch.txt` → `release/2.12`),
+**The floor is decided *for* us by a build-time dependency, not chosen.** ExecuTorch 1.4.1 hard-pins
+`torch==2.13.0` (`install_requirements.py`; `.ci/docker/ci_commit_pins/pytorch.txt` → `release/2.13`),
 and the ExecuTorch runtime build *imports* torch at configure time (`find_package_torch_headers`,
-`CMakeLists.txt:602`). But `torch 2.12.0`'s `libtorch_cpu.so` requires **`GLIBC_2.28`** (measured:
+`CMakeLists.txt:602`). But `torch 2.13.0`'s `libtorch_cpu.so` requires **`GLIBC_2.28`** (measured:
 `objdump -T` on the wheel's `.so`). So `import torch` cannot load in a `manylinux2014` (glibc 2.17)
 container — the ET runtime build fails there regardless of Python version. The build container must be
-**`manylinux_2_28`** (and Python **3.12** / `cp312`, since torch 2.12 dropped cp310 wheels). Because
+**`manylinux_2_28`** (and Python **3.12** / `cp312`, since torch 2.13.0 ships no cp310 wheels). Because
 the runtime + shim are statically combined in that container, the **shipped `.so` inherits the glibc
 2.28 floor.** Note torch is *build-time only* — it is not linked into our `.so` (our artifact is
 self-contained ExecuTorch, no torch); the floor propagates solely via the container's own glibc.
 Reaching 2.17 would require building ET without importing a glibc-2.28 torch — not worth it against
-ET 1.3.1's hard pin.
+ET 1.4.1's hard pin.
 
 This applies to **both** the ExecuTorch runtime build **and** the shim build, since they are
 statically combined into one object. macOS and Windows have analogous floors
@@ -304,8 +304,8 @@ seed (and, where the bug is upstream, an ExecuTorch issue).
   tree as a release asset / internal artifact?** The latter turns Stage A into a manual/scheduled
   job and makes per-commit CI cheap. Likely preferable given the build cost.
 - ~~**Which glibc floor do we commit to?**~~ **RESOLVED: glibc 2.28 (`manylinux_2_28` + cp312).**
-  Forced by `torch==2.12.0`'s `libtorch_cpu.so` needing `GLIBC_2.28` at ET-build configure time — see
-  "The floor is decided *for* us" above. 2.17/`manylinux2014` is off the table for ET 1.3.1.
+  Forced by `torch==2.13.0`'s `libtorch_cpu.so` needing `GLIBC_2.28` at ET-build configure time — see
+  "The floor is decided *for* us" above. 2.17/`manylinux2014` is off the table for ET 1.4.1.
 - **aarch64 strategy** — native ARM runners vs. cross-compile vs. emulation (slow).
 - **Reproducibility** — pin ExecuTorch submodule SHAs (the spike used `--depth 1
   --shallow-submodules`, which is *not* reproducible and must be replaced for CI).
