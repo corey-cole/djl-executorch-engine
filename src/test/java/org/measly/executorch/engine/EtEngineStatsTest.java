@@ -22,7 +22,7 @@ class EtEngineStatsTest {
     void reportsConfigurationWithoutAnyModelLoaded() {
         TestSupport.assumeNativeLibraryAvailable();
         EtStatsSnapshot s = EtEngineStats.snapshot();
-        assertEquals("1.3.1", s.getExecutorchVersion());
+        assertEquals("1.4.1", s.getExecutorchVersion());
         assertNotNull(s.getPlatform());
         assertNotNull(s.getNativeLibraryPath());
         assertTrue(s.getIntraOpThreads() >= 1);

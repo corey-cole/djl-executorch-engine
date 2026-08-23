@@ -30,7 +30,7 @@ class EtEngineStatsJmxTest {
             Object value = server.getAttribute(name(), "Snapshot");
             assertNotNull(value);
             CompositeData data = (CompositeData) value;
-            assertEquals("1.3.1", data.get("executorchVersion"));
+            assertEquals("1.4.1", data.get("executorchVersion"));
             assertNotNull(data.get("models"));
             // The MXBean surface is derived from the getters by reflection, so a new field reaches
             // JMX only if its getter is bean-conforming. Asserting the key is present catches a

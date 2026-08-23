@@ -1,9 +1,9 @@
 # /// script
 # requires-python = ">=3.10,<3.13"
 # dependencies = [
-#   "torch==2.12.1",
-#   "torchvision==0.27.1",
-#   "executorch==1.3.1",
+#   "torch==2.13.0",
+#   "torchvision==0.28.0",
+#   "executorch==1.4.1",
 # ]
 #
 # [tool.uv.sources]
@@ -30,9 +30,8 @@ Writes into the current working directory:
 
 The .pte uses the general single-tensor path, so NO model_spec.json is emitted.
 
-Note on pins: executorch==1.3.1 requires torch>=2.12.0a0 (see its PyPI metadata), which is
-newer than the torch/torchvision pair one might guess from a torchvision release alone.
-torch==2.12.1 / torchvision==0.27.1 is the pair `uv` resolves for executorch==1.3.1. The
+Note on pins: executorch==1.4.1 requires torch>=2.13.0a0 (see its PyPI metadata) and
+torchvision==0.28.0 requires exactly torch==2.13.0, which fixes the trio. The
 `[tool.uv]` index override pulls torch/torchvision from the CPU-only wheel index
 (download.pytorch.org/whl/cpu) so this script doesn't drag in multi-GB CUDA dependencies -
 executorch itself still comes from the default PyPI index.

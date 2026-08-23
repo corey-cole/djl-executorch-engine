@@ -38,17 +38,20 @@ Supported platforms: `linux-x86_64`, `linux-aarch64` and `windows-x86_64` (all s
 The engine links against the ExecuTorch runtime, but that runtime is **downloaded**, not compiled. CMake `FetchContent`s a hash-pinned, build-attested tarball published by the separate [`executorch-runtime-dist`](https://github.com/measly-java-learning/executorch-runtime-dist) repo. The pin lives in `native/cmake/EtRuntimePin.cmake` (**generated — do not hand-edit**; bump by replacing the whole file with the asset from the next `v<etver>-<pkgrev>` release, then re-applying the comment header). The SHA256 change is the supply-chain review gate. **After a pin bump, re-run `./native/gen_clangd_db.sh`** — the clangd database is refreshed only by that script, so it otherwise keeps resolving against the previous runtime's headers, silently and with no warning.
 
 - **Escape hatch**: set `ET_INSTALL=/path/to/et-install` to link an existing runtime tree; CMake then skips the download.
-- ExecuTorch runtime version is currently `1.3.1` (pin `1.3.1-10`); mirrored in `EtEngine.EXECUTORCH_VERSION`.
+- ExecuTorch runtime version is currently `1.4.1` (pin `1.4.1-2`); mirrored in `EtEngine.EXECUTORCH_VERSION`.
 - The pin file defines `et_runtime_dist_url(<variant> <row> <out_url> <out_sha>)` and
   `native/CMakeLists.txt` resolves rows through it. Do not rebuild `ET_RUNTIME_URL_<variant>_<row>`
   names by hand: an unpublished pair expands to an empty string and surfaces as an opaque
   `FetchContent` error, where the selector fails at configure time naming the pair it could not find.
-- The pin also carries `ET_RUNTIME_OPENVINO_*` rows (an OpenVINO CPU runtime bundle, linux-x86_64
-  only). This engine does not link the OpenVINO delegate, so those rows are unconsumed.
-- Two runtime behaviours changed at pin `1.3.1-10`: `EXECUTORCH_XNNPACK_SHARED_WORKSPACE` is pinned
-  **ON**, so one workspace arena is shared across delegate instances; and the `devtools` variant is
-  built **with** logging, so it is no longer a logging-free comparison point in
-  `native/build_variants.sh` — only `bare` is.
+- The pin also carries per-platform `ET_RUNTIME_OPENVINO_URL_<platform>`/`SHA256_<platform>` rows
+  for an OpenVINO CPU runtime bundle: `linux-x86_64`, `windows-x86_64`, plus a
+  `windows-x86_64-static` alias. A deprecated singular legacy form (`ET_RUNTIME_OPENVINO_PLATFORM`)
+  is no longer read. `native/build.sh` consumes the per-platform rows through
+  `ET_OPENVINO_SUPPORTED_PLATFORMS` (default `linux-x86_64`).
+- Two runtime behaviours worth knowing: `EXECUTORCH_XNNPACK_SHARED_WORKSPACE` is pinned **ON**, so
+  one workspace arena is shared across delegate instances; and the `devtools` variant is built
+  **with** logging, so it is not a logging-free comparison point in `native/build_variants.sh` —
+  only `bare` is.
 - A post-link CMake guard (`assert_xnnpack_registered.cmake`, Linux only) fails the build if the XNNPACK backend registration got GC'd out of the `.so`. Windows covers the same property at runtime via the Catch2 suite executing an XNNPACK-delegated `add.pte`.
 - The runtime's first-party custom op `etnp::lstm` (linux-x86_64 `logging` tarball only) is
   whole-archived into the shim when the tarball ships `lib/cmake/ETNPExtras/ETNPExtras.cmake`
@@ -71,7 +74,7 @@ The engine links against the ExecuTorch runtime, but that runtime is **downloade
 
 ### glibc floor (important for releases)
 
-ExecuTorch 1.3 pins `torch==2.12.0`, whose wheel needs **glibc ≥ 2.28**. So the shipped `.so` must be built inside a `manylinux_2_28` container to keep that floor (covers RHEL/Rocky 8+, Ubuntu 20.04+, Debian 11+). Building on the host produces a `.so` linked against host glibc that **breaks the floor** — fine for local `./gradlew test`, never for a release.
+ExecuTorch 1.4.1 pins `torch==2.13.0`, whose wheel needs **glibc ≥ 2.28**. So the shipped `.so` must be built inside a `manylinux_2_28` container to keep that floor (covers RHEL/Rocky 8+, Ubuntu 20.04+, Debian 11+). Building on the host produces a `.so` linked against host glibc that **breaks the floor** — fine for local `./gradlew test`, never for a release.
 
 ## Build & test
 
@@ -241,19 +244,30 @@ double for no new defect class.
   a real answer that stands until a delegated method **executes** — loading one leaves the arena at
   0, and a delegated model that allocates nothing never grows it (both an elementwise add and a
   Linear measure 0; only a conv allocates, which is why `native/spike/conv.pte` exists). The backing
-  option is a **vendored patch in the pinned distribution**, not upstream ExecuTorch, and requires
-  runtime `1.3.1-10`+; against a stock runtime the key does not resolve and this reads `-1`.
+  option is a **vendored patch in the pinned distribution**, not upstream ExecuTorch, and requires the pinned
+  runtime distribution; against a stock ExecuTorch the key does not resolve and this reads `-1`.
 - **OpenVINO delegate.** Two things ship separately and on *different* platform sets — conflating
-  them is the mistake this bullet exists to prevent. The **delegate** (`libopenvino_backend.a`) is in
-  every Linux runtime tarball, **including `linux-aarch64`**, and is linked whenever
-  `TARGET openvino_backend` exists; only Windows lacks it. The **OpenVINO runtime bundle** is
-  published for `linux-x86_64` alone (`ET_RUNTIME_OPENVINO_PLATFORM`). So aarch64 links the delegate
+  them is the mistake this bullet exists to prevent. The **delegate** is in every Linux runtime
+  tarball, **including `linux-aarch64`** (`libopenvino_backend.a`), and in the Windows tarballs
+  (`openvino_backend.lib`, linked incidentally); it is linked whenever `TARGET openvino_backend`
+  exists. The **OpenVINO runtime bundle** is published per platform (the pin's
+  `ET_RUNTIME_OPENVINO_URL_<platform>`/`SHA256_<platform>` rows for `linux-x86_64` and
+  `windows-x86_64`); the engine stages one only for platforms in its supported set (see the
+  engine-side-decision paragraph below). So aarch64 links the delegate
   but has no runtime to resolve, which is a third state distinct from both "supported" and
   "unsupported": the model is runnable there the moment a runtime is supplied, and telling that user
   to re-export would be wrong. `EtNative.backendRegistered` is what separates the two, and the
   OpenVINO *runtime* is a separate ~21 MB opt-in jar
   (capability `org.measly:djl-executorch-engine-<platform>-openvino`) — it is not in the standard
-  platform jar. Loading an OpenVINO `.pte` without it fails with a message naming the missing
+  platform jar.
+
+  Which platforms get a bundle staged is an **engine-side decision**, not a mirror of what the pin
+  publishes: `ET_OPENVINO_SUPPORTED_PLATFORMS` in `native/build.sh` (default `linux-x86_64`) is the
+  list, and the pin's per-platform rows are consulted only for platforms on it. The pin publishes a
+  `windows-x86_64` bundle that this engine declines, because `OpenVinoRuntime` cannot yet extract
+  it. The lookup keys on the platform identity, never the pin row — the `windows-x86_64-static` row
+  is an alias holding a CMake variable reference that shell cannot dereference.
+  Loading an OpenVINO `.pte` without it fails with a message naming the missing
   artifact. The delegate resolves its C API by `dlopen` under `std::call_once` **with no retry**, so
   every check happens before delegate init: a C++ guard in `EtRuntime`'s ctor before
   `load_forward()`, and `OpenVinoRuntime.ensureReady` before `loadModule`. A JVM cannot use

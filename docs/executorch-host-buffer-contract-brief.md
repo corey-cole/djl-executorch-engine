@@ -7,6 +7,10 @@ which of its findings transfer here. Several do. The most important one
 **inverts**, and that inversion is the reason this brief exists rather than a
 one-line "already handled" note.
 
+> **Pin note:** every source citation below was read against ExecuTorch `v1.3.1`. The engine's pin is
+> now `1.4.1-2`. The borrow contract has not been re-verified against 1.4.1, so treat the line
+> numbers as evidence of what was true at v1.3.1 rather than as current references.
+
 **Assume the reader has deep context on `djl-executorch-engine` and its
 history.** Unlike the IREE brief, this one opens with W1 already complete: the
 audit was performed on 2026-08-04 and its answer is recorded below with
@@ -88,7 +92,7 @@ of that copy. Nothing logs this and no test asserts it — unlike IREE, the copy
 is completely invisible.
 
 Verified 2026-08-04 against a source checkout at `~/workspace/executorch`, tag
-`v1.3.1` (exactly our pinned runtime version), using its `.venv`:
+`v1.3.1`, which was the pinned runtime version when this was investigated, using its `.venv`:
 
 ```
 native/spike/add.pte     num_inputs=2
@@ -525,7 +529,7 @@ Anticipated pushback on Claim 2, and the answers:
   the fix belongs.
 
 **Precondition: re-verify against ExecuTorch `main` before filing.** Everything
-above is checked against `v1.3.1`, which is our pin, not upstream's tip.
+above is checked against `v1.3.1`, the pin at the time of writing, not upstream's tip.
 Maintainers will ask, and a report against a released tag that is already fixed
 on main wastes the exchange. A fix on main is also useful to us — it dates the
 pin bump that would remove Claim 2 from this repo's exposure.
@@ -1542,7 +1546,7 @@ committed; the numbers above are the record.
 ### Upstream sources
 
 All upstream citations verified 2026-08-04 against `~/workspace/executorch` at
-tag `v1.3.1` — the exact runtime version pinned in
+tag `v1.3.1` — the runtime version pinned when this was written;
 `native/cmake/EtRuntimePin.cmake`. The pinned tarball ships headers only, so
 upstream `.cpp` behavior is not readable from `native/*/\_deps/`; that checkout
 is the authority.
