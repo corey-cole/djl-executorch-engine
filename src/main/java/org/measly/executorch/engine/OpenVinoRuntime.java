@@ -43,12 +43,33 @@ public final class OpenVinoRuntime {
     private static Path extracted;
     private static String libPath;
     private static boolean configured;
+    private static Properties manifestCache;
 
     private OpenVinoRuntime() {}
 
-    /** @return true if the OpenVINO bundle jar is on the classpath for this platform */
+    /** @return true if a usable OpenVINO bundle jar is on the classpath for this platform */
     public static boolean bundleAvailable() {
-        return OpenVinoRuntime.class.getResource(resourceBase() + MANIFEST) != null;
+        if (OpenVinoRuntime.class.getResource(resourceBase() + MANIFEST) == null) {
+            return false;
+        }
+        // Present is not the same as usable. Extraction copies the filenames the bundle DECLARES,
+        // so an -openvino jar older than that contract satisfies the resource check and then dies
+        // inside publish() -- past the point where anything can produce a decent error. Treating it
+        // as absent routes it to the no-runtime message instead, which already tells the operator
+        // what to add; the warning below is what names the real cause.
+        try {
+            bundleLibs();
+            bundleCLibrary();
+            return true;
+        } catch (IllegalStateException e) {
+            logger.warn(
+                    "Ignoring the OpenVINO bundle on the classpath: {}. It predates the manifest"
+                            + " contract this engine requires — align the"
+                            + " djl-executorch-engine-{}-openvino artifact with the engine version.",
+                    e.getMessage(),
+                    LibUtils.platform());
+            return false;
+        }
     }
 
     /**
@@ -285,8 +306,14 @@ public final class OpenVinoRuntime {
         }
     }
 
-    private static Properties manifest() {
-        return readProperties(resourceBase() + MANIFEST);
+    // Memoized: three separate reads otherwise (tarball_sha256, libs, c_library), each re-opening
+    // and re-parsing the resource. Cold path either way, but the file is one immutable classpath
+    // resource, so caching it costs nothing and cannot go stale.
+    private static synchronized Properties manifest() {
+        if (manifestCache == null) {
+            manifestCache = readProperties(resourceBase() + MANIFEST);
+        }
+        return manifestCache;
     }
 
     /**

@@ -228,6 +228,13 @@ if [ "${STAGE_SO}" = "1" ]; then
     OV_LIBS="${OV_LIBS% }"
     [ -n "${OV_LIBS}" ] || { echo "staged OpenVINO bundle has no libraries"; exit 1; }
 
+    # The encoding is space-separated, which is only sound while no member carries whitespace. One
+    # that did would reach the Java extractor as two names that do not exist, failing at copy() with
+    # nothing pointing back here. No OpenVINO artifact has ever shipped such a name -- asserted
+    # rather than assumed, because the failure is so far from the cause.
+    [ "$(printf '%s\n' ${OV_LIBS} | wc -l)" -eq "$(ls -1 "${OV_OUT}/lib" | wc -l)" ] \
+      || { echo "an OpenVINO library filename contains whitespace; MANIFEST libs cannot encode it"; exit 1; }
+
     OV_CLIB="$(printf '%s\n' ${OV_LIBS} | grep -E '^(lib)?openvino_c\.(so|dll)' | head -1)"
     [ -n "${OV_CLIB}" ] || { echo "no OpenVINO C API library in the staged bundle"; exit 1; }
 

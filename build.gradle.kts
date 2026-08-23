@@ -109,7 +109,7 @@ val statsDegradedTest = tasks.register<Test>("statsDegradedTest") {
 // once-only, so cases sharing a JVM contaminate each other in ways that present as flakes.
 tasks.register<Test>("openvinoTest") {
   group = "verification"
-  description = "OpenVINO delegate tests (linux-x86_64 with the openvino bundle)"
+  description = "OpenVINO delegate tests (runs where the openvino bundle is staged)"
   testClassesDirs = sourceSets["test"].output.classesDirs
   classpath = sourceSets["test"].runtimeClasspath
   useJUnitPlatform { includeTags("openvino") }
