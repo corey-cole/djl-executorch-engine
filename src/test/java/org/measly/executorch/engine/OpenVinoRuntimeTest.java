@@ -31,7 +31,7 @@ import org.measly.executorch.jni.EtNative;
 class OpenVinoRuntimeTest {
 
     @Test
-    void extractsTheBundleToAFlatDirectoryAndResolvesTheVersionedLibrary() throws Exception {
+    void extractsTheBundleToAFlatDirectoryAndResolvesTheDeclaredLibrary() throws Exception {
         TestSupport.assumeOpenVinoBundleAvailable();
 
         Path dir = OpenVinoRuntime.ensureExtracted();
@@ -142,17 +142,21 @@ class OpenVinoRuntimeTest {
     }
 
     @Test
-    void reportsTheInferencePrecisionOpenVinoWillUseOnThisHost() throws Exception {
-        TestSupport.assumeOpenVinoBundleAvailable();
-        OpenVinoRuntime.ensureExtracted();
-
-        String precision = EtEngine.openVinoInferencePrecision();
-        // The VALUE is not asserted -- it is a property of the CPU this happens to run on, and
-        // asserting it would assert the hardware. What is asserted is that the read succeeded, i.e.
-        // the vendored C API loaded and answered. "unavailable" means it did not.
-        assertNotEquals("unavailable", precision, "the C API should have loaded and answered");
-        assertTrue(
-                precision.equals("f32") || precision.equals("bf16") || precision.equals("f16"),
-                "unexpected precision: " + precision);
+    void theNoDelegateErrorDirectsTheUserToReExport() {
+        // The condition guarding this message (!backendRegistered) is false on every SHIPPED
+        // platform: all three runtime tarballs carry the delegate. It stays reachable through the
+        // ET_INSTALL escape hatch, which links a caller-supplied runtime tree that may have been
+        // built without OpenVINO -- so the message must stay correct, and a test gated on the
+        // condition would skip everywhere and prove nothing. The message is the asset; test it.
+        String msg = OpenVinoRuntime.noDelegateMessage().getMessage();
+        assertTrue(msg.contains(OpenVinoRuntime.BACKEND), "must name the backend: " + msg);
+        assertTrue(msg.contains(LibUtils.platform()), "must name the platform: " + msg);
+        // The remedy is the whole point of keeping this distinct from the no-runtime error: one
+        // says re-export the model, the other says add a runtime artifact. Asserting the remedy is
+        // what stops the two from converging.
+        assertTrue(msg.contains("Re-export"), "must direct the user to re-export: " + msg);
+        assertFalse(
+                msg.contains("-openvino artifact"),
+                "must not offer the runtime artifact; no runtime can help here: " + msg);
     }
 }

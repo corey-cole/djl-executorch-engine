@@ -80,16 +80,7 @@ public final class OpenVinoRuntime {
             return; // not an OpenVINO model; extract nothing, validate nothing, report nothing
         }
         if (!EtNative.backendRegistered(BACKEND)) {
-            // No delegate in this build at all -- Windows today. No runtime can help: the model
-            // itself cannot execute here, so the only fix is to re-export. Kept distinct from the
-            // case below, which looks similar to a user and has the opposite remedy.
-            throw new EngineException(
-                    "This .pte uses the "
-                            + BACKEND
-                            + " delegate, which this build does not provide ("
-                            + LibUtils.platform()
-                            + "). The delegate ships only where the ExecuTorch runtime was built"
-                            + " with it. Re-export without the OpenVINO partitioner to run here.");
+            throw noDelegateMessage();
         }
         if (!overridden && !bundleAvailable()) {
             // The delegate IS linked -- it ships in every Linux runtime tarball, including
@@ -140,6 +131,30 @@ public final class OpenVinoRuntime {
     }
 
     /**
+     * The error for a build that links no OpenVINO delegate.
+     *
+     * <p>Every shipped runtime tarball carries the delegate, so in practice this means a runtime
+     * tree supplied through the {@code ET_INSTALL} escape hatch that was built without it. No
+     * runtime artifact can help — the model cannot execute here at all, so the only remedy is to
+     * re-export. Deliberately distinct from the no-runtime error, which looks similar to a user and
+     * has the opposite remedy.
+     *
+     * <p>Package-private and separate from its guard so it can be asserted directly: the guard is
+     * false on every shipped platform, so a test gated on it would skip everywhere.
+     *
+     * @return the exception to throw
+     */
+    static EngineException noDelegateMessage() {
+        return new EngineException(
+                "This .pte uses the "
+                        + BACKEND
+                        + " delegate, which this build does not provide ("
+                        + LibUtils.platform()
+                        + "). The delegate ships only where the ExecuTorch runtime was built"
+                        + " with it. Re-export without the OpenVINO partitioner to run here.");
+    }
+
+    /**
      * Rejects an {@code OPENVINO_LIB_PATH} that cannot work, before the delegate sees it.
      *
      * <p>Deliberately does <b>not</b> fall back to the vendored bundle. An operator who set this
@@ -163,10 +178,10 @@ public final class OpenVinoRuntime {
             // Upstream's documented top mistake, and an easy one to make: the error the delegate
             // would otherwise produce mentions LD_LIBRARY_PATH, which reads like it wants a
             // directory. It does not.
+            String example = bundleAvailable() ? bundleCLibrary() : "the OpenVINO C library";
             throw new EngineException(
                     "OPENVINO_LIB_PATH points at a directory: '" + value + "'. It must be the full "
-                            + "path to the library FILE itself, e.g. <dir>/libopenvino_c.so."
-                            + "<abi>.");
+                            + "path to the library FILE itself, e.g. <dir>/" + example + ".");
         }
         if (!Files.isRegularFile(candidate) || !Files.isReadable(candidate)) {
             throw new EngineException(
@@ -203,7 +218,7 @@ public final class OpenVinoRuntime {
         return target;
     }
 
-    /** @return absolute path of the versioned OpenVINO C library, or null before extraction */
+    /** @return absolute path of the OpenVINO C library the bundle declares, or null before extraction */
     public static synchronized String resolvedLibPath() {
         if (libPath != null) {
             return libPath;
