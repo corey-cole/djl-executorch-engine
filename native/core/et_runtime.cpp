@@ -9,11 +9,21 @@
 #include <utility>
 #include <variant>
 
-// dlopen is POSIX-only; MSVC has no <dlfcn.h>. openVinoInferencePrecision() (below) is guarded
-// the same way, so the include is only needed where the body exists. The rest of this file uses
-// only C-standard and ExecuTorch APIs and must keep compiling on the Windows shim build.
+// The platform dynamic-loading headers: dlopen is POSIX-only (MSVC has no <dlfcn.h>) and
+// LoadLibrary is Windows-only. openVinoInferencePrecision() (below) is guarded the same way, so
+// each include is only needed where its body exists. NOMINMAX and WIN32_LEAN_AND_MEAN keep
+// windows.h from polluting this translation unit, which also uses C-standard and ExecuTorch APIs
+// and must keep compiling on the Windows shim build.
 #ifndef _WIN32
 #include <dlfcn.h>
+#else
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #endif
 #include <sys/stat.h>
 
@@ -428,10 +438,11 @@ bool pteUsesBackend(const std::string& ptePath, const std::string& backend) {
 }
 
 std::string openVinoInferencePrecision(const std::string& libPath) {
-  // OpenVINO is linux-x86_64 only and MSVC has no dlopen, so the probe body is POSIX-guarded and
-  // the Windows build reports "unavailable" -- which is also the honest answer there, since no
-  // vendored runtime exists to read from. The accessor's contract (EtEngine) is to degrade to
-  // "unavailable" rather than throw, so callers need no platform awareness.
+  // The probe exists on both shipped platforms: POSIX resolves the vendored OpenVINO C API via
+  // dlopen, Windows via LoadLibrary/GetProcAddress against the same bundle. The accessor's
+  // contract (EtEngine) is to degrade to "unavailable" rather than throw, so callers need no
+  // platform awareness -- and "unavailable" is the honest answer when no vendored runtime exists
+  // to read from.
 #ifndef _WIN32
   // dlopen'd rather than linked: we have no OpenVINO at link time, and the delegate resolves the
   // same library the same way. Refcounted, so opening it here is safe alongside the delegate's own
@@ -473,8 +484,45 @@ std::string openVinoInferencePrecision(const std::string& libPath) {
   // process-lifetime by design; this is a diagnostic called a handful of times at most.
   return result;
 #else
-  (void)libPath;
-  return "unavailable";
+  // Mirror of the POSIX body: LoadLibrary/GetProcAddress instead of dlopen/dlsym. libPath is a
+  // Windows-style absolute path to the vendored openvino_c.dll; LoadLibraryA resolves it as-is.
+  HMODULE handle = LoadLibraryA(libPath.c_str());
+  if (handle == nullptr) {
+    return "unavailable";
+  }
+  using CoreCreate = int (*)(void**);
+  using CoreGetProperty = int (*)(void*, const char*, const char*, char**);
+  using CoreFree = void (*)(void*);
+  using Free = void (*)(const char*);
+
+  // GetProcAddress returns FARPROC; cast through void* to avoid MSVC C4191 on the real types.
+  auto create = reinterpret_cast<CoreCreate>(reinterpret_cast<void*>(GetProcAddress(handle, "ov_core_create")));
+  auto getProperty = reinterpret_cast<CoreGetProperty>(reinterpret_cast<void*>(GetProcAddress(handle, "ov_core_get_property")));
+  auto coreFree = reinterpret_cast<CoreFree>(reinterpret_cast<void*>(GetProcAddress(handle, "ov_core_free")));
+  auto ovFree = reinterpret_cast<Free>(reinterpret_cast<void*>(GetProcAddress(handle, "ov_free")));
+  if (create == nullptr || getProperty == nullptr || coreFree == nullptr) {
+    FreeLibrary(handle);
+    return "unavailable";
+  }
+
+  void* core = nullptr;
+  if (create(&core) != 0 || core == nullptr) {
+    FreeLibrary(handle);
+    return "unavailable";
+  }
+  char* value = nullptr;
+  std::string result = "unavailable";
+  if (getProperty(core, "CPU", "INFERENCE_PRECISION_HINT", &value) == 0 && value != nullptr) {
+    result = value;
+    if (ovFree != nullptr) {
+      ovFree(value);
+    }
+  }
+  coreFree(core);
+  // Not FreeLibrary'd on the success path: same process-lifetime reasoning as the POSIX body --
+  // the delegate may hold the same DLL, and OpenVINO registers plugin state that does not expect
+  // to be torn down and rebuilt.
+  return result;
 #endif
 }
 
