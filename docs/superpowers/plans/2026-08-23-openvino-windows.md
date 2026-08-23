@@ -23,6 +23,50 @@
 - **Comment convention:** comments state what *is*, not what *was*.
 - **Out of scope:** `linux-aarch64` (links the delegate, no bundle published — the deliberate third state); the `example/` JMH OpenVINO comparison; any OpenVINO version change.
 
+## Working on winbox
+
+Tasks 1 and 9 run on the Windows box. These are recorded constraints, not preferences — each one
+has already cost a debugging session.
+
+**Getting the branch there.** Push it and fetch on winbox:
+
+```bash
+git push -u origin feature/openvino-windows     # from the Linux box, after Task 1 Step 4
+```
+
+```powershell
+git fetch origin; git checkout feature/openvino-windows; git reset --hard origin/feature/openvino-windows
+```
+
+Task 6 needs the branch pushed for CI regardless, so this costs nothing extra. If a work-in-progress
+branch on `origin` is unwanted, the fallback is `git bundle create /tmp/ovwin.bundle feature/openvino-windows`
+plus `scp`, then `git fetch /path/to/ovwin.bundle feature/openvino-windows`. **There is no rsync on
+winbox** — `scp` with absolute forward-slash targets is the only copy mechanism.
+
+**winbox needs no `executorch-runtime-dist` checkout.** Nothing in the build reads one: CMake
+`FetchContent`s the ExecuTorch tarball by URL from the pin, and `build.sh` `curl`s the OpenVINO
+bundle by URL from the pin. The clone at `~/workspace/executorch-runtime-dist` on the Linux box is
+for reading producer documentation only. winbox does need **network access** to GitHub releases for
+both downloads.
+
+**Driving it.**
+
+- `ssh winbox` is key-based; the default remote shell is `cmd`, so PowerShell is driven via
+  base64 UTF-16LE `-EncodedCommand`.
+- **A `bash -c '...'` one-liner does not survive PowerShell→native-exe quoting.** Keep every
+  Git-Bash invocation to one simple command with plain arguments, or write a `.sh` file and invoke
+  that. Never chain with `&&` inside `bash -c`.
+- Invoke Git-Bash by explicit path (`${env:ProgramFiles}\Git\bin\bash.exe`); a bare `bash` can
+  select WSL's `System32\bash.exe`. Use `-c`, never `-lc` — a login shell resets PATH and drops the
+  VS environment.
+- Redirect stdin (`</dev/null`) on every remote call, and prefer several short calls over one long
+  one: from outside, a blocked run and a slow one look identical.
+- Use `.\gradlew.bat --no-daemon --console=plain` for remote runs; a lingering daemon looks like a
+  stuck process to whoever is watching the box.
+- **winbox is for iteration, not acceptance.** It runs VS 18 Community against the runner's VS 17
+  Enterprise. The `windows-2022` runner is the sole acceptance gate — which is why Task 6 exists and
+  why Task 9 is verification rather than sign-off.
+
 ---
 
 ### Task 1: Prove the flat-directory bundle loads on Windows
@@ -118,27 +162,50 @@ unset the latter, so an exported value would be gone by the time this runs."
 
 - [ ] **Step 5: Run it on winbox — this is the go/no-go**
 
-On winbox, with the MSVC dev shell active (see Task 9 Step 2 for the discovery incantation), build the QA tree and stage a bundle by hand:
+Push the branch and check it out on winbox (see "Working on winbox" above). Then write this
+throwaway script **locally** and `scp` it over, rather than pasting a command chain — a chained
+`bash -c` does not survive the PowerShell→native-exe quoting:
 
 ```bash
-# In Git-Bash, from the repo root.
-url="$(grep -oPz 'set\(ET_RUNTIME_OPENVINO_URL_windows-x86_64\s+"\K[^"]+' native/cmake/EtRuntimePin.cmake | tr -d '\0')"
-sha="$(grep -oPz 'set\(ET_RUNTIME_OPENVINO_SHA256_windows-x86_64\s+"\K[^"]+' native/cmake/EtRuntimePin.cmake | tr -d '\0')"
-mkdir -p /tmp/ovwin && curl -fsSL -o /tmp/ovwin/bundle.tar.gz "$url"
+cat > /tmp/ov-smoke-stage.sh <<'EOF'
+#!/usr/bin/env bash
+# Throwaway: stages the windows-x86_64 OpenVINO bundle outside the build, so the flat-directory
+# assumption can be tested before any engine code depends on it. Prints the C library path.
+set -euo pipefail
+PIN=native/cmake/EtRuntimePin.cmake
+url="$(grep -oPz 'set\(ET_RUNTIME_OPENVINO_URL_windows-x86_64\s+"\K[^"]+' "$PIN" | tr -d '\0')"
+sha="$(grep -oPz 'set\(ET_RUNTIME_OPENVINO_SHA256_windows-x86_64\s+"\K[^"]+' "$PIN" | tr -d '\0')"
+[ -n "$url" ] || { echo "no windows-x86_64 OpenVINO row in the pin"; exit 1; }
+rm -rf /tmp/ovwin && mkdir -p /tmp/ovwin/b
+curl -fsSL -o /tmp/ovwin/bundle.tar.gz "$url"
 echo "$sha  /tmp/ovwin/bundle.tar.gz" | sha256sum -c -
-mkdir -p /tmp/ovwin/b && tar xzf /tmp/ovwin/bundle.tar.gz --strip-components=1 -C /tmp/ovwin/b
-ls /tmp/ovwin/b/lib     # expect exactly the six DLLs
-./native/build_qa.sh
+tar xzf /tmp/ovwin/bundle.tar.gz --strip-components=1 -C /tmp/ovwin/b
+echo "--- staged libraries (expect exactly six DLLs) ---"
+ls -1 /tmp/ovwin/b/lib
+# A Windows-style absolute path: the producer's is_absolute_path checks for a drive letter or a
+# leading separator, and a Git-Bash /tmp/... path is neither, so LoadLibraryExW would take the
+# bare-filename branch and search somewhere else entirely.
+echo "SMOKE_LIB=$(cygpath -w /tmp/ovwin/b/lib/openvino_c.dll)"
+EOF
+scp /tmp/ov-smoke-stage.sh winbox:/tmp/ov-smoke-stage.sh
 ```
 
-Then run the smoke, giving `ET_OPENVINO_SMOKE_LIB` a **Windows-style absolute path** — the producer's `is_absolute_path` check tests for a drive letter or a leading separator, and a Git-Bash `/tmp/...` path is neither:
+Run it, then build the QA tree, each as its own short call with stdin redirected:
 
-```bash
-ET_OPENVINO_SMOKE_LIB="$(cygpath -w /tmp/ovwin/b/lib/openvino_c.dll)" \
-  ./native/asan/et_runtime_test.exe "openvino: a bundle in one flat directory loads and executes"
+```powershell
+& "C:\Program Files\Git\bin\bash.exe" /tmp/ov-smoke-stage.sh   </dev/null
+& "C:\Program Files\Git\bin\bash.exe" -c './native/build_qa.sh' </dev/null
 ```
 
-Expected: PASS. Adjust the binary path to whatever `build_qa.sh` produced.
+Expected: exactly six DLLs listed, and a `SMOKE_LIB=C:\...\openvino_c.dll` line. Take that value
+and run the smoke case:
+
+```powershell
+$env:ET_OPENVINO_SMOKE_LIB = "<the SMOKE_LIB value printed above>"
+& .\native\asan\et_runtime_test.exe "openvino: a bundle in one flat directory loads and executes" </dev/null
+```
+
+Expected: PASS. Adjust the binary path to whatever `build_qa.sh` produced — `Get-ChildItem -Recurse -Filter et_runtime_test.exe native` will find it.
 
 **If this fails, stop.** Capture the exact error and `GetLastError` value. An import failure means the flat-directory layout does not resolve plugins on Windows, which is a producer bundle-layout issue and invalidates the rest of this plan — report it rather than working around it in Java.
 
@@ -666,17 +733,24 @@ Insert after the "Assert the shim links the static CRT (MSVC)" step and before "
           .\gradlew.bat openvinoTest
           if ($LASTEXITCODE -ne 0) { throw "openvinoTest failed (exit $LASTEXITCODE)" }
 
+      # The staging sync is done in PowerShell rather than inside bash: a `bash -c` string chaining
+      # commands with && does not survive the PowerShell->native-exe quoting, so each Git-Bash call
+      # below is one simple command with plain arguments -- the same shape as the CRT check above.
       - name: OpenVINO shell tests (staging, version coupling)
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path build\native-staging\windows-x86_64 | Out-Null
+          Copy-Item -Recurse -Force src\main\resources\native\windows-x86_64\* build\native-staging\windows-x86_64\
           $bash = "${env:ProgramFiles}\Git\bin\bash.exe"
-          & $bash -c 'mkdir -p build/native-staging/windows-x86_64 && cp -r src/main/resources/native/windows-x86_64/. build/native-staging/windows-x86_64/ && ./native/tests/openvino_bundle_staging.sh windows-x86_64 && ./native/tests/openvino_version_coupling.sh windows-x86_64 && ./native/tests/notices_staged.sh'
-          if ($LASTEXITCODE -ne 0) { throw "openvino shell tests failed (exit $LASTEXITCODE)" }
+          & $bash -c './native/tests/openvino_bundle_staging.sh windows-x86_64'
+          if ($LASTEXITCODE -ne 0) { throw "openvino_bundle_staging failed (exit $LASTEXITCODE)" }
+          & $bash -c './native/tests/openvino_version_coupling.sh windows-x86_64'
+          if ($LASTEXITCODE -ne 0) { throw "openvino_version_coupling failed (exit $LASTEXITCODE)" }
 ```
 
 `openvino_linkage.sh` is deliberately absent: it uses `nm` against an ELF `.so`. Windows delegate linkage is proven instead by the Catch2 case from Task 1 and by `openvinoTest` actually executing a delegated model.
 
-Note that `notices_staged.sh` reads a `linux-x86_64` path; if it is still hardcoded, drop it from this Windows step rather than parameterizing it here — that is a separate concern from OpenVINO and belongs in its own change.
+`notices_staged.sh` is also absent: it reads a hardcoded `linux-x86_64` path. Parameterizing it is a notices concern rather than an OpenVINO one, so it belongs in its own change — note it in Task 10's follow-ups if you want it tracked.
 
 - [ ] **Step 2: Update the artifact-upload comment**
 
@@ -853,7 +927,9 @@ No source changes. This is what decides whether the capability actually ships.
 
 - [ ] **Step 1: Get the branch onto winbox**
 
-Check out `feature/openvino-windows` and delete `native/build` and any QA tree. Drive the session in short chunks with `</dev/null`.
+Push the branch from the Linux box, then on winbox `git fetch origin` and hard-reset to it — see
+"Working on winbox" for both halves and the `git bundle` fallback. Delete `native/build` and any QA
+tree afterwards. Drive the session in short chunks with `</dev/null`.
 
 - [ ] **Step 2: Activate the MSVC dev shell**
 
@@ -876,16 +952,21 @@ Expected: `executorch_djl.dll` staged, and — for the first time on this platfo
 - [ ] **Step 4: Run the CRT check and the shell tests**
 
 ```powershell
-& "C:\Program Files\Git\bin\bash.exe" -c './native/tests/check_windows_crt.sh native/build src/main/resources/native/windows-x86_64/executorch_djl.dll' </dev/null
-& "C:\Program Files\Git\bin\bash.exe" -c 'mkdir -p build/native-staging/windows-x86_64 && cp -r src/main/resources/native/windows-x86_64/. build/native-staging/windows-x86_64/ && ./native/tests/openvino_bundle_staging.sh windows-x86_64 && ./native/tests/openvino_version_coupling.sh windows-x86_64' </dev/null
+$bash = "${env:ProgramFiles}\Git\bin\bash.exe"
+& $bash -c './native/tests/check_windows_crt.sh native/build src/main/resources/native/windows-x86_64/executorch_djl.dll' </dev/null
+New-Item -ItemType Directory -Force -Path build\native-staging\windows-x86_64 | Out-Null
+Copy-Item -Recurse -Force src\main\resources\native\windows-x86_64\* build\native-staging\windows-x86_64\
+& $bash -c './native/tests/openvino_bundle_staging.sh windows-x86_64' </dev/null
+& $bash -c './native/tests/openvino_version_coupling.sh windows-x86_64' </dev/null
 ```
 
-Expected: PASS from each.
+Expected: PASS from each. One simple command per Git-Bash call, for the quoting reason in "Working
+on winbox".
 
 - [ ] **Step 5: Run the OpenVINO JVM tests**
 
 ```powershell
-.\gradlew.bat openvinoTest </dev/null
+.\gradlew.bat --no-daemon --console=plain openvinoTest </dev/null
 ```
 
 Expected: green — `OpenVinoRuntimeTest` (extraction into `%LOCALAPPDATA%\executorch-djl\openvino\<sha>\`), `OpenVinoConcurrentExtractionTest` (the atomic-rename publication, which matters most on the platform that refuses to delete a loaded library), and `OpenVinoModelIT` (parity at `atol=1e-2`).
@@ -893,7 +974,7 @@ Expected: green — `OpenVinoRuntimeTest` (extraction into `%LOCALAPPDATA%\execu
 - [ ] **Step 6: Run the full Windows suite**
 
 ```powershell
-.\gradlew.bat test </dev/null
+.\gradlew.bat --no-daemon --console=plain test </dev/null
 ```
 
 Expected: green. This is the regression check that Task 3's extractor rewrite did not disturb anything else.
