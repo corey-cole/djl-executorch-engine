@@ -434,7 +434,7 @@ bool pteUsesBackend(const std::string& ptePath, const std::string& backend) {
 
 std::string openVinoInferencePrecision(const std::string& libPath) {
   // The probe exists on both shipped platforms: POSIX resolves the vendored OpenVINO C API via
-  // dlopen, Windows via LoadLibrary/GetProcAddress against the same bundle. The accessor's
+  // dlopen, Windows via LoadLibraryExW/GetProcAddress against the same bundle. The accessor's
   // contract (EtEngine) is to degrade to "unavailable" rather than throw, so callers need no
   // platform awareness -- and "unavailable" is the honest answer when no vendored runtime exists
   // to read from.
@@ -479,12 +479,19 @@ std::string openVinoInferencePrecision(const std::string& libPath) {
   // process-lifetime by design; this is a diagnostic called a handful of times at most.
   return result;
 #else
-  // Mirror of the POSIX body: LoadLibrary/GetProcAddress instead of dlopen/dlsym. libPath is a
-  // Windows-style absolute path to the vendored openvino_c.dll. Plain LoadLibraryA does not
-  // search the DLL's own directory for dependencies (no LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR), so
-  // the probe relies on the delegate having already loaded the bundle's DLLs; a cold probe
-  // would degrade to "unavailable", within the accessor's contract.
-  HMODULE handle = LoadLibraryA(libPath.c_str());
+  // Mirror of the POSIX body: LoadLibraryExW/GetProcAddress instead of dlopen/dlsym. libPath is
+  // a Windows-style absolute path to the vendored openvino_c.dll, UTF-8 from JNI. The search
+  // flags are the producer's own (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | DEFAULT_DIRS): they resolve
+  // the DLL graph from the bundle's own directory -- the Windows analogue of POSIX RPATH=$ORIGIN
+  // -- so the probe works cold, not only after the delegate has loaded the graph.
+  int wideLen = MultiByteToWideChar(CP_UTF8, 0, libPath.c_str(), -1, nullptr, 0);
+  if (wideLen == 0) {
+    return "unavailable";
+  }
+  std::wstring widePath(static_cast<size_t>(wideLen), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, libPath.c_str(), -1, widePath.data(), wideLen);
+  HMODULE handle = LoadLibraryExW(
+      widePath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
   if (handle == nullptr) {
     return "unavailable";
   }
