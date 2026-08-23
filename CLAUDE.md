@@ -253,7 +253,15 @@ double for no new defect class.
   to re-export would be wrong. `EtNative.backendRegistered` is what separates the two, and the
   OpenVINO *runtime* is a separate ~21 MB opt-in jar
   (capability `org.measly:djl-executorch-engine-<platform>-openvino`) — it is not in the standard
-  platform jar. Loading an OpenVINO `.pte` without it fails with a message naming the missing
+  platform jar.
+
+  Which platforms get a bundle staged is an **engine-side decision**, not a mirror of what the pin
+  publishes: `ET_OPENVINO_SUPPORTED_PLATFORMS` in `native/build.sh` (default `linux-x86_64`) is the
+  list, and the pin's per-platform rows are consulted only for platforms on it. The pin publishes a
+  `windows-x86_64` bundle that this engine declines, because `OpenVinoRuntime` cannot yet extract
+  it. The lookup keys on the platform identity, never the pin row — the `windows-x86_64-static` row
+  is an alias holding a CMake variable reference that shell cannot dereference.
+  Loading an OpenVINO `.pte` without it fails with a message naming the missing
   artifact. The delegate resolves its C API by `dlopen` under `std::call_once` **with no retry**, so
   every check happens before delegate init: a C++ guard in `EtRuntime`'s ctor before
   `load_forward()`, and `OpenVinoRuntime.ensureReady` before `loadModule`. A JVM cannot use
