@@ -104,15 +104,22 @@ cd "$(cygpath -u "$1")"
 shift
 exec "$@"
 EOF
-scp /tmp/winbox-run.sh winbox:winbox-run.sh   # no path: lands in the remote home directory
+
+# scp on this host REQUIRES an absolute, forward-slash target -- a bare relative path fails on its
+# sftp server. Bind the checkout path in both forms once, locally:
+#   REPO_FS=C:/Users/<user>/workspace/djl-executorch-engine
+scp /tmp/winbox-run.sh "winbox:${REPO_FS}/winbox-run.sh"
 ```
 
-Bind the checkout path once per session and invoke everything through the helper:
+Landing the helpers inside the checkout keeps every path derived from one value. They are untracked,
+so `git reset --hard` leaves them; delete them at the end of Task 9.
+
+Bind the same path in PowerShell (backslash form) and the two helper handles once per session:
 
 ```powershell
 $repo = "<the djl-executorch-engine checkout path on winbox>"
 $bash = "${env:ProgramFiles}\Git\bin\bash.exe"
-$run  = "$env:USERPROFILE/winbox-run.sh"
+$run  = "$repo\winbox-run.sh"
 ```
 
 Each call is then one command with plain arguments — no `&&` chain, no inherited-cwd assumption:
@@ -127,8 +134,15 @@ hostname, user, and key path live in `windows-jni-handoff.md`, outside version c
 Gradle gets the same treatment through its own flag rather than the helper: invoke the wrapper by
 absolute path and pass `-p $repo`, so the project directory is stated rather than inferred.
 
-`scp` with no path lands in the remote user's home directory, which is why both helpers are reached
-through `$env:USERPROFILE` — Windows OpenSSH and Git-Bash do not agree on what `/tmp` means.
+Both helpers live in the checkout rather than `/tmp`: Windows OpenSSH and Git-Bash do not agree on
+what `/tmp` means, and this host's sftp server rejects relative `scp` targets anyway.
+
+**JDK.** `gradlew.bat` in Task 9 needs a JDK 17; winbox has Zulu 17.0.19, recorded as confirmed
+present in `docs/superpowers/plans/2026-08-09-production-observability.md`. (An older plan,
+`2026-07-18-windows-static-crt.md`, says winbox may have no JVM toolchain — that is superseded, and
+the contradiction is why the follow-up issue in Task 10 exists.) This is separate from the JDK the
+shim compiles against: `build.sh` needs only `JAVA_HOME` pointing at any JDK for `jni.h`, and never
+links `libjvm`.
 
 **Driving it.**
 
@@ -299,7 +313,7 @@ ls -1 /tmp/ovwin/b/lib
 # bare-filename branch and search somewhere else entirely.
 echo "SMOKE_LIB=$(cygpath -w /tmp/ovwin/b/lib/openvino_c.dll)"
 EOF
-scp /tmp/ov-smoke-stage.sh winbox:ov-smoke-stage.sh   # no path: lands in the remote home dir
+scp /tmp/ov-smoke-stage.sh "winbox:${REPO_FS}/ov-smoke-stage.sh"   # absolute, forward slashes
 ```
 
 Stage the bundle, as its own short call with stdin redirected. It reads
@@ -307,7 +321,7 @@ Stage the bundle, as its own short call with stdin redirected. It reads
 everything else — `$repo`, `$bash` and `$run` are the bindings from "Working on winbox":
 
 ```powershell
-& $bash $run $repo "$env:USERPROFILE/ov-smoke-stage.sh"
+& $bash $run $repo "$repo\ov-smoke-stage.sh"
 ```
 
 Expected: exactly six DLLs listed, and a `SMOKE_LIB=C:\...\openvino_c.dll` line.
@@ -1167,7 +1181,13 @@ Expected: green — `OpenVinoRuntimeTest` (extraction into `%LOCALAPPDATA%\execu
 
 Expected: green. This is the regression check that Task 3's extractor rewrite did not disturb anything else.
 
-- [ ] **Step 7 (winbox): Record the results**
+- [ ] **Step 7 (winbox): Clean up and record the results**
+
+Remove the two helper scripts from the checkout, so a later `git status` there is clean:
+
+```powershell
+Remove-Item "$repo\winbox-run.sh", "$repo\ov-smoke-stage.sh" -ErrorAction SilentlyContinue
+```
 
 No commit. Note each outcome, and record which precision `openVinoInferencePrecision()` reported on winbox — it is useful context for reading any future parity failure.
 
@@ -1205,7 +1225,29 @@ The Windows shape is in `docs/handover-to-engine.md` C10 instead — six unversi
 Reported from the DJL ExecuTorch engine, which has now shipped the Windows bundle and had to take the library list from C10 rather than from the recipe doc.'
 ```
 
-- [ ] **Step 3: File the general Windows JVM CI issue**
+- [ ] **Step 3: File the winbox documentation-consolidation issue**
+
+```bash
+gh issue create --title "winbox mechanics are duplicated and contradictory across old plan docs" --body 'Driving the Windows iteration host is documented nowhere current. It is scattered across completed plan documents under `docs/superpowers/plans/`, which read as instructions, are what a grep surfaces first, and now contradict each other:
+
+- `2026-07-18-windows-static-crt.md:160` — "**Default remote shell is `cmd`**, not PowerShell or bash", plus `powershell -NoProfile -EncodedCommand` recipes. **False:** sshd'"'"'s `DefaultShell` is pwsh 7.x. `2026-07-15-windows-builds.md` carries the same `-EncodedCommand` pattern in three places.
+- `2026-07-18-windows-static-crt.md:321` — winbox "is provisioned as a *native build* host ... not a JVM toolchain", so a Gradle run may be impossible there. **Superseded** by `2026-08-09-production-observability.md:444`, which records Zulu 17.0.19 confirmed present.
+- `2026-07-15-windows-builds.md:1025` uses `rsync` with an `scp` fallback; there is no rsync on winbox.
+- The one thing that IS accurate and easy to miss: `scp` needs absolute forward-slash targets, because a bare relative path fails on this sftp server (`2026-07-18-windows-static-crt.md:169`).
+
+Each of these cost real time in the OpenVINO Windows work, and two of them produced commands that could not have run.
+
+**Proposal, not blanket deletion.** These documents are worth keeping for their reasoning, per the docs convention in CLAUDE.md. What is missing is one piece of *current guidance* they can defer to:
+
+1. Add `docs/windows-iteration-host.md` as the single current reference: shell (pwsh 7, no `<` redirection), VS activation with `-SkipAutomaticLocation`, the Git-Bash handoff and its quoting limits, scp path rules, the absence of rsync, what toolchains are present, and that winbox is an iteration host while the `windows-2022` runner is the acceptance gate.
+2. Add it to `docs/README.md`.
+3. Put a one-line superseded banner at the top of each plan above pointing at it, rather than editing their bodies — they are point-in-time records and rewriting them would falsify what was known then.
+4. Consider whether `docs/research/handover-windows-static-cxx17-findings.md` should also carry one.
+
+The machine-specific parts (hostname, user, key path) stay out of the repo, in `windows-jni-handoff.md`, as today.'
+```
+
+- [ ] **Step 4: File the general Windows JVM CI issue**
 
 ```bash
 gh issue create --title "No Windows JVM test job in CI beyond openvinoTest" --body 'The OpenVINO Windows work added `gradlew.bat openvinoTest` to `build-executorch-shim-windows`. The wider gap it exposed is that no other Windows JVM test runs in CI at all: `native-build-job.yml`'"'"'s Windows row builds and uploads the DLL, and every other Gradle suite runs on `ubuntu-latest`. `gradlew.bat test` remains a manual winbox step.
@@ -1215,16 +1257,16 @@ That matters because Catch2 on Windows links only the JNIEnv-free core, so nothi
 The steps now in the Windows job are the template; the question is runner-minute budget, which is why this is separate from the OpenVINO change.'
 ```
 
-- [ ] **Step 4: Push and open the PR**
+- [ ] **Step 5: Push and open the PR**
 
-Write the body to a file — it carries evidence from Tasks 1, 7, 9 and 10 — covering: that the delegate already linked on Windows and only the Java extraction blocked it; the `MANIFEST`-declares-its-contents move and what it deleted (`LIBS`, the ABI-suffix construction, the unversioned-plugin fallback); the two bundle shapes; the Task 1 flat-directory proof on winbox with its result; the Gradle variant verification from Task 7; the Windows and Linux gate results; and links to the two issues.
+Write the body to a file — it carries evidence from Tasks 1, 7, 9 and 10 — covering: that the delegate already linked on Windows and only the Java extraction blocked it; the `MANIFEST`-declares-its-contents move and what it deleted (`LIBS`, the ABI-suffix construction, the unversioned-plugin fallback); the two bundle shapes; the Task 1 flat-directory proof on winbox with its result; the Gradle variant verification from Task 7; the Windows and Linux gate results; and links to the three issues.
 
 ```bash
 git push -u origin feature/openvino-windows
 gh pr create --title "Ship the OpenVINO runtime bundle for windows-x86_64" --body-file /tmp/ovwin/pr-body.md
 ```
 
-- [ ] **Step 5: Close issue #53 on merge and hand off**
+- [ ] **Step 6: Close issue #53 on merge and hand off**
 
 Reference `Closes #53` in the PR body, then use `superpowers:finishing-a-development-branch` to decide how this integrates.
 
