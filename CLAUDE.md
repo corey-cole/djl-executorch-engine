@@ -47,7 +47,7 @@ The engine links against the ExecuTorch runtime, but that runtime is **downloade
   for an OpenVINO CPU runtime bundle: `linux-x86_64`, `windows-x86_64`, plus a
   `windows-x86_64-static` alias. A deprecated singular legacy form (`ET_RUNTIME_OPENVINO_PLATFORM`)
   is no longer read. `native/build.sh` consumes the per-platform rows through
-  `ET_OPENVINO_SUPPORTED_PLATFORMS` (default `linux-x86_64`).
+  `ET_OPENVINO_SUPPORTED_PLATFORMS` (default `linux-x86_64 windows-x86_64`).
 - Two runtime behaviours worth knowing: `EXECUTORCH_XNNPACK_SHARED_WORKSPACE` is pinned **ON**, so
   one workspace arena is shared across delegate instances; and the `devtools` variant is built
   **with** logging, so it is not a logging-free comparison point in `native/build_variants.sh` —
@@ -262,11 +262,17 @@ double for no new defect class.
   platform jar.
 
   Which platforms get a bundle staged is an **engine-side decision**, not a mirror of what the pin
-  publishes: `ET_OPENVINO_SUPPORTED_PLATFORMS` in `native/build.sh` (default `linux-x86_64`) is the
-  list, and the pin's per-platform rows are consulted only for platforms on it. The pin publishes a
-  `windows-x86_64` bundle that this engine declines, because `OpenVinoRuntime` cannot yet extract
-  it. The lookup keys on the platform identity, never the pin row — the `windows-x86_64-static` row
-  is an alias holding a CMake variable reference that shell cannot dereference.
+  publishes: `ET_OPENVINO_SUPPORTED_PLATFORMS` in `native/build.sh` (`linux-x86_64 windows-x86_64`)
+  is the list, and the pin's per-platform rows are consulted only for platforms on it. A platform
+  joins that list once `OpenVinoRuntime` can extract its bundle and a test proves it. The lookup
+  keys on the platform identity, never the pin row — the `windows-x86_64-static` row is an alias
+  holding a CMake variable reference that shell cannot dereference.
+
+  The two platforms' bundles differ in shape, and the engine reads rather than reconstructs: the
+  staged `MANIFEST` carries `libs` (the filenames) and `c_library` (the one to point
+  `OPENVINO_LIB_PATH` at). Linux ships seven ABI-versioned libraries and an `ov_abi` key in
+  `BUILDINFO`; Windows ships six unversioned DLLs, no `ov_abi` key at all, and no separate hwloc
+  (it is folded into `tbbbind_2_5.dll`). Nothing in Java derives a filename from a version.
   Loading an OpenVINO `.pte` without it fails with a message naming the missing
   artifact. The delegate resolves its C API by `dlopen` under `std::call_once` **with no retry**, so
   every check happens before delegate init: a C++ guard in `EtRuntime`'s ctor before
@@ -274,7 +280,17 @@ double for no new defect class.
   `LD_LIBRARY_PATH` (glibc reads it once at process start), so `OPENVINO_LIB_PATH` set from JNI is
   the only mechanism — and a caller-set value always wins. Bundle extraction is content-addressed on
   the upstream tarball SHA under the `LibUtils` cache root, published by atomic directory rename;
-  nothing is ever loaded out of the staging directory. `EtEngine.openVinoInferencePrecision()`
+  nothing is ever loaded out of the staging directory. **Windows has no `$ORIGIN`**, so the loader
+  arm that resolves the bundle must be `LoadLibraryExW` with **both**
+  `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`: a plain `LoadLibrary`
+  cannot find the bundle's siblings, and dropping the second flag switches the loader to the
+  alternate search order, which loses System32 and the OpenVINO wheel's CRT. A plain `LoadLibrary`
+  still *passes* wherever another OpenVINO sits on `PATH`, so the shape is guarded twice:
+  `native/tests/openvino_loader_flags.sh` bans it at the source (and runs on Linux, the cheapest
+  row), and `OpenVinoColdProbeTest` probes from a JVM that has loaded no model — which is why it is
+  alone in its class, since `openvinoTest` forks per class and any delegated load in the same
+  process makes a later probe succeed on an already-resident graph.
+  `EtEngine.openVinoInferencePrecision()`
   reports whether this host computes in `f32` or `bf16`, which is what keeps the parity test's
   `atol=1e-2` honest — **never tighten it**, both values are correct and the bound would then assert
   which machine CI allocated. Bumping the vendored OpenVINO version touches four places across the

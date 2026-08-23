@@ -1,8 +1,8 @@
 package org.measly.executorch.engine;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -10,9 +10,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ai.djl.Model;
 import ai.djl.engine.EngineException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Properties;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Tag;
@@ -30,7 +34,7 @@ import org.measly.executorch.jni.EtNative;
 class OpenVinoRuntimeTest {
 
     @Test
-    void extractsTheBundleToAFlatDirectoryAndResolvesTheVersionedLibrary() throws Exception {
+    void extractsTheBundleToAFlatDirectoryAndResolvesTheDeclaredLibrary() throws Exception {
         TestSupport.assumeOpenVinoBundleAvailable();
 
         Path dir = OpenVinoRuntime.ensureExtracted();
@@ -47,9 +51,15 @@ class OpenVinoRuntimeTest {
         String lib = OpenVinoRuntime.resolvedLibPath();
         assertNotNull(lib);
         assertTrue(Files.isRegularFile(Paths.get(lib)), "must name a file, not a directory: " + lib);
-        // The versioned file, never an unversioned symlink: jars do not carry symlinks, so the
-        // extraction never creates one and the resolved path must not depend on one existing.
-        assertTrue(lib.contains(".so."), "must resolve the versioned library: " + lib);
+        // The library the BUNDLE declared, not one this test reconstructs: that is the whole point
+        // of c_library, and it is what makes this assertion identical on Windows.
+        Properties man = new Properties();
+        try (InputStream is = OpenVinoRuntime.class.getResourceAsStream(
+                "/native/" + LibUtils.platform() + "/openvino/MANIFEST")) {
+            man.load(new InputStreamReader(is, StandardCharsets.UTF_8));
+        }
+        assertEquals(dir.resolve(man.getProperty("c_library")).toAbsolutePath().toString(), lib);
+        assertFalse(Files.isSymbolicLink(Paths.get(lib)), "must never resolve through a symlink");
     }
 
     @Test
@@ -135,17 +145,21 @@ class OpenVinoRuntimeTest {
     }
 
     @Test
-    void reportsTheInferencePrecisionOpenVinoWillUseOnThisHost() throws Exception {
-        TestSupport.assumeOpenVinoBundleAvailable();
-        OpenVinoRuntime.ensureExtracted();
-
-        String precision = EtEngine.openVinoInferencePrecision();
-        // The VALUE is not asserted -- it is a property of the CPU this happens to run on, and
-        // asserting it would assert the hardware. What is asserted is that the read succeeded, i.e.
-        // the vendored C API loaded and answered. "unavailable" means it did not.
-        assertNotEquals("unavailable", precision, "the C API should have loaded and answered");
-        assertTrue(
-                precision.equals("f32") || precision.equals("bf16") || precision.equals("f16"),
-                "unexpected precision: " + precision);
+    void theNoDelegateErrorDirectsTheUserToReExport() {
+        // The condition guarding this message (!backendRegistered) is false on every SHIPPED
+        // platform: all three runtime tarballs carry the delegate. It stays reachable through the
+        // ET_INSTALL escape hatch, which links a caller-supplied runtime tree that may have been
+        // built without OpenVINO -- so the message must stay correct, and a test gated on the
+        // condition would skip everywhere and prove nothing. The message is the asset; test it.
+        String msg = OpenVinoRuntime.noDelegateMessage().getMessage();
+        assertTrue(msg.contains(OpenVinoRuntime.BACKEND), "must name the backend: " + msg);
+        assertTrue(msg.contains(LibUtils.platform()), "must name the platform: " + msg);
+        // The remedy is the whole point of keeping this distinct from the no-runtime error: one
+        // says re-export the model, the other says add a runtime artifact. Asserting the remedy is
+        // what stops the two from converging.
+        assertTrue(msg.contains("Re-export"), "must direct the user to re-export: " + msg);
+        assertFalse(
+                msg.contains("-openvino artifact"),
+                "must not offer the runtime artifact; no runtime can help here: " + msg);
     }
 }

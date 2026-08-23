@@ -15,7 +15,7 @@ fixture="$(grep -oP '^openvino_version=\K.*' src/test/resources/models/openvino/
 [ "${pin}" = "${fixture}" ] \
   || fail "fixture MANIFEST openvino_version=${fixture} != pin ${pin} (see docs/openvino-version-bump.md)"
 
-staged="build/native-staging/linux-x86_64/openvino/MANIFEST"
+staged="build/native-staging/${1:-linux-x86_64}/openvino/MANIFEST"
 if [ -f "${staged}" ]; then
   bundle="$(grep -oP '^openvino_version=\K.*' "${staged}")"
   [ "${pin}" = "${bundle}" ] || fail "bundle MANIFEST openvino_version=${bundle} != pin ${pin}"

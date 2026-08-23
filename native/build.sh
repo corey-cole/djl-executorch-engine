@@ -26,11 +26,10 @@ fi
 PIN="native/cmake/EtRuntimePin.cmake"
 
 # The engine's OpenVINO support set: what the JAVA layer can load, which is not the same question as
-# what the pin publishes. The producer ships a windows-x86_64 bundle that OpenVinoRuntime cannot
-# extract -- its library list, ABI-suffix naming and OPENVINO_LIB_PATH handling are all .so-shaped --
-# so staging it would put ~21 MB in a jar nothing can use. Adding a platform here is the LAST step of
-# supporting it, never the first.
-ET_OPENVINO_SUPPORTED_PLATFORMS="${ET_OPENVINO_SUPPORTED_PLATFORMS:-linux-x86_64}"
+# what the pin publishes. A platform belongs here once OpenVinoRuntime can extract its bundle and a
+# test proves it -- adding it is the LAST step of supporting a platform, never the first.
+# linux-aarch64 is absent because upstream publishes no bundle for it, not because of anything here.
+ET_OPENVINO_SUPPORTED_PLATFORMS="${ET_OPENVINO_SUPPORTED_PLATFORMS:-linux-x86_64 windows-x86_64}"
 
 # Sets OV_DECISION (stage | unsupported | unpublished) and, when staging, OV_URL / OV_SHA / OV_VER.
 #
@@ -210,15 +209,41 @@ if [ "${STAGE_SO}" = "1" ]; then
     mkdir -p "${OV_OUT}"
     # --strip-components=1 drops the single top-level dir, keeping lib/, licenses/ and BUILDINFO.
     tar xzf "${TARBALL}" --strip-components=1 -C "${OV_OUT}"
-    # The symlink is deliberately not shipped: jars do not preserve symlinks, and it is unnecessary --
-    # OPENVINO_LIB_PATH names the versioned file directly and $ORIGIN resolves the rest. Verified
-    # against this exact bundle.
-    rm -f "${OV_OUT}/lib/libopenvino_c.so"
+    # Linux only: the bundle ships an unversioned compatibility symlink beside the versioned file.
+    # Jars do not preserve symlinks and nothing needs it -- OPENVINO_LIB_PATH names the versioned
+    # file directly and $ORIGIN resolves the rest. Guarded rather than left to `rm -f` missing on
+    # Windows, so the intent survives someone reading only this line.
+    if [ -L "${OV_OUT}/lib/libopenvino_c.so" ]; then
+      rm -f "${OV_OUT}/lib/libopenvino_c.so"
+    fi
+
+    # The bundle declares its own contents. The Java extractor copies these names verbatim instead
+    # of reconstructing them from an ABI suffix, which is what lets one code path serve an
+    # ABI-versioned Linux bundle and an unversioned Windows one -- the Windows BUILDINFO carries no
+    # ov_abi key at all. Generated from what actually landed in lib/, so it cannot disagree with the
+    # tree. Computed AFTER the symlink removal above, or the symlink would be listed.
+    # ls -1, not find -printf: this runs under Git-Bash on Windows too, and lib/ is flat by
+    # contract -- the staging test asserts it.
+    OV_LIBS="$(ls -1 "${OV_OUT}/lib" | LC_ALL=C sort | tr '\n' ' ')"
+    OV_LIBS="${OV_LIBS% }"
+    [ -n "${OV_LIBS}" ] || { echo "staged OpenVINO bundle has no libraries"; exit 1; }
+
+    # The encoding is space-separated, which is only sound while no member carries whitespace. One
+    # that did would reach the Java extractor as two names that do not exist, failing at copy() with
+    # nothing pointing back here. No OpenVINO artifact has ever shipped such a name -- asserted
+    # rather than assumed, because the failure is so far from the cause.
+    [ "$(printf '%s\n' ${OV_LIBS} | wc -l)" -eq "$(ls -1 "${OV_OUT}/lib" | wc -l)" ] \
+      || { echo "an OpenVINO library filename contains whitespace; MANIFEST libs cannot encode it"; exit 1; }
+
+    OV_CLIB="$(printf '%s\n' ${OV_LIBS} | grep -E '^(lib)?openvino_c\.(so|dll)' | head -1)"
+    [ -n "${OV_CLIB}" ] || { echo "no OpenVINO C API library in the staged bundle"; exit 1; }
 
     {
       echo "openvino_version=${OV_VER}"
       echo "tarball_sha256=${OV_SHA}"
       echo "tarball_url=${OV_URL}"
+      echo "libs=${OV_LIBS}"
+      echo "c_library=${OV_CLIB}"
     } > "${OV_OUT}/MANIFEST"
 
     echo "OpenVINO bundle staged: ${OV_OUT} ($(du -sh "${OV_OUT}" | cut -f1))"

@@ -109,11 +109,19 @@ val statsDegradedTest = tasks.register<Test>("statsDegradedTest") {
 // once-only, so cases sharing a JVM contaminate each other in ways that present as flakes.
 tasks.register<Test>("openvinoTest") {
   group = "verification"
-  description = "OpenVINO delegate tests (linux-x86_64 with the openvino bundle)"
+  description = "OpenVINO delegate tests (runs where the openvino bundle is staged)"
   testClassesDirs = sourceSets["test"].output.classesDirs
   classpath = sourceSets["test"].runtimeClasspath
   useJUnitPlatform { includeTags("openvino") }
   forkEvery = 1
+  // Every case is gated on a bundle being on the classpath, so a green run and a run that skipped
+  // everything look identical from the outside -- and the cases that matter most here are the ones
+  // asserting a load actually resolved. Naming what ran, and what did not, is what makes this task
+  // readable as evidence rather than just as a pass.
+  testLogging {
+    events("passed", "skipped", "failed")
+    showStandardStreams = false
+  }
 }
 
 // The inverse leg of openvinoTest: asserts the platform error where the delegate is ABSENT. Shaped

@@ -85,12 +85,15 @@ jobs:
       # would SKIP and openvino_version_coupling.sh's staged-bundle branch would be dead. The
       # runtime tarball (native/build/_deps/...) persists from the container build steps above,
       # which is what openvino_linkage.sh checks against.
-      - name: OpenVINO shell tests (linkage, staging, version coupling)
+      - name: OpenVINO shell tests (linkage, staging, version coupling, loader flags)
         if: matrix.platform == 'linux-x86_64'
         run: |
           mkdir -p build/native-staging/linux-x86_64
           cp -r src/main/resources/native/linux-x86_64/. build/native-staging/linux-x86_64/
           ./native/tests/openvino_pin_selector.sh
+          # Source-only, so it guards the WINDOWS loader shape from the cheapest job in the matrix.
+          # The behavioural gate (OpenVinoColdProbeTest) needs a staged bundle and a Windows host.
+          ./native/tests/openvino_loader_flags.sh
           ./native/tests/openvino_linkage.sh
           ./native/tests/openvino_bundle_staging.sh
           ./native/tests/openvino_version_coupling.sh
@@ -231,12 +234,44 @@ jobs:
           $bash = "${env:ProgramFiles}\Git\bin\bash.exe"
           & $bash -c './native/tests/check_windows_crt.sh native/build src/main/resources/native/windows-x86_64/executorch_djl.dll'
           if ($LASTEXITCODE -ne 0) { throw "windows CRT check failed (exit $LASTEXITCODE)" }
+      # The build steps above bind JDK 8 deliberately, for the oldest supported jni.h. Gradle 9.6.1
+      # cannot run on 8, so the test steps get their own toolchain -- the same split the Linux rows
+      # use, where the container build runs under the image's Corretto 8 and Gradle runs after.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      # Runs HERE, in the job that staged the bundle, for the same reason the Linux row does:
+      # build-java-package's download glob does not match the bundle's library filenames, so the
+      # bundle never reaches it and openvinoTest would silently skip there.
+      - name: OpenVINO delegate tests
+        shell: pwsh
+        run: |
+          .\gradlew.bat openvinoTest
+          if ($LASTEXITCODE -ne 0) { throw "openvinoTest failed (exit $LASTEXITCODE)" }
+
+      # The staging sync is done in PowerShell rather than inside bash: a `bash -c` string chaining
+      # commands with && does not survive the PowerShell->native-exe quoting, so each Git-Bash call
+      # below is one simple command with plain arguments -- the same shape as the CRT check above.
+      - name: OpenVINO shell tests (staging, version coupling)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build\native-staging\windows-x86_64 | Out-Null
+          Copy-Item -Recurse -Force src\main\resources\native\windows-x86_64\* build\native-staging\windows-x86_64\
+          $bash = "${env:ProgramFiles}\Git\bin\bash.exe"
+          & $bash -c './native/tests/openvino_bundle_staging.sh windows-x86_64'
+          if ($LASTEXITCODE -ne 0) { throw "openvino_bundle_staging failed (exit $LASTEXITCODE)" }
+          & $bash -c './native/tests/openvino_version_coupling.sh windows-x86_64'
+          if ($LASTEXITCODE -ne 0) { throw "openvino_version_coupling failed (exit $LASTEXITCODE)" }
 
       - name: Store executorch_djl shim
         uses: actions/upload-artifact@v7
         with:
           name: executorch-libs-windows-x86_64
-          # Whole staged tree, matching the Linux rows. Windows publishes no OpenVINO bundle today,
-          # but the shape is what keeps the two legs from drifting when it does.
+          # Whole staged tree, matching the Linux rows: the shim, its licences, and the OpenVINO
+          # bundle that build.sh stages here.
           path: ${{ github.workspace }}/src/main/resources/native/**
           compression-level: 1

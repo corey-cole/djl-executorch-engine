@@ -20,7 +20,8 @@ decide() {  # <platform> [supported-set]; echoes the OV_RESOLUTION line
   fi
 }
 
-# The shipped default: linux-x86_64 is the one platform whose bundle OpenVinoRuntime can extract.
+# The shipped default: linux-x86_64 and windows-x86_64 are the platforms whose bundles
+# OpenVinoRuntime can extract.
 out="$(decide linux-x86_64)"
 grep -q 'decision=stage'   <<<"${out}" || fail "linux-x86_64 must stage: ${out}"
 grep -q 'url=https://'     <<<"${out}" || fail "linux-x86_64 url must be literal: ${out}"
@@ -30,15 +31,10 @@ grep -q 'url=https://'     <<<"${out}" || fail "linux-x86_64 url must be literal
 pin_ver="$(grep -oP 'set\(ET_RUNTIME_OPENVINO_VERSION "\K[^"]+' native/cmake/EtRuntimePin.cmake)"
 grep -q "version=${pin_ver}" <<<"${out}" || fail "version not taken from the pin: ${out}"
 
-# Today's Windows state: the pin PUBLISHES a bundle, the engine does not support it. Staging it would
-# put ~21 MB in a jar nothing can load, because OpenVinoRuntime's library list is .so-shaped.
+# Windows is supported: the runtime tarballs ship openvino_backend.lib, the pin publishes a
+# win_amd64 bundle, and OpenVinoRuntime extracts whatever the bundle's MANIFEST declares.
 out="$(decide windows-x86_64)"
-grep -q 'decision=unsupported' <<<"${out}" || fail "windows-x86_64 must be unsupported today: ${out}"
-
-# The support question must be answerable independently: flipping ONLY the supported set must reach
-# a real bundle. This is the exact edit sub-project B makes, proven before B starts.
-out="$(decide windows-x86_64 'linux-x86_64 windows-x86_64')"
-grep -q 'decision=stage' <<<"${out}" || fail "windows-x86_64 must stage once supported: ${out}"
+grep -q 'decision=stage' <<<"${out}" || fail "windows-x86_64 must stage: ${out}"
 # The literal-URL guard. The pin expresses "both Windows CRT rows share one bundle" as an ALIAS row
 # whose VALUE is a CMake variable reference. A row-keyed lookup would hand curl the unexpanded text
 # ${ET_RUNTIME_OPENVINO_URL_windows-x86_64}; keying on the platform never reads the alias.
