@@ -47,7 +47,7 @@ The engine links against the ExecuTorch runtime, but that runtime is **downloade
   for an OpenVINO CPU runtime bundle: `linux-x86_64`, `windows-x86_64`, plus a
   `windows-x86_64-static` alias. A deprecated singular legacy form (`ET_RUNTIME_OPENVINO_PLATFORM`)
   is no longer read. `native/build.sh` consumes the per-platform rows through
-  `ET_OPENVINO_SUPPORTED_PLATFORMS` (default `linux-x86_64`).
+  `ET_OPENVINO_SUPPORTED_PLATFORMS` (default `linux-x86_64 windows-x86_64`).
 - Two runtime behaviours worth knowing: `EXECUTORCH_XNNPACK_SHARED_WORKSPACE` is pinned **ON**, so
   one workspace arena is shared across delegate instances; and the `devtools` variant is built
   **with** logging, so it is not a logging-free comparison point in `native/build_variants.sh` —
