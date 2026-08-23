@@ -1,8 +1,8 @@
 # /// script
 # requires-python = ">=3.10,<3.13"
 # dependencies = [
-#   "torch==2.12.1",
-#   "executorch==1.3.1",
+#   "torch==2.13.0",
+#   "executorch==1.4.1",
 # ]
 #
 # [tool.uv.sources]

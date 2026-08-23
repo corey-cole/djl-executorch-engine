@@ -1,9 +1,9 @@
 # /// script
 # requires-python = ">=3.10,<3.13"
 # dependencies = [
-#   "torch==2.12.1",
-#   "torchvision==0.27.1",
-#   "executorch==1.3.1",
+#   "torch==2.13.0",
+#   "torchvision==0.28.0",
+#   "executorch==1.4.1",
 #   "openvino==2025.4.1",
 #   "nncf==3.1.0",
 # ]
