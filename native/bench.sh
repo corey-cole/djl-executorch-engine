@@ -6,7 +6,8 @@
 # native/build_variants.sh drives it across the bare/logging/devtools configs.
 #
 # CI env: ET_RUNTIME_VARIANT (default logging), ET_INSTALL (escape hatch). ITERS (default 1000) and
-# WARMUP (default 100) tune the timed loop. Run in the SAME manylinux_2_28 container as
+# WARMUP (default 100) tune the timed loop; MODEL picks the .pte (default the mobilenet demo
+# artifact, falling back to add.pte). Run in the SAME manylinux_2_28 container as
 # native/build.sh so the toolchain matches the runtime. No JDK needed: the ET_BUILD_BENCH configure
 # skips the JNI shim.
 set -euo pipefail
@@ -20,6 +21,18 @@ cd "${REPO_ROOT}"
 ET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT:-logging}"
 ITERS="${ITERS:-1000}"
 WARMUP="${WARMUP:-100}"
+
+# add.pte is small enough that per-call overhead, not the runtime, dominates -- so a build-flag
+# delta measured on it is buried under timer resolution. Prefer the XNNPACK-delegated mobilenet.
+if [ -z "${MODEL:-}" ]; then
+  if [ -f example/build/models/mobilenet_v2.pte ]; then
+    MODEL=example/build/models/mobilenet_v2.pte
+  else
+    MODEL=native/spike/add.pte
+    echo "WARNING: mobilenet_v2.pte not found (./gradlew :example:exportModels); falling back to" >&2
+    echo "         ${MODEL}, which is too small to resolve a build-flag delta." >&2
+  fi
+fi
 
 # Runtime comes from CMake resolution: default fetches the pinned ${ET_RUNTIME_VARIANT} tarball;
 # set ET_INSTALL to point at an existing install (escape hatch). No precondition to check here.
@@ -35,5 +48,5 @@ cmake -B native/bench -S native -G "Unix Makefiles" "${ET_ARGS[@]}" \
   -DET_BUILD_BENCH=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build native/bench --target et_timing_harness
 
-echo "--- Release timing harness (iters=${ITERS} warmup=${WARMUP}) ---"
-./native/bench/et_timing_harness native/spike/add.pte "${ITERS}" "${WARMUP}"
+echo "--- Release timing harness (model=${MODEL} iters=${ITERS} warmup=${WARMUP}) ---"
+./native/bench/et_timing_harness "${MODEL}" "${ITERS}" "${WARMUP}"
