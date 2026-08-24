@@ -62,12 +62,20 @@ The fix belongs in `executorch-runtime-dist`, which already carries a `patches/`
    `data_sinks/` headers it includes.
 2. A consumer calling `find_package(executorch)` and linking the `etdump` target compiles a
    translation unit that includes `etdump_flatcc.h` — the header and the imported target agree.
-3. The `logging` and `bare` tarballs are unchanged in scope. This adds headers to devtools only and
-   must not perturb the variant the engine ships on Windows.
-4. Second priority, not a Linux blocker: install flatcc's `flatcc_builder.h` as well. See §3 for
+3. The `logging` and `bare` tarballs are unchanged in scope: no devtools headers, no `etdump`
+   target, no `libetdump.a`. This must not perturb the variant the engine ships on Windows. The new
+   install rule needs an explicit `EXECUTORCH_BUILD_DEVTOOLS` guard — upstream processes the
+   `devtools/` subdirectory in *both* branches of that condition, so an unguarded rule would leak
+   the headers into every variant.
+4. BUILDINFO carries `event_tracer=on|off`, sourced from the same place as the
+   `-DEXECUTORCH_ENABLE_EVENT_TRACER` flag. See the capability-gate discussion in §3.
+5. Second priority, not a Linux blocker: install flatcc's `flatcc_builder.h` as well. See §3 for
    why a Windows devtools build needs `flatcc_builder_aligned_free`, and why having the declaration
    already installed turns that into a one-line platform arm instead of a hand-written `extern "C"`
    against a vendored third-party symbol.
+
+The full paste-ready brief for that work is
+[docs/research/2026-08-24-devtools-header-install-handover.md](../../research/2026-08-24-devtools-header-install-handover.md).
 
 Then the pin bump here: replace `native/cmake/EtRuntimePin.cmake` wholesale with the release asset,
 re-apply the comment header, and re-run `./native/gen_clangd_db.sh`. Skipping that last step leaves
@@ -87,6 +95,22 @@ tests.
 `INTERFACE_LINK_LIBRARIES`. This is the auto-detect shape already used for `openvino_backend` and
 `ETNPExtras`: the build adapts to what the pinned tarball provides, so a `logging` runtime and a
 `devtools` runtime both configure and compile with no flag to pass.
+
+**`TARGET etdump` alone is not a sufficient capability signal, and the configure must not trust it
+on its own.** At pin `1.4.1-2` it discriminates correctly — the `logging` tarball ships no
+`libetdump.a` and its `ExecuTorchTargets.cmake` declares no `etdump` target. But that is not
+guaranteed by upstream: `add_library(etdump ...)` and its `install(TARGETS ...)` are unguarded, and
+the root `CMakeLists.txt` adds `devtools/` in both branches of `if(EXECUTORCH_BUILD_DEVTOOLS)`. The
+exclusion is a property of how the distribution builds, not a promise. Were it to lapse, a
+`logging` build would link `etdump`, report `devtoolsAvailable() == true`, and produce empty dumps —
+because `EXECUTORCH_ENABLE_EVENT_TRACER=OFF` compiles the tracer hooks out of `Method::execute`.
+Silent empty output is the worst available failure.
+
+So the gate reads **two** signals and asserts they agree: `TARGET etdump` (can we link it) and
+BUILDINFO's `event_tracer` key (was the tracer compiled in). A disagreement fails the configure with
+a message naming both. The BUILDINFO key does not exist yet — Phase 0 criterion 4 adds it, following
+the existing `usdt=on` key. When BUILDINFO is absent entirely, as under the `ET_INSTALL` escape
+hatch, the configure falls back to `TARGET etdump` and warns that the capability is unverified.
 
 ### Surface
 
