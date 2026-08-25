@@ -29,18 +29,20 @@
 
 ---
 
-### Task 1: Bump the runtime pin to `1.4.1-3`
+### Task 1: Bump the runtime pin to `1.4.1-3` — COMPLETE (`38a8c62`)
 
 Proves `1.4.1-3` is a clean swap on the **existing** `logging` configuration before anything switches variant. A prepared pin file with the consumer-notes block already re-applied is at `/tmp/claude-1000/-home-corey-workspace-djl-executorch-engine/a07980c5-625d-4ef8-96ad-66462284baeb/scratchpad/EtRuntimePin.cmake.prepared`; if it is gone, regenerate with `gh release download v1.4.1-3 --repo measly-java-learning/executorch-runtime-dist -p EtRuntimePin.cmake` and re-apply the block by hand.
 
 **Files:**
 - Modify: `native/cmake/EtRuntimePin.cmake` (whole-file replacement + comment header)
+- Modify: `native/tests/cmake_resolution.sh:30-32` (the release-tag assertion — the ET version is
+  unchanged across pkgrevs, so this gate exists to make a pkgrev bump visible and must move with it)
 
 **Interfaces:**
 - Consumes: nothing.
 - Produces: `ET_RUNTIME_VERSION "1.4.1-3"`; pin rows `ET_RUNTIME_URL_devtools_{linux-x86_64,linux-aarch64,windows-x86_64,windows-x86_64-static}` and their `SHA256` counterparts, resolvable through `et_runtime_dist_url(<variant> <row> url sha)`.
 
-- [ ] **Step 1: Replace the pin file with the release asset**
+- [x] **Step 1: Replace the pin file with the release asset**
 
 ```bash
 cp /tmp/claude-1000/-home-corey-workspace-djl-executorch-engine/a07980c5-625d-4ef8-96ad-66462284baeb/scratchpad/EtRuntimePin.cmake.prepared \
@@ -50,16 +52,19 @@ grep -n 'ET_RUNTIME_VERSION' native/cmake/EtRuntimePin.cmake
 
 Expected: `set(ET_RUNTIME_VERSION "1.4.1-3")`.
 
-- [ ] **Step 2: Confirm the devtools rows resolve for a foreign platform without that hardware**
+- [x] **Step 2: Confirm the devtools rows resolve for a foreign platform without that hardware**
 
 Run:
 ```bash
 bash native/tests/cmake_resolution.sh
 ```
 
-Expected: PASS. This exercises pin resolution via `-DET_PRINT_RESOLUTION=ON`, so it catches a malformed row before any compile.
+Expected: initially FAIL with `pin is not at release v1.4.1-2`. That assertion is the supply-chain
+gate: the ET version string is identical across pkgrevs, so the tarball stem cannot distinguish
+them and the release-tag path segment is asserted instead. Update both the comment and the `grep`
+on lines 30-32 to `v1.4.1-3`, then re-run. Expected: `PASS: cmake resolution`.
 
-- [ ] **Step 3: Build the shim on the unchanged `logging` configuration**
+- [x] **Step 3: Build the shim on the unchanged `logging` configuration**
 
 Run:
 ```bash
@@ -68,7 +73,7 @@ Run:
 
 Expected: build succeeds and stages `src/main/resources/native/linux-x86_64/libexecutorch_djl.so`. This is the clean-swap proof: same variant, new pin.
 
-- [ ] **Step 4: Run the JVM suite against it**
+- [x] **Step 4: Run the JVM suite against it**
 
 Run:
 ```bash
@@ -77,7 +82,7 @@ Run:
 
 Expected: BUILD SUCCESSFUL. `LstmModelIT` passing here also confirms the `1.4.1-3` logging tarball still carries the `etnp::lstm` custom op.
 
-- [ ] **Step 5: Refresh the clangd database**
+- [x] **Step 5: Refresh the clangd database**
 
 Run:
 ```bash
@@ -86,7 +91,7 @@ Run:
 
 Expected: completes. Skipping this leaves clangd resolving against the `1.4.1-2` headers, silently, with no warning — the new `devtools/` include would appear unresolvable in the editor while the build succeeds.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add native/cmake/EtRuntimePin.cmake
