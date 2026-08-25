@@ -85,39 +85,60 @@ AOT-compiled portability, no Python runtime, and quantization/XNNPACK on edge. S
 
 Lead the eventual write-up with footprint and cold-start; be transparent about steady-state.
 
-## Profiling (ExecuTorch devtools) — measuring the overhead that gates its architecture
+## Profiling (ExecuTorch devtools) — decided: one artifact, profiling is a runtime opt-in
 
-ExecuTorch profiling is **build-time, not a runtime switch on a normal build**: the runtime must be
-compiled with `EXECUTORCH_BUILD_DEVTOOLS=ON` + `EXECUTORCH_ENABLE_EVENT_TRACER=ON`, the `Module`
-constructed with an `ETDumpGen` event tracer, the ETDump buffer pulled after a run, and analyzed
-offline with the **Inspector** — which only maps events back to graph ops when an **ETRecord** was
-emitted at export time. Building profiling support is its own spec; what belongs *here* is the one
-measurement that decides its shipping architecture.
+ExecuTorch profiling is **build-time, not a runtime switch on a normal build** — or it was: the
+runtime must be compiled with `EXECUTORCH_BUILD_DEVTOOLS=ON` + `EXECUTORCH_ENABLE_EVENT_TRACER=ON`,
+the `Module` constructed with an `ETDumpGen` event tracer, the ETDump buffer pulled after a run, and
+analyzed offline with the **Inspector** — which only maps events back to graph ops when an
+**ETRecord** was emitted at export time. The engine now ships a devtools runtime on `linux-x86_64`
+and exposes profiling as a per-model opt-in (`Criteria.optOption(EtEngine.PROFILING_OPTION,
+"true")`); see [profiling.md](profiling.md) for how to use it. What belongs *here* is the
+measurement that decided the shipping architecture.
 
-**The gating question:** what does a devtools-enabled-but-not-tracing build cost the default path, in
-**binary size** and **steady-state latency**, versus the plain XNNPACK build we ship today? Two
-outcomes:
+**The gating question was:** what does a devtools-enabled-but-not-tracing build cost the default
+path, in **binary size** and **steady-state latency**, versus the plain XNNPACK build we ship? Two
+outcomes were on the table:
 
-- **Negligible →** ship **one** devtools-enabled `.so` with profiling as a runtime opt-in (attach the
-  tracer per model, or not).
+- **Negligible →** ship **one** devtools-enabled `.so` with profiling as a runtime opt-in (attach
+  the tracer per model, or not).
 - **Material →** ship a **separate** profile-capable `.so` (an extra build-matrix row) and keep the
   default artifact lean.
 
-Run this as a small spike alongside the size/latency metrics above: build the runtime twice (plain
-vs. devtools+tracer-enabled), link both shims, and record the **size delta** and the **steady-state
-delta** over `add.pte` + MobileNetV2 with **no tracer attached**. That single number picks
-one-artifact-vs-two before any profiling code is written.
+**The answer: negligible — one artifact.** Measured on `linux-x86_64`, MobileNetV2, **no tracer
+attached**, seven interleaved reps per variant at `intraop=1` on an idle Ryzen 7 5800XT:
 
-**Cross-cutting touch points** (for the eventual profiling spec, noted so the measurement is read in
-context):
+| variant | per-forward mean (ms) | sd | min | max |
+|---|---|---|---|---|
+| bare | 5.7160 | 0.0128 | 5.7014 | 5.7405 |
+| logging | 5.7168 | 0.0118 | 5.6974 | 5.7295 |
+| devtools | 5.7206 | 0.0192 | 5.6823 | 5.7459 |
 
-- **Build:** a devtools-enabled runtime (one shipped artifact, or a separate profiling one).
-- **Python:** `tools/scripts/export_*.py` gain an ETRecord option alongside the `.pte` (the Inspector
-  needs it to correlate runtime events to graph ops).
-- **Core + shell + Java:** `EtRuntime` grows an event-tracer-aware `forward` + an ETDump-buffer
-  accessor (owned / valid-until-next-run, the same lifetime discipline as the output views); the JNI
-  shell and Java engine expose a profiling toggle + dump retrieval. This is the first feature to
-  extend the core's C++ surface.
+devtools − logging is **+0.0038 ms (+0.066%)** against a standard error of 0.0085 ms (t ≈ 0.45),
+and the 95% confidence interval on the difference is about **±0.35%** — an upper bound on the cost,
+not merely a failure to detect one. At the shipped thread setting (`intraop=16`) devtools measured
+1.0162 ms against logging's 1.0244 ms — tied, with the logging arm pulled up by one outlier.
+**Binary size:** `libexecutorch_djl.so` grows from 12,440,632 to 12,578,440 bytes,
+**+137,808 bytes (+1.11%)** (the current linux-x86_64 `.so` on this branch is 12,710,016 bytes,
+~12.7 MB, so the absolute figure has drifted slightly from the design-time baseline). Peak RSS grows
+~0.25 MB (under 1%).
+
+An earlier pass on a 4-core laptop showed run-to-run spread of ~8%, which bounds nothing useful; the
+desktop's 0.2–0.7% spread is what makes the interval meaningful. Both runs used
+`native/build_variants.sh` semantics with the model parameterized; `add.pte` cannot resolve a
+build-flag delta at all and prints `warm_mean_ms=0.001` for every variant.
+
+**Decision: one artifact.** 138 KB and a bounded-under-0.35% steady-state cost do not justify a
+second build-matrix row, a second staging path, and a `LibUtils` selection rule. Profiling ships as
+a per-model runtime opt-in on the `linux-x86_64` artifact, gated on the `devtoolsAvailable()`
+capability query (`linux-aarch64` and `windows-x86_64` are not provisioned yet, not "unsupported").
+Note the boundary the measurement drew: attaching a tracer costs **real per-forward time** that was
+deliberately not measured here — which is exactly why the option is opt-in per model. The
+cross-cutting touch points this decision resolved: the build ships one devtools-enabled artifact on
+Linux; the export script gained an ETRecord option (`tools/scripts/export_mobilenet.py --etrecord`)
+so the Inspector can correlate events to graph ops; and the core/shell/Java surface grew the
+event-tracer-aware construction, the ETDump-buffer accessor, and the profiling toggle. The manual
+Inspector procedure is documented in [profiling.md](profiling.md).
 
 ## Harness notes (to fill in)
 
@@ -155,8 +176,9 @@ appender and no obvious cause.
 **Deferred (not now):** give the `devtools` variant logging too, rather than adding a 4th variant —
 the penalties are additive but still one-time and sub-ms, and devtools *is* the observability build, so
 logs + event traces belong together. This is a **Repo A** change (the variant flag map lives in its
-`build-runtime.sh`) that re-rolls the pin (`EtRuntimePin.cmake` bump), not engine code. Revisit
-alongside the profiling-overhead spike.
+`build-runtime.sh`) that re-rolls the pin (`EtRuntimePin.cmake` bump), not engine code. **Resolved by
+Repo A, not by us:** as of pin `1.4.1-2` the devtools variant is built **with** logging, so it is not
+a logging-free comparison point in `native/build_variants.sh` — only `bare` is.
 
 ## Open items
 
@@ -164,9 +186,10 @@ alongside the profiling-overhead spike.
 - Pick the measurement tool for steady-state (JMH vs. a simple timed loop) — JMH if we want
   defensible JVM-side numbers.
 - Quantization recipe for the stretch comparison.
-- **Profiling-overhead spike** — measure the devtools-enabled-but-not-tracing size + steady-state
-  latency delta vs. the plain build; gates the one-artifact-vs-two decision for profiling (see the
-  Profiling section).
+- ~~**Profiling-overhead spike**~~ — **RESOLVED 2026-08-25: one artifact.** The
+  devtools-enabled-but-not-tracing delta was negligible (+137,808 bytes of `.so`, +0.066% steady
+  state with a ±0.35% 95% CI bound); `linux-x86_64` ships a devtools runtime with profiling as a
+  per-model opt-in. See the [Profiling section](#profiling-executorch-devtools--decided-one-artifact-profiling-is-a-runtime-opt-in).
 - ~~**Ship logging or not (`EXECUTORCH_ENABLE_LOGGING`)**~~ — **RESOLVED 2026-07-04: ship logging**
   (the `logging` variant stays the downloaded default). See [Decisions](#decisions) for the data.
 - **Harness docs for user `.pte` artifacts** *(partly addressed)* — the timing-harness binary
