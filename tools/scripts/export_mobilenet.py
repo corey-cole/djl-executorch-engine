@@ -36,12 +36,14 @@ torchvision==0.28.0 requires exactly torch==2.13.0, which fixes the trio. The
 (download.pytorch.org/whl/cpu) so this script doesn't drag in multi-GB CUDA dependencies -
 executorch itself still comes from the default PyPI index.
 """
+import argparse
 import json
 from importlib.metadata import PackageNotFoundError, version
 
 import torch
 import torchvision
 from torch.export import export
+from executorch.devtools import generate_etrecord
 from executorch.exir import ExecutorchBackendConfig, to_edge_transform_and_lower
 from executorch.exir.passes import MemoryPlanningPass
 from executorch.backends.xnnpack.partition.xnnpack_partitioner import XnnpackPartitioner
@@ -55,6 +57,15 @@ def _v(pkg: str) -> str:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--etrecord",
+        action="store_true",
+        help="also emit mobilenet_v2.etrecord, which the ExecuTorch Inspector needs to attribute "
+        "runtime events to graph ops. Off by default: an ETRecord embeds the program buffer and "
+        "the graph modules, and the common case for this script is producing a demo model.",
+    )
+    args = parser.parse_args()
     weights = torchvision.models.MobileNet_V2_Weights.DEFAULT
     model = torchvision.models.mobilenet_v2(weights=weights).eval()
     example = (torch.randn(1, 3, 224, 224),)
@@ -64,8 +75,11 @@ def main() -> None:
         export(model, example),
         partitioner=[XnnpackPartitioner()],
     )
+    program = lowered.to_executorch()
     with open("mobilenet_v2.pte", "wb") as f:
-        f.write(lowered.to_executorch().buffer)
+        f.write(program.buffer)
+    if args.etrecord:
+        generate_etrecord("mobilenet_v2.etrecord", lowered, program)
 
     # Same weights, alloc_graph_input=False: ExecuTorch borrows the input pointer
     # (share_tensor_data) instead of memcpy'ing into the arena — the W5 input A/B arm.
