@@ -177,8 +177,9 @@ appender and no obvious cause.
 the penalties are additive but still one-time and sub-ms, and devtools *is* the observability build, so
 logs + event traces belong together. This is a **Repo A** change (the variant flag map lives in its
 `build-runtime.sh`) that re-rolls the pin (`EtRuntimePin.cmake` bump), not engine code. **Resolved by
-Repo A, not by us:** as of pin `1.4.1-2` the devtools variant is built **with** logging, so it is not
-a logging-free comparison point in `native/build_variants.sh` — only `bare` is.
+Repo A, not by us:** the devtools variant is built **with** logging (pins `1.4.1-2` and later,
+including the current `1.4.1-3`), so it is not a logging-free comparison point in
+`native/build_variants.sh` — only `bare` is.
 
 ## Open items
 

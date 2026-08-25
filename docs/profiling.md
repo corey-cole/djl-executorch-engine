@@ -69,9 +69,9 @@ provisioned yet** — not "unsupported": the pin publishes devtools rows for eve
 ships, so a platform joins by an engine-side list edit plus a test proving profiling works there,
 with no engine redesign and no API change.
 
-Requesting profiling where the capability is absent fails the load with a message naming the
-platform; a model loaded without the option returns an empty dump rather than throwing. An
-unrecognized option value fails the load regardless of platform.
+Requesting profiling where the capability is absent fails the load with a message identifying the
+platform's runtime as lacking the event tracer; a model loaded without the option returns an empty
+dump rather than throwing. An unrecognized option value fails the load regardless of platform.
 
 ## Exporting an ETRecord
 
