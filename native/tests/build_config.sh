@@ -7,7 +7,8 @@ fail() { echo "FAIL: $1"; exit 1; }
 
 out="$(PRINT_BUILD_CONFIG=1 bash native/build.sh)"
 # The shipped runtime variant is an engine-side decision keyed on the platform, not a mirror of what
-# the pin publishes. This test host is linux-x86_64, the one platform provisioned for profiling.
+# the pin publishes. All three shipped platforms are provisioned, so this asserts build.sh reaches
+# the shared selector at all; native/tests/variant_select.sh covers the rule for every identity.
 grep -q 'ET_RUNTIME_VARIANT=devtools' <<<"${out}" || fail "linux-x86_64 must default to devtools"
 grep -q 'STAGE_SO=1'                  <<<"${out}" || fail "default STAGE_SO not 1"
 grep -q 'NATIVE_BUILD_DIR=native/build\b' <<<"${out}" || fail "default NATIVE_BUILD_DIR changed"

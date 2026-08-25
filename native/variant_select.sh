@@ -14,14 +14,18 @@
 #   (which also covers the Windows Git-Bash fork). When it is unset, the identity is derived from
 #   the host via uname, the same derivation build_qa.sh and ubsan_gate.sh used to carry copies of.
 #
-#   ET_DEVTOOLS_SUPPORTED_PLATFORMS (input, default "linux-x86_64"): the platforms whose shipped
+#   ET_DEVTOOLS_SUPPORTED_PLATFORMS (input, default: all three shipped platforms): the platforms
+#   whose shipped
 #   artifact links a devtools runtime, enabling the per-model profiling option. An engine-side
 #   decision, NOT a mirror of the pin: the pin publishes devtools for every platform as of
 #   1.4.1-3, and a platform joins this list once a test proves profiling works there. The cost of
 #   carrying it is +138 KB of .so and steady-state latency bounded under 0.35%
-#   (see docs/profiling.md).
+#   (see docs/profiling.md). All three shipped platforms are now provisioned, so the list reads as
+#   a full set -- it is still a list and not a constant, because emptying it or removing one entry
+#   is how a platform leaves, and native/tests/variant_select.sh pins that it is the list that
+#   decides rather than a hardcoded platform name.
 #
-#   The default is ${ET_DEVTOOLS_SUPPORTED_PLATFORMS-linux-x86_64} with a SINGLE dash,
+#   The default is set with a SINGLE dash, ${ET_DEVTOOLS_SUPPORTED_PLATFORMS-...},
 #   deliberately NOT ${...:-...}: an explicitly EMPTY list must mean "no platforms" -- that is how
 #   a platform leaves the list -- not "re-add the default". native/tests/build_config.sh pins the
 #   distinction (ET_DEVTOOLS_SUPPORTED_PLATFORMS= must resolve to logging), so an edit to `:-`
@@ -39,7 +43,7 @@ if [ -z "${ET_PLATFORM_IDENTITY:-}" ]; then
   esac
 fi
 
-ET_DEVTOOLS_SUPPORTED_PLATFORMS="${ET_DEVTOOLS_SUPPORTED_PLATFORMS-linux-x86_64}"
+ET_DEVTOOLS_SUPPORTED_PLATFORMS="${ET_DEVTOOLS_SUPPORTED_PLATFORMS-linux-x86_64 linux-aarch64 windows-x86_64}"
 if [ -z "${ET_RUNTIME_VARIANT:-}" ]; then
   case " ${ET_DEVTOOLS_SUPPORTED_PLATFORMS} " in
     *" ${ET_PLATFORM_IDENTITY} "*) ET_RUNTIME_VARIANT=devtools ;;

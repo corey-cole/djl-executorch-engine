@@ -85,6 +85,14 @@ jobs:
       # would SKIP and openvino_version_coupling.sh's staged-bundle branch would be dead. The
       # runtime tarball (native/build/_deps/...) persists from the container build steps above,
       # which is what openvino_linkage.sh checks against.
+      # The rule deciding which runtime variant each platform ships. Host-fast and platform-
+      # independent: variant_select.sh takes the platform identity as an input, so it asserts the
+      # Windows and aarch64 rules from this runner too.
+      - name: Variant selection tests
+        run: |
+          ./native/tests/variant_select.sh
+          ./native/tests/build_config.sh
+
       - name: OpenVINO shell tests (linkage, staging, version coupling, loader flags)
         if: matrix.platform == 'linux-x86_64'
         run: |
@@ -252,6 +260,17 @@ jobs:
         run: |
           .\gradlew.bat openvinoTest
           if ($LASTEXITCODE -ne 0) { throw "openvinoTest failed (exit $LASTEXITCODE)" }
+
+      # windows-x86_64 ships a devtools runtime, so the profiling path must be gated here rather
+      # than on a hand-run winbox session. This row runs no other JVM tests (issue #58), so without
+      # this step ProfilingIT's devtools-PRESENT arm would execute on no CI runner at all: the
+      # Linux rows cannot cover the Windows loader, the MSVC CRT, or flatcc's _aligned_malloc.
+      # A wrong deallocator surfaces here as a JVM crash mid-test, not as a failed assertion.
+      - name: Profiling tests
+        shell: pwsh
+        run: |
+          .\gradlew.bat test --tests 'org.measly.executorch.ProfilingIT'
+          if ($LASTEXITCODE -ne 0) { throw "ProfilingIT failed (exit $LASTEXITCODE)" }
 
       # The staging sync is done in PowerShell rather than inside bash: a `bash -c` string chaining
       # commands with && does not survive the PowerShell->native-exe quoting, so each Git-Bash call
