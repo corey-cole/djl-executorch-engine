@@ -4,7 +4,14 @@ import org.measly.executorch.engine.LibUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** JNI surface to the ExecuTorch native library. Loads the .so on class init. */
+/**
+ * JNI surface to the ExecuTorch native library. Loads the .so on class init.
+ *
+ * <p><b>Internal.</b> This class is {@code public} only because the JVM requires it for JNI
+ * linkage; it is not part of this engine's supported API and its signatures may change in any
+ * release. Reach ExecuTorch through {@link org.measly.executorch.engine.EtModel} and the DJL
+ * {@code Criteria} surface instead. See {@code org.measly.executorch.jni.package-info}.
+ */
 public final class EtNative {
 
     /** Sink for ExecuTorch's native ET_LOG output, forwarded by the JNI PAL bridge. */
@@ -26,6 +33,22 @@ public final class EtNative {
      * @return the native handle
      */
     public static native long loadModule(String ptePath, int workspaceSharingMode, boolean profiling);
+
+    /**
+     * Loads a .pte with no event tracer attached.
+     *
+     * <p>Equivalent to {@link #loadModule(String, int, boolean) loadModule(ptePath,
+     * workspaceSharingMode, false)}. Retained so that adding the profiling parameter did not remove
+     * a signature callers may have compiled against; new code should call the three-argument form.
+     *
+     * @param ptePath path to the model file
+     * @param workspaceSharingMode XNNPACK workspace sharing for this model: 0=Disabled, 1=PerModel,
+     *     2=Global, -1 to send no spec and leave the runtime default in force
+     * @return the native handle
+     */
+    public static long loadModule(String ptePath, int workspaceSharingMode) {
+        return loadModule(ptePath, workspaceSharingMode, false);
+    }
 
     /**
      * Finalized ETDump covering every forward since the last call.
