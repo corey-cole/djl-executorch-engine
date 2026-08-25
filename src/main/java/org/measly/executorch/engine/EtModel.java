@@ -67,7 +67,7 @@ public class EtModel extends BaseModel {
         // calls Module::load_forward() unconditionally, so the XNNPACK setup cost lands in load,
         // not in the first forward.
         final long loadStartNanos = System.nanoTime();
-        long handle = EtNative.loadModule(modelFile.toString(), workspaceSharingMode);
+        long handle = EtNative.loadModule(modelFile.toString(), workspaceSharingMode, false);
         EtMethodMeta meta;
         try {
             meta = EtNative.methodMeta(handle);

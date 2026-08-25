@@ -11,7 +11,7 @@ class EtMethodMetaTest {
     @Test
     void readsAddModelMetadata() {
         TestSupport.assumeNativeAvailable();
-        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1);
+        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1, false);
         try {
             EtMethodMeta meta = EtNative.methodMeta(handle);
             assertEquals(2, meta.numInputs);
@@ -25,7 +25,7 @@ class EtMethodMetaTest {
     @Test
     void readsUnplannedAddModelMetadata() {
         TestSupport.assumeUnplannedModelAvailable();
-        long handle = EtNative.loadModule(TestSupport.addUnplannedPtePath(), -1);
+        long handle = EtNative.loadModule(TestSupport.addUnplannedPtePath(), -1, false);
         try {
             EtMethodMeta meta = EtNative.methodMeta(handle);
             assertEquals(2, meta.numInputs);
@@ -39,7 +39,7 @@ class EtMethodMetaTest {
     @Test
     void capturesPlannedArenaBytes() {
         TestSupport.assumeNativeAvailable();
-        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1);
+        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1, false);
         try {
             EtMethodMeta meta = EtNative.methodMeta(handle);
             assertTrue(

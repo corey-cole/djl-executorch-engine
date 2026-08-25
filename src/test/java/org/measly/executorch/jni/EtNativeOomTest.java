@@ -21,7 +21,7 @@ class EtNativeOomTest {
     @Test
     void oversizedOutputThrowsOutOfMemory() {
         TestSupport.assumeMedOutputModelAvailable();
-        long handle = EtNative.loadModule(TestSupport.medOutputPtePath(), -1);
+        long handle = EtNative.loadModule(TestSupport.medOutputPtePath(), -1, false);
         try {
             ByteBuffer input = ByteBuffer.allocateDirect(4).order(ByteOrder.nativeOrder());
             input.putFloat(0, 1f);

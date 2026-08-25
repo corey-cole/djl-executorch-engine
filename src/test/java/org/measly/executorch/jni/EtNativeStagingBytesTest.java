@@ -11,7 +11,7 @@ class EtNativeStagingBytesTest {
     @Test
     void allPlannedModelStagesNothing() {
         TestSupport.assumeNativeAvailable();
-        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1);
+        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1, false);
         try {
             // 0 is the correct answer for a memory-planned model, not a failed measurement.
             assertEquals(0L, EtNative.stagingBytes(handle));
@@ -23,7 +23,7 @@ class EtNativeStagingBytesTest {
     @Test
     void unplannedModelReportsSlotBytes() {
         TestSupport.assumeUnplannedModelAvailable();
-        long handle = EtNative.loadModule(TestSupport.addUnplannedPtePath(), -1);
+        long handle = EtNative.loadModule(TestSupport.addUnplannedPtePath(), -1, false);
         try {
             // Two f32 inputs, each slot padded and rounded to 64 bytes: 192 each, 384 total.
             assertEquals(384L, EtNative.stagingBytes(handle));
@@ -35,7 +35,7 @@ class EtNativeStagingBytesTest {
     @Test
     void stagingBytesIsStableAcrossMetadataQueries() {
         TestSupport.assumeUnplannedModelAvailable();
-        long handle = EtNative.loadModule(TestSupport.addUnplannedPtePath(), -1);
+        long handle = EtNative.loadModule(TestSupport.addUnplannedPtePath(), -1, false);
         try {
             long first = EtNative.stagingBytes(handle);
             EtNative.methodMeta(handle);
