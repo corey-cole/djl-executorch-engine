@@ -28,7 +28,7 @@ exists in both its non-delegated (`add_unplanned.pte`) and delegated (`clamp5.pt
 | W2 — make the copy observable | **complete** — `is_memory_planned()` plumbed through to Java and asserted (#20) |
 | W3 — correct the documented contract | **complete** — live surfaces corrected (`20768a0`), one residual noted in §3/W3 |
 | W7 fixture prerequisite | **complete** — `add_unplanned.pte` (`7eed3b8`) plus delegated `clamp5.pte`/`lin129.pte`/`lin129_planned.pte` (`export_w4_models.py`); leak harness wired with exact-count staging assertions |
-| W4 — over-read confirmation | **harness complete, result pending** — `native/harness/et_overread_harness.cpp` covers both configurations and builds in the QA tree, never CI; deliverable 3 (dated evidence) is unmet and §8's log is empty, so the *question* W4 asks is still open |
+| W4 — over-read confirmation | **routes A/B (config a) + sufficiency arm (config c) run 2026-08-25 against pin 1.4.1-3** — both borrowed-input routes fault (exit 139) raw and run clean (exit 0, `grow=0`) through `EtRuntime::forward`'s padded staging slot; see §8 for the evidence blocks. Kernel selection was not re-confirmed via gdb/perf this run (isa dump matches the 2026-08-05 v1.3.1 finding). Configuration (b), the arena-end question, was **not** run and remains open — it does not bear on the `unplanned`-path bug report this run was investigating. |
 | W7 — grow-only per-slot staging | **complete** — `native/core/staging.h` + `forward()` integration, in-repo coverage (§3/W7) |
 | W8 — USDT probes and leak-test coverage | **complete** — `native/core/et_probes.h`, exact-count assertions in `et_leak_harness` + `build_qa.sh` |
 | W5 — establish the cost | **complete — run 2026-08-06, results in §8/W5.** Input A/B: no measurable difference (12.7 vs 13.0 ms/op, CIs overlap). Output: the W6 direct path is 24–87% *slower* than heap at ≥256 KB and OOM-kills without an external GC trigger |
@@ -1316,7 +1316,67 @@ test report. One block per executed route; a block without a
 **selected kernel** line is not a usable result.
 
 ```
-(empty — W4 has not been run)
+date:            2026-08-25
+configuration:   (a) borrowed input
+route:           A (forced SSE, qemu)
+environment:     qemu-x86_64 -cpu Nehalem (host: x86_64, engine-build image, ET_RUNTIME_VERSION 1.4.1-3)
+model:           native/spike/clamp5.pte, N=5 (input0_nbytes=20), alloc_graph_input=False
+selected kernel: not directly observed this run (no gdb/perf pass); isa dump matches the
+                 2026-08-05 SSE2 finding (sse3=1 sse4_1=1 avx=0 fma3=0 avx2=0 avx512f=0,
+                 uarch_id=0x00100205) — consistent with xnn_f32_vclamp_ukernel__sse2_u8, not reconfirmed
+uarch detected:  uarch_id=0x00100205 (printed by harness; not independently verified via gdb this run)
+arena placement: n/a (configuration a)
+outcome:         SIGSEGV on guard page (exit 139)
+reading:         positive — reproduces the 2026-08-05 v1.3.1 finding on the 1.4.1-3 pin
+upstream:        n/a (configuration a; see W4's outward-facing track for config b)
+pairs with:      configuration (c) run below, same fixture/uarch
+
+date:            2026-08-25
+configuration:   (a) borrowed input
+route:           B (Zen uarch, qemu)
+environment:     qemu-x86_64 -cpu EPYC (host: x86_64, engine-build image, ET_RUNTIME_VERSION 1.4.1-3)
+model:           native/spike/lin129.pte, K=129 (input0_nbytes=516), alloc_graph_input=False
+selected kernel: not directly observed this run (no gdb/perf pass); isa dump matches the
+                 2026-08-05 Zen1 finding (sse3=1 sse4_1=1 avx=1 fma3=1 avx2=1 avx512f=0,
+                 uarch_id=0x00200109 = zen, not zen2) — consistent with
+                 xnn_f32_gemm_minmax_ukernel_1x16s4__fma3_broadcast, not reconfirmed
+uarch detected:  uarch_id=0x00200109 (printed by harness; not independently verified via gdb this run)
+arena placement: n/a (configuration a)
+outcome:         SIGSEGV on guard page (exit 139)
+reading:         positive — reproduces the 2026-08-05 v1.3.1 finding on the 1.4.1-3 pin
+upstream:        n/a (configuration a; see W4's outward-facing track for config b)
+pairs with:      configuration (c) run below, same fixture/uarch
+
+date:            2026-08-25
+configuration:   (c) staged, engine path
+route:           A (forced SSE, qemu)
+environment:     qemu-x86_64 -cpu Nehalem, et_leak_harness native/spike/clamp5.pte 1 2
+model:           native/spike/clamp5.pte, N=5, alloc_graph_input=False
+selected kernel: same as the paired (a) route above (not independently reconfirmed)
+uarch detected:  uarch_id=0x00100205 (same run, same binary build)
+arena placement: n/a
+outcome:         clean run (exit 0); harness reports grow=0 staged_input=2 total_input=2
+reading:         positive — kStagingPadding=128 absorbs the over-read that faults raw, same
+                 uarch and fixture, on the 1.4.1-3 pin
+upstream:        n/a
+pairs with:      the Route A (a) block above — faults raw / clean staged, identical hardware and fixture
+
+date:            2026-08-25
+configuration:   (c) staged, engine path
+route:           B (Zen uarch, qemu)
+environment:     qemu-x86_64 -cpu EPYC, et_leak_harness native/spike/lin129.pte 1 2
+model:           native/spike/lin129.pte, K=129, alloc_graph_input=False
+selected kernel: same as the paired (a) route above (not independently reconfirmed)
+uarch detected:  uarch_id=0x00200109 (same run, same binary build)
+arena placement: n/a
+outcome:         clean run (exit 0); harness reports grow=0 staged_input=2 total_input=2
+reading:         positive — kStagingPadding=128 absorbs the over-read that faults raw, same
+                 uarch and fixture, on the 1.4.1-3 pin
+upstream:        n/a
+pairs with:      the Route B (a) block above — faults raw / clean staged, identical hardware and fixture
+
+Configuration (b) (arena end) was not run in this session — only the borrowed-input routes
+that bear on the `unplanned` bug report were exercised. That question remains open.
 
 Template:
   date:            YYYY-MM-DD
