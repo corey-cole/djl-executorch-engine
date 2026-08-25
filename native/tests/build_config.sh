@@ -6,7 +6,9 @@ cd "${REPO_ROOT}"
 fail() { echo "FAIL: $1"; exit 1; }
 
 out="$(PRINT_BUILD_CONFIG=1 bash native/build.sh)"
-grep -q 'ET_RUNTIME_VARIANT=logging' <<<"${out}" || fail "default variant not logging"
+# The shipped runtime variant is an engine-side decision keyed on the platform, not a mirror of what
+# the pin publishes. This test host is linux-x86_64, the one platform provisioned for profiling.
+grep -q 'ET_RUNTIME_VARIANT=devtools' <<<"${out}" || fail "linux-x86_64 must default to devtools"
 grep -q 'STAGE_SO=1'                  <<<"${out}" || fail "default STAGE_SO not 1"
 grep -q 'NATIVE_BUILD_DIR=native/build\b' <<<"${out}" || fail "default NATIVE_BUILD_DIR changed"
 
@@ -16,6 +18,16 @@ grep -q 'ET_RUNTIME_VARIANT=bare'  <<<"${out}" || fail "variant override ignored
 grep -q 'STAGE_SO=0'               <<<"${out}" || fail "STAGE_SO override ignored"
 grep -q 'NATIVE_BUILD_DIR=/tmp/nb\b' <<<"${out}" || fail "NATIVE_BUILD_DIR override ignored"
 grep -q 'ET_INSTALL=/tmp/xi\b'     <<<"${out}" || fail "ET_INSTALL passthrough missing"
+# Emptying the list is how a platform leaves it, so the list is what decides -- not a hardcoded
+# platform name buried in the variant default. Host-independent: it removes the host's own entry
+# rather than depending on which platform this runs on.
+out="$(ET_DEVTOOLS_SUPPORTED_PLATFORMS= PRINT_BUILD_CONFIG=1 bash native/build.sh)"
+grep -q 'ET_RUNTIME_VARIANT=logging' <<<"${out}" \
+  || fail "a platform absent from ET_DEVTOOLS_SUPPORTED_PLATFORMS must fall back to logging"
+
+# An explicit variant still wins over the list, so benchmarking is unaffected.
+out="$(ET_RUNTIME_VARIANT=bare PRINT_BUILD_CONFIG=1 bash native/build.sh)"
+grep -q 'ET_RUNTIME_VARIANT=bare' <<<"${out}" || fail "explicit variant must beat the platform list"
 
 # Stage-A must be fully gone from build.sh.
 grep -qE 'SKIP_ET_BUILD|EXECUTORCH_ENABLE_LOGGING|torch==2\.12|avx512vnni' native/build.sh \

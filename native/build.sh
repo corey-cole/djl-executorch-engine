@@ -30,6 +30,11 @@ PIN="native/cmake/EtRuntimePin.cmake"
 # test proves it -- adding it is the LAST step of supporting a platform, never the first.
 # linux-aarch64 is absent because upstream publishes no bundle for it, not because of anything here.
 ET_OPENVINO_SUPPORTED_PLATFORMS="${ET_OPENVINO_SUPPORTED_PLATFORMS:-linux-x86_64 windows-x86_64}"
+# Platforms whose shipped artifact links a devtools runtime, enabling the per-model profiling
+# option. An engine-side decision, not a mirror of the pin: the pin publishes devtools for every
+# platform as of 1.4.1-3, and a platform joins this list once a test proves profiling works there.
+# The cost of carrying it is +138 KB of .so and steady-state latency bounded under 0.35%.
+ET_DEVTOOLS_SUPPORTED_PLATFORMS="${ET_DEVTOOLS_SUPPORTED_PLATFORMS-linux-x86_64}"
 
 # Sets OV_DECISION (stage | unsupported | unpublished) and, when staging, OV_URL / OV_SHA / OV_VER.
 #
@@ -84,7 +89,16 @@ fi
 #     resolves it (FetchContent the pinned tarball, or -DET_INSTALL escape hatch). The runtime
 #     recipe now lives in measly-java-learning/executorch-runtime-dist; see
 #     docs/executorch-build-notes.md for the engine-side reasoning. ---
-ET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT:-logging}"
+# The shipped runtime variant is an engine-side decision keyed on the platform identity
+# (OUT_PLATFORM), not a mirror of what the pin publishes per row. A platform joins
+# ET_DEVTOOLS_SUPPORTED_PLATFORMS once profiling is proven there; an explicit ET_RUNTIME_VARIANT
+# still beats the list, so benchmarking (bare) and the negative QA arm (logging) are unaffected.
+if [ -z "${ET_RUNTIME_VARIANT:-}" ]; then
+  case " ${ET_DEVTOOLS_SUPPORTED_PLATFORMS} " in
+    *" ${OUT_PLATFORM} "*) ET_RUNTIME_VARIANT=devtools ;;
+    *)                      ET_RUNTIME_VARIANT=logging ;;
+  esac
+fi
 STAGE_SO="${STAGE_SO:-1}"
 NATIVE_BUILD_DIR="${NATIVE_BUILD_DIR:-native/build}"
 

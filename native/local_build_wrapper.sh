@@ -29,12 +29,13 @@ TARGET_SCRIPT="${1:-native/build.sh}"
 ET_BUILD_IMAGE="${ET_BUILD_IMAGE:-$(cat "${REPO_ROOT}/.engine-build-image")}"
 test -n "${ET_BUILD_IMAGE}" || { echo "empty .engine-build-image" >&2; exit 1; }
 
-# Override the runtime variant with ET_RUNTIME_VARIANT (default logging). ITERS/WARMUP forward to
-# the bench/QA scripts when set (harmless for build.sh, which ignores them).
+# Forward ET_RUNTIME_VARIANT only when the caller set it; otherwise the variant is resolved inside
+# the container from the platform list (devtools on linux-x86_64, logging elsewhere). ITERS/WARMUP
+# forward to the bench/QA scripts when set (harmless for build.sh, which ignores them).
 docker run --rm \
     -e HOST_UID="$(id -u)" \
     -e HOST_GID="$(id -g)" \
-    -e ET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT:-logging}" \
+    -e ET_RUNTIME_VARIANT \
     -e ITERS \
     -e WARMUP \
     -e MODEL \
