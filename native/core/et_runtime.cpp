@@ -31,6 +31,9 @@
 #include <executorch/runtime/executor/method_meta.h>
 #ifdef ET_HAVE_DEVTOOLS
 #include <executorch/devtools/etdump/etdump_flatcc.h>
+// Declares flatcc_builder_aligned_free, the deallocator paired with the allocator that produced
+// the buffer get_etdump_data() hands back. Carries its own extern "C" guard.
+#include <flatcc/flatcc_builder.h>
 #endif
 
 #include "dtype_size.h"
@@ -422,14 +425,22 @@ std::vector<uint8_t> EtRuntime::etDump() {
   executorch::etdump::ETDumpResult result = state_->tracer->get_etdump_data();
   state_->dumpFinalized = true;
   state_->lastDump.clear();
-  if (result.buf != nullptr && result.size > 0) {
-    const auto* p = static_cast<const uint8_t*>(result.buf);
-    state_->lastDump.assign(p, p + result.size);
-    // Caller-owned: get_etdump_data() finalizes into a fresh allocation. free() is the idiom
-    // upstream's own consumer uses (examples/devtools/example_runner) and is correct for flatcc's
-    // aligned allocator on POSIX. A Windows devtools build must use flatcc_builder_aligned_free
-    // instead, since flatcc allocates with _aligned_malloc there.
-    std::free(result.buf);
+  if (result.buf != nullptr) {
+    if (result.size > 0) {
+      const auto* p = static_cast<const uint8_t*>(result.buf);
+      state_->lastDump.assign(p, p + result.size);
+    }
+    // Caller-owned: get_etdump_data() finalizes into a fresh ALIGNED allocation, so it must be
+    // released by flatcc's matching deallocator rather than by free(). flatcc says so itself: its
+    // aligned_free is a macro whose expansion depends on how the library was compiled, and
+    // flatcc_builder_aligned_free is the exported function that always resolves to the right one.
+    // On glibc both are free(), which is why upstream's own consumer
+    // (examples/devtools/example_runner) gets away with free() and why this is a no-op on Linux.
+    // Under MSVC flatcc allocates with _aligned_malloc, where free() is undefined behaviour.
+    //
+    // Freed whenever buf is non-null, not only when size > 0: a zero-length finalized buffer is
+    // still an allocation, and skipping it would leak the whole dump's arena.
+    flatcc_builder_aligned_free(result.buf);
   }
   return state_->lastDump;
 #else
