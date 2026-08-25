@@ -3,7 +3,7 @@
 **Date:** 2026-08-24
 **Status:** approved design
 **Follows:** the v1.4.1-2 pin bump and the OpenVINO Windows bundle, in that order
-**Blocked on:** an `executorch-runtime-dist` release that installs the devtools headers (Phase 0)
+**Phase 0 status:** landed in `executorch-runtime-dist` `v1.4.1-3` (2026-08-25), all criteria verified
 
 Makes ExecuTorch's event tracer a per-model, load-time opt-in of this engine. A profiled model
 accumulates an ETDump across its forwards; the caller pulls the bytes and analyzes them offline with
@@ -42,7 +42,22 @@ build-flag delta at all and prints `warm_mean_ms=0.001` for every variant.
 **Conclusion: one artifact.** 138 KB and a bounded-under-0.35% steady-state cost do not justify a
 second build-matrix row, a second staging path, and a `LibUtils` selection rule.
 
-## 2. Phase 0 — the runtime distribution prerequisite
+## 2. Phase 0 — the runtime distribution prerequisite (landed)
+
+**Delivered in `v1.4.1-3`.** All five criteria below were verified against the published assets:
+devtools tarballs carry `include/executorch/devtools/etdump/etdump_flatcc.h` and both `data_sinks/`
+headers, plus the whole `include/flatcc/` tree; `logging` contains none of it (zero matches for
+devtools, flatcc, or `libetdump`); BUILDINFO carries `event_tracer=on` for devtools and `off` for
+logging. Criterion 2 was verified by compiling and linking a translation unit that constructs an
+`ETDumpGen` and calls `get_etdump_data()` against the shipped archives — it runs and reports size 0,
+the correct `Init`-state answer.
+
+Windows devtools rows shipped too, ahead of the request: the release publishes
+`devtools_windows-x86_64` and `devtools_windows-x86_64-static`. That changes §5's gate for Windows
+from a dist dependency to an engine-side list edit, and does not change the staging order.
+
+The original criteria are kept below as the record of what was asked and verified.
+
 
 The devtools tarball ships `lib/libetdump.a` and `lib/libflatccrt.a`, and
 `lib/cmake/ExecuTorch/ExecuTorchTargets.cmake` exports working `etdump` and `flatccrt` imported
@@ -95,6 +110,15 @@ tests.
 `INTERFACE_LINK_LIBRARIES`. This is the auto-detect shape already used for `openvino_backend` and
 `ETNPExtras`: the build adapts to what the pinned tarball provides, so a `logging` runtime and a
 `devtools` runtime both configure and compile with no flag to pass.
+
+**Linking `etdump` does not carry the compile definitions its own headers need.** The exported
+target's interface is `flatccrt;$<LINK_ONLY:executorch>`, and `$<LINK_ONLY:>` suppresses usage
+requirements, so `C10_USING_CUSTOM_GENERATED_MACROS` — which other ExecuTorch targets do carry —
+never propagates through `etdump`. Without it, `etdump_flatcc.h` reaches
+`torch/headeronly/macros/Macros.h`, which includes a `cmake_macros.h` that no tarball installs, and
+the compile fails. The shim already links the main `executorch` targets, so the definition arrives
+in practice; the requirement is simply that it keep doing so. Do not "simplify" the link line to
+`etdump` alone.
 
 **`TARGET etdump` alone is not a sufficient capability signal, and the configure must not trust it
 on its own.** At pin `1.4.1-2` it discriminates correctly — the `logging` tarball ships no
@@ -243,13 +267,15 @@ defaults `ET_RUNTIME_VARIANT` to `logging` for every platform and no workflow ov
 becomes a per-platform list living beside the OpenVINO list, with `ET_RUNTIME_VARIANT` still
 overriding for benchmarking.
 
-The pin publishes `devtools` for `linux-x86_64` and `linux-aarch64`, and not for Windows.
+As of pin `1.4.1-3` the pin publishes `devtools` for every platform the engine ships:
+`linux-x86_64`, `linux-aarch64`, `windows-x86_64`, and `windows-x86_64-static`. Nothing is blocked
+on the distribution any more; what remains is engine-side provisioning and proof.
 
 | platform | shipped variant | profiling | gate to change it |
 |---|---|---|---|
 | `linux-x86_64` | `devtools` | yes | — proven by this spec |
 | `linux-aarch64` | `logging` initially | not yet | verify tarball parity (below), then flip the list |
-| `windows-x86_64` | `logging` | not yet | dist publishes devtools rows for both CRT rows, then flip the list |
+| `windows-x86_64` | `logging` | not yet | flip the list and add a test — both devtools CRT rows ship as of `v1.4.1-3` |
 
 Nothing here says a platform cannot profile. The contract is the `devtoolsAvailable()` query, never
 the platform name, so a platform joining is a list edit plus a test — no engine redesign, no API
