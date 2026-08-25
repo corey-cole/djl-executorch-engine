@@ -531,3 +531,61 @@ TEST_CASE("devtools: availability matches what this build linked") {
   REQUIRE_FALSE(measly::et::devtoolsAvailable());
 #endif
 }
+
+#ifdef ET_HAVE_DEVTOOLS
+TEST_CASE("etdump: an untraced runtime yields nothing") {
+  EtRuntime rt(ADD_PTE_PATH);
+  REQUIRE(rt.etDump().empty());
+}
+
+TEST_CASE("etdump: tracing with no forward yet yields nothing") {
+  EtRuntime rt(ADD_PTE_PATH, -1, /*traceEvents=*/true);
+  REQUIRE(rt.etDump().empty());
+}
+
+TEST_CASE("etdump: a forward produces a dump carrying the ED00 identifier") {
+  EtRuntime rt(ADD_PTE_PATH, -1, /*traceEvents=*/true);
+  float a = 2.0f, b = 3.0f;
+  std::vector<InputDesc> in{{&a, {1}, 6}, {&b, {1}, 6}};
+  rt.forward(in);
+  auto dump = rt.etDump();
+  REQUIRE(dump.size() > 8);
+  // Size-prefixed flatbuffer (start_as_root_with_size): 4-byte size, 4-byte root offset, then the
+  // file identifier. Searching the first 16 bytes keeps the test honest about the exact layout.
+  std::string head(reinterpret_cast<const char*>(dump.data()),
+                   std::min<size_t>(dump.size(), 16));
+  REQUIRE(head.find("ED00") != std::string::npos);
+}
+
+TEST_CASE("etdump: pulling twice without a forward returns the same bytes, not corruption") {
+  EtRuntime rt(ADD_PTE_PATH, -1, /*traceEvents=*/true);
+  float a = 2.0f, b = 3.0f;
+  std::vector<InputDesc> in{{&a, {1}, 6}, {&b, {1}, 6}};
+  rt.forward(in);
+  auto first = rt.etDump();
+  auto second = rt.etDump();
+  REQUIRE_FALSE(first.empty());
+  REQUIRE(first == second);
+}
+
+TEST_CASE("etdump: a forward after a pull starts a fresh dump, not a cumulative one") {
+  EtRuntime rt(ADD_PTE_PATH, -1, /*traceEvents=*/true);
+  float a = 2.0f, b = 3.0f;
+  std::vector<InputDesc> in{{&a, {1}, 6}, {&b, {1}, 6}};
+  for (int i = 0; i < 4; ++i) rt.forward(in);
+  auto four = rt.etDump();
+  rt.forward(in);
+  auto one = rt.etDump();
+  REQUIRE_FALSE(four.empty());
+  REQUIRE_FALSE(one.empty());
+  // Four Execute blocks against one. Upstream resets the generator on the first event block after
+  // a finalize, so the second dump must be the smaller of the two.
+  REQUIRE(one.size() < four.size());
+}
+#endif  // ET_HAVE_DEVTOOLS
+
+TEST_CASE("etdump: requesting tracing without devtools fails the load") {
+#ifndef ET_HAVE_DEVTOOLS
+  REQUIRE_THROWS_AS(EtRuntime(ADD_PTE_PATH, -1, /*traceEvents=*/true), std::runtime_error);
+#endif
+}

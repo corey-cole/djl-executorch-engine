@@ -82,7 +82,13 @@ class EtRuntime {
   //
   // Any other value is passed through to ExecuTorch, which rejects it at delegate init and fails
   // the load. et_runtime_test.cpp depends on that to prove the spec reaches the backend.
-  explicit EtRuntime(const std::string& ptePath, int workspaceSharingMode = -1);
+  //
+  // traceEvents attaches an ExecuTorch ETDump event tracer to this model. Costs are real and the
+  // buffer is unbounded until pulled (see etDump), so this is a diagnostic, not a production mode.
+  // Throws when the linked runtime has no event tracer -- profiling that silently records nothing
+  // is worse than a failed load.
+  explicit EtRuntime(const std::string& ptePath, int workspaceSharingMode = -1,
+                     bool traceEvents = false);
   ~EtRuntime();
   EtRuntime(const EtRuntime&) = delete;
   EtRuntime& operator=(const EtRuntime&) = delete;
@@ -95,6 +101,18 @@ class EtRuntime {
   size_t stagingBytes() const;
 
   ForwardResult forward(std::span<const InputDesc> inputs);
+
+  // Finalized ETDump covering every forward since the last call, or empty when not tracing and
+  // when no forward has run yet. Each forward appends one "Execute" block; the runtime resets the
+  // generator on the first block after a finalize, so pulling IS the drain.
+  //
+  // Unlike OutputView, the returned bytes are owned by the caller and outlive this runtime.
+  //
+  // Calling twice with no forward in between returns a copy of the same bytes: upstream's
+  // get_etdump_data() matches none of its guard branches in the finalized state and would run the
+  // builder's end sequence a second time, so the cached copy is a correctness guard, not an
+  // optimization.
+  std::vector<uint8_t> etDump();
 
  private:
   std::unique_ptr<RuntimeState> state_;
