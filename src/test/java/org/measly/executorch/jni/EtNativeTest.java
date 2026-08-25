@@ -2,6 +2,7 @@ package org.measly.executorch.jni;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.measly.executorch.TestSupport;
 import java.nio.ByteBuffer;
@@ -26,6 +27,29 @@ class EtNativeTest {
             assertArrayEquals(new long[] {1}, out[0].shape);
             assertEquals(6, out[0].scalarType);
             assertEquals(5f, out[0].data.order(ByteOrder.nativeOrder()).getFloat(0), 1e-6);
+        } finally {
+            EtNative.destroy(handle);
+        }
+    }
+
+    @Test
+    void twoArgLoadModuleLoadsWithProfilingOff() {
+        TestSupport.assumeNativeAvailable();
+        // The two-argument form exists so that adding the profiling parameter removed no signature.
+        // Its contract is that it loads a working model with the tracer OFF, so this asserts both:
+        // the forward still computes, and the model produced no dump.
+        assumeTrue(
+                EtNative.devtoolsAvailable(),
+                "an unprofiled model dumps nothing either way where devtools is absent;"
+                        + " the empty dump only discriminates where the tracer could have recorded");
+        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1);
+        try {
+            EtTensor[] out = EtNative.forward(
+                    handle, new EtTensor[] {floatScalar(2f), floatScalar(3f)});
+            assertEquals(5f, out[0].data.order(ByteOrder.nativeOrder()).getFloat(0), 1e-6);
+            // Had the overload passed profiling=true, this forward would have recorded an
+            // Execute block and the dump would be non-empty.
+            assertEquals(0, EtNative.etDump(handle).length, "the overload must not attach a tracer");
         } finally {
             EtNative.destroy(handle);
         }

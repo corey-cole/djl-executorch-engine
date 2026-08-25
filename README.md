@@ -238,6 +238,21 @@ distinction matters most for `stagingBytes`, which is legitimately `0` whenever 
 memory-planned — the ExecuTorch export default, and true of very nearly every `.pte` in practice.
 Unavailable values are excluded from the rollup totals rather than summed as negatives.
 
+## API scope
+
+Two packages are the supported API, and changes to them follow semantic versioning:
+
+- **`org.measly.executorch.engine`** — `EtEngine`, `EtModel`, the stats types (`EtEngineStats`,
+  `EtStatsSnapshot`, `EtModelStats`, `EtEngineStatsMXBean`), `EtDataTypes`, `OpenVinoRuntime`, and
+  the DJL SPI types the framework instantiates on your behalf.
+- **`org.measly.executorch.translate`** — the `Translator` support types.
+
+**`org.measly.executorch.jni` is internal.** `EtNative`, `EtTensor`, and `EtMethodMeta` are `public`
+because JNI linkage and cross-package access inside the engine require it, not because they are
+offered to callers. Their signatures track the native shim — whose shape the ExecuTorch runtime
+decides, not compatibility — so they may change in any release, including a patch release, with no
+deprecation cycle. Everything reachable there is reachable through `EtModel` and DJL's `Criteria`.
+
 ## Limitations
 
 - **One `Model`/`Predictor` per thread.** `EtSymbolBlock.forward()` is not thread-safe on the same
