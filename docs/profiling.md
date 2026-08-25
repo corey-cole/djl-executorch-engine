@@ -63,11 +63,17 @@ if (!EtEngine.devtoolsAvailable()) {
 }
 ```
 
-Today `linux-x86_64` ships a `devtools` runtime and answers `true`; `linux-aarch64` and
-`windows-x86_64` ship the `logging` runtime and answer `false`. Those platforms are **not
-provisioned yet** — not "unsupported": the pin publishes devtools rows for every platform the engine
-ships, so a platform joins by an engine-side list edit plus a test proving profiling works there,
-with no engine redesign and no API change.
+Today `linux-x86_64` ships a `devtools` runtime and answers `true`. `linux-aarch64` is **ready to
+be provisioned**: its devtools tarball ships the same layout as the x86_64 one —
+`lib/cmake/ETNPExtras/`, `lib/libetnp_ops_lstm.a`, and `lib/libopenvino_backend.a` (parity verified
+at pin v1.4.1-3) — so it joins by adding `linux-aarch64` to `ET_DEVTOOLS_SUPPORTED_PLATFORMS` plus a
+test run; the 2026-08-25 radxa run on the logging runtime, where `ProfilingIT`'s devtools-absent arm
+executed and passed, is that test baseline. `windows-x86_64` was verified on the 2026-08-25 winbox
+run: the MSVC build and the full JVM suite pass on the logging variant, `ProfilingIT`'s
+devtools-absent arm executes and passes there, and the static-CRT gate holds. The pin publishes
+Windows devtools CRT rows, so provisioning is the same list edit plus a test — but a Windows
+devtools build must use `flatcc_builder_aligned_free` for the ETDump buffer: the current `etDump()`
+uses `free()`, which is correct for POSIX only (the code comment already records this).
 
 Requesting profiling where the capability is absent fails the load with a message identifying the
 platform's runtime as lacking the event tracer; a model loaded without the option returns an empty
