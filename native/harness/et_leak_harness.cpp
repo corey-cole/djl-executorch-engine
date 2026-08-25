@@ -54,7 +54,16 @@ int main(int argc, char** argv) {
 
   MethodMeta meta;  // filled by the first load; identical across loads
   for (int it = 0; it < outerIters; ++it) {
-    EtRuntime rt(pte);  // exercises load/destroy balance across iterations
+    // Alternate so one run covers both the traced and untraced load/destroy paths. The pull is
+    // what this arm exists for: get_etdump_data() returns a caller-owned buffer that etDump()
+    // copies and frees, and a mistake there leaks the whole dump per iteration.
+    const bool trace =
+#ifdef ET_HAVE_DEVTOOLS
+        (it % 2) == 1;
+#else
+        false;  // non-devtools builds stay a pure untraced run; traceEvents=true throws there
+#endif
+    EtRuntime rt(pte, -1, trace);
     meta = rt.methodMeta();
 
     std::vector<std::vector<uint8_t>> buffers(meta.numInputs);
@@ -89,6 +98,18 @@ int main(int argc, char** argv) {
         volatile const unsigned char first =
             *static_cast<const unsigned char*>(outs[0].data);  // touch the view
         (void)first;
+      }
+    }
+    if (trace) {
+      std::vector<uint8_t> dump = rt.etDump();
+      if (dump.empty()) {
+        std::fprintf(stderr, "et_leak: traced run produced an empty dump\n");
+        return 3;
+      }
+      // Pull again with no intervening forward: exercises the cached-copy guard under LSan.
+      if (rt.etDump() != dump) {
+        std::fprintf(stderr, "et_leak: second pull disagreed with the first\n");
+        return 4;
       }
     }
   }
