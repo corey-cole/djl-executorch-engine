@@ -29,6 +29,9 @@
 #include <executorch/runtime/backend/interface.h>
 #include <executorch/runtime/backend/options.h>
 #include <executorch/runtime/executor/method_meta.h>
+#ifdef ET_HAVE_DEVTOOLS
+#include <executorch/devtools/etdump/etdump_flatcc.h>
+#endif
 
 #include "dtype_size.h"
 #include "et_probes.h"
@@ -47,7 +50,21 @@ struct RuntimeState {
   Module module;
   MethodMeta meta;
   std::vector<std::unique_ptr<StagingSlot>> staging;
-  explicit RuntimeState(const std::string& path) : module(path) {}
+#ifdef ET_HAVE_DEVTOOLS
+  // Non-owning: the Module owns the tracer, because its constructor takes the unique_ptr. Null
+  // when this runtime is not tracing.
+  executorch::etdump::ETDumpGen* tracer = nullptr;
+#endif
+  // Set by etDump(), cleared by forward(). While set, the cached copy is returned instead of
+  // finalizing an already-finalized builder.
+  bool dumpFinalized = false;
+  // True once a forward has completed. Until then etDump() is empty even when tracing: the only
+  // data the tracer holds is the block load_forward() records, which is not a forward's trace.
+  bool everForwarded = false;
+  std::vector<uint8_t> lastDump;
+
+  RuntimeState(const std::string& path, std::unique_ptr<executorch::runtime::EventTracer> t)
+      : module(path, Module::LoadMode::File, std::move(t)) {}
 };
 
 struct ForwardState {
@@ -112,10 +129,29 @@ bool isBackendAvailable(const char* name) {
   return false;
 }
 
+// Builds the tracer the Module will own, or nullptr. Kept out of the ctor body so the throw for an
+// unsupported runtime happens before any Module exists.
+std::unique_ptr<executorch::runtime::EventTracer> makeTracer(bool traceEvents) {
+  if (!traceEvents) return nullptr;
+#ifdef ET_HAVE_DEVTOOLS
+  return std::make_unique<executorch::etdump::ETDumpGen>();
+#else
+  throw std::runtime_error(
+      "EtRuntime: profiling requested but this build links a runtime with no event tracer "
+      "(devtools is not provisioned for this platform)");
+#endif
+}
+
 }  // namespace
 
-EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode)
-    : state_(std::make_unique<RuntimeState>(ptePath)) {
+EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode, bool traceEvents)
+    : state_(std::make_unique<RuntimeState>(ptePath, makeTracer(traceEvents))) {
+#ifdef ET_HAVE_DEVTOOLS
+  if (traceEvents) {
+    state_->tracer =
+        static_cast<executorch::etdump::ETDumpGen*>(state_->module.event_tracer());
+  }
+#endif
   // Set even when this ctor later throws: the pool is captured by XNNPACK at runtime creation,
   // so "has ever been constructed" is the safe boundary for the intra-op reset guard.
   g_etRuntimeConstructed.store(true);
@@ -343,6 +379,11 @@ ForwardResult EtRuntime::forward(std::span<const InputDesc> inputs) {
   if (!result.ok()) {
     throw std::runtime_error("EtRuntime: forward() failed");
   }
+  // A forward that ran re-opens the dump: upstream resets the generator on the first event block
+  // after a finalize, so the cached copy is stale from here on. A forward that threw leaves the
+  // cache intact, so etDump() keeps returning the last completed dump.
+  state_->dumpFinalized = false;
+  state_->everForwarded = true;
 
   auto fs = std::make_unique<ForwardState>();
   fs->outputs = std::move(*result);
@@ -371,6 +412,29 @@ ForwardResult& ForwardResult::operator=(ForwardResult&&) noexcept = default;
 
 std::span<const OutputView> ForwardResult::outputs() const {
   return {state_->views.data(), state_->views.size()};
+}
+
+std::vector<uint8_t> EtRuntime::etDump() {
+#ifdef ET_HAVE_DEVTOOLS
+  if (state_->tracer == nullptr) return {};
+  if (!state_->everForwarded) return {};
+  if (state_->dumpFinalized) return state_->lastDump;
+  executorch::etdump::ETDumpResult result = state_->tracer->get_etdump_data();
+  state_->dumpFinalized = true;
+  state_->lastDump.clear();
+  if (result.buf != nullptr && result.size > 0) {
+    const auto* p = static_cast<const uint8_t*>(result.buf);
+    state_->lastDump.assign(p, p + result.size);
+    // Caller-owned: get_etdump_data() finalizes into a fresh allocation. free() is the idiom
+    // upstream's own consumer uses (examples/devtools/example_runner) and is correct for flatcc's
+    // aligned allocator on POSIX. A Windows devtools build must use flatcc_builder_aligned_free
+    // instead, since flatcc allocates with _aligned_malloc there.
+    std::free(result.buf);
+  }
+  return state_->lastDump;
+#else
+  return {};
+#endif
 }
 
 uint32_t setIntraOpThreads(uint32_t n) {
@@ -419,6 +483,14 @@ int64_t xnnpackWorkspaceBytes() {
 
 bool isBackendRegistered(const std::string& backend) {
   return isBackendAvailable(backend.c_str());
+}
+
+bool devtoolsAvailable() {
+#ifdef ET_HAVE_DEVTOOLS
+  return true;
+#else
+  return false;
+#endif
 }
 
 bool pteUsesBackend(const std::string& ptePath, const std::string& backend) {

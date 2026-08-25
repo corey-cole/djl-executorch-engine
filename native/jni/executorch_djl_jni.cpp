@@ -185,15 +185,16 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
 // something enforced.
 extern "C" JNIEXPORT jlong JNICALL
 Java_org_measly_executorch_jni_EtNative_loadModule(
-    JNIEnv* env, jclass, jstring jpath, jint jworkspaceSharingMode) {
-  const char* path = env->GetStringUTFChars(jpath, nullptr);
+    JNIEnv* env, jclass, jstring ptePath, jint workspaceSharingMode, jboolean profiling) {
+  const char* path = env->GetStringUTFChars(ptePath, nullptr);
   std::string p(path);
-  env->ReleaseStringUTFChars(jpath, path);
+  env->ReleaseStringUTFChars(ptePath, path);
   try {
     // No range check here: the Java layer emits only -1/0/1/2, and any other value is deliberately
     // passed through so ExecuTorch rejects it at delegate init. et_runtime_test.cpp relies on that
     // to prove the runtime spec reaches the XNNPACK backend.
-    return reinterpret_cast<jlong>(new EtRuntime(p, static_cast<int>(jworkspaceSharingMode)));
+    return reinterpret_cast<jlong>(new EtRuntime(
+        p, static_cast<int>(workspaceSharingMode), profiling == JNI_TRUE));
   } catch (const std::exception& e) {
     throwJava(env, "EtRuntime load failed", &e);
     return 0;
@@ -408,6 +409,41 @@ Java_org_measly_executorch_jni_EtNative_backendRegistered(JNIEnv* env, jclass, j
   std::string b(name);
   env->ReleaseStringUTFChars(backend, name);
   return measly::et::isBackendRegistered(b) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_org_measly_executorch_jni_EtNative_etDump(JNIEnv* env, jclass, jlong handle) {
+  if (handle == 0) {
+    throwIllegalState(env, "etDump() on a closed ExecuTorch model (native handle is 0)");
+    return nullptr;
+  }
+  auto* rt = reinterpret_cast<EtRuntime*>(handle);
+  std::vector<uint8_t> dump;
+  try {
+    dump = rt->etDump();
+  } catch (const std::exception& e) {
+    throwJava(env, "etDump failed", &e);
+    return nullptr;
+  }
+  // The dump is only pulled and reset on request, so it can in theory outgrow the jbyteArray
+  // limit; reject it with the same guard forward() uses for outputs rather than truncating.
+  if (measly::et::exceedsJniByteArrayLimit(dump.size())) {
+    throwJava(env, "ETDump exceeds the 2GB JNI array limit", nullptr);
+    return nullptr;
+  }
+  // Empty array, never null: an unprofiled model has no dump, which is an answer, not an error.
+  jbyteArray out = env->NewByteArray(static_cast<jsize>(dump.size()));
+  if (out == nullptr) return nullptr;  // OOM already pending
+  if (!dump.empty()) {
+    env->SetByteArrayRegion(out, 0, static_cast<jsize>(dump.size()),
+                            reinterpret_cast<const jbyte*>(dump.data()));
+  }
+  return out;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_org_measly_executorch_jni_EtNative_devtoolsAvailable(JNIEnv*, jclass) {
+  return measly::et::devtoolsAvailable() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

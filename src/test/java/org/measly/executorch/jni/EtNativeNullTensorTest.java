@@ -14,7 +14,7 @@ class EtNativeNullTensorTest {
     @Test
     void forwardWithNullElementThrows() {
         TestSupport.assumeNativeAvailable();
-        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1);
+        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1, false);
         try {
             IllegalArgumentException ex = assertThrows(
                     IllegalArgumentException.class,
@@ -28,7 +28,7 @@ class EtNativeNullTensorTest {
     @Test
     void forwardWithNullShapeThrows() {
         TestSupport.assumeNativeAvailable();
-        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1);
+        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1, false);
         try {
             ByteBuffer direct = ByteBuffer.allocateDirect(4).order(ByteOrder.nativeOrder());
             EtTensor tensor = new EtTensor(null, 6 /*Float*/, direct);

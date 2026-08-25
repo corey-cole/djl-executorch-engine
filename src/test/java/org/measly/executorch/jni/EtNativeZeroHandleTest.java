@@ -38,6 +38,12 @@ class EtNativeZeroHandleTest {
     }
 
     @Test
+    void etDumpWithZeroHandleThrowsIllegalState() {
+        TestSupport.assumeNativeLibraryAvailable();
+        assertThrows(IllegalStateException.class, () -> EtNative.etDump(0L));
+    }
+
+    @Test
     void destroyWithZeroHandleIsANoOp() {
         TestSupport.assumeNativeLibraryAvailable();
         // delete on a null pointer is already well-defined; pinned so the guard added to the other

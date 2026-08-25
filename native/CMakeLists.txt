@@ -81,7 +81,7 @@ endif()
 # resolved config and returns before any download or find_package.
 option(ET_PRINT_RESOLUTION "Print resolved runtime config and exit (host-test seam)" OFF)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/EtRuntimePin.cmake)
-set(ET_RUNTIME_VARIANT "logging" CACHE STRING "Runtime variant: logging (ship) | bare | devtools (bench)")
+set(ET_RUNTIME_VARIANT "logging" CACHE STRING "Runtime variant: logging (fallback) | bare (Linux-only bench) | devtools (shipped on linux-x86_64; platform-keyed via native/variant_select.sh)")
 set(ET_INSTALL "" CACHE PATH "Explicit ExecuTorch install prefix (escape hatch); empty => fetch the pinned tarball")
 # ET_PLATFORM is the platform IDENTITY; ET_RUNTIME_ROW is the pin-row LOOKUP KEY. They coincide on
 # Linux but not on Windows, which publishes two rows for one platform: `windows-x86_64` (/MD, dynamic
@@ -119,14 +119,15 @@ if(ET_INSTALL)
   set(_ET_RESOLVED_URL "")
 else()
   set(_ET_RESOLUTION "fetch")
-  # windows-x86_64 ships `logging` only; bare/devtools are Linux-only benchmarking builds that upstream
-  # never produced for Windows. Without this, the generic "No pin row" error below reads like a broken
-  # pin rather than a platform that never had those artifacts. Inside the fetch branch on purpose: the
-  # ET_INSTALL escape hatch consults no pin row, so the variant is irrelevant there.
-  if(ET_PLATFORM STREQUAL "windows-x86_64" AND NOT ET_RUNTIME_VARIANT STREQUAL "logging")
+  # windows-x86_64 ships `logging` and `devtools` (the pin publishes devtools Windows rows as of
+  # v1.4.1-3); `bare` remains Linux-only benchmarking that upstream never produced for Windows.
+  # Without this, the generic "No pin row" error below reads like a broken pin rather than a
+  # platform that never had those artifacts. Inside the fetch branch on purpose: the ET_INSTALL
+  # escape hatch consults no pin row, so the variant is irrelevant there.
+  if(ET_PLATFORM STREQUAL "windows-x86_64" AND ET_RUNTIME_VARIANT STREQUAL "bare")
     message(FATAL_ERROR
-      "windows-x86_64 ships the 'logging' variant only; got '${ET_RUNTIME_VARIANT}'. "
-      "bare/devtools are Linux-only (benchmarking; see native/build_variants.sh).")
+      "windows-x86_64 ships the 'logging' and 'devtools' variants only; got '${ET_RUNTIME_VARIANT}'. "
+      "bare is Linux-only benchmarking (see native/build_variants.sh).")
   endif()
   set(_ET_STEM "executorch-runtime-${ET_RUNTIME_ET_VERSION}-${ET_RUNTIME_VARIANT}-${ET_RUNTIME_ROW}")
   # The pin file's own selector: it FATAL_ERRORs on a row it does not define, so an unpublished
@@ -154,6 +155,42 @@ list(PREPEND CMAKE_PREFIX_PATH "${ET_INSTALL}")
 set(tokenizers_DIR "${ET_INSTALL}/lib/cmake/tokenizers" CACHE PATH "" FORCE)
 find_package(executorch CONFIG REQUIRED PATHS "${ET_INSTALL}/lib/cmake/ExecuTorch")
 
+# Devtools (ETDump event tracer). Two signals, deliberately, because neither is sufficient alone.
+#
+# `TARGET etdump` says the runtime tarball shipped the library. It is NOT a promise the tracer was
+# compiled in: upstream's add_library(etdump)/install(TARGETS) are unguarded and the root
+# CMakeLists adds devtools/ in both branches of if(EXECUTORCH_BUILD_DEVTOOLS), so a tarball could
+# carry the target with EXECUTORCH_ENABLE_EVENT_TRACER=OFF. Tracing would then record nothing and
+# report success -- the worst failure available.
+#
+# BUILDINFO's event_tracer key is the distribution's own statement of what it built. It is absent
+# under the ET_INSTALL escape hatch, where the target is all we have.
+set(ET_EVENT_TRACER_DECLARED "unknown")
+if(EXISTS "${ET_INSTALL}/BUILDINFO")
+  file(STRINGS "${ET_INSTALL}/BUILDINFO" _et_buildinfo REGEX "^event_tracer=")
+  if(_et_buildinfo)
+    string(REGEX REPLACE "^event_tracer=" "" ET_EVENT_TRACER_DECLARED "${_et_buildinfo}")
+  endif()
+endif()
+
+if(TARGET etdump)
+  if(ET_EVENT_TRACER_DECLARED STREQUAL "off")
+    message(FATAL_ERROR
+      "Runtime ships the etdump target but BUILDINFO says event_tracer=off. Linking it would "
+      "produce a build that reports profiling support and records nothing. Refusing.")
+  endif()
+  set(ET_HAVE_DEVTOOLS ON)
+  message(STATUS "devtools: event tracer available (BUILDINFO event_tracer=${ET_EVENT_TRACER_DECLARED})")
+else()
+  if(ET_EVENT_TRACER_DECLARED STREQUAL "on")
+    message(FATAL_ERROR
+      "BUILDINFO says event_tracer=on but no etdump target was exported. The runtime package is "
+      "inconsistent; refusing rather than shipping a build whose capability is unclear.")
+  endif()
+  set(ET_HAVE_DEVTOOLS OFF)
+  message(STATUS "devtools: not provisioned in this runtime (platform=${ET_PLATFORM})")
+endif()
+
 # --- JNIEnv-free core: shared by the .so, the units, and the leak harness ---
 add_library(et_runtime STATIC ${CMAKE_CURRENT_SOURCE_DIR}/core/et_runtime.cpp)
 target_include_directories(et_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core)
@@ -173,6 +210,18 @@ target_link_libraries(et_runtime PUBLIC
   # because shared libraries may carry undefined symbols, which is why this only surfaced in QA.
   ${CMAKE_DL_LIBS}
 )
+
+# PUBLIC so the Catch2 units and the harnesses inherit both the link and the macro -- they link
+# et_runtime and compile code guarded on ET_HAVE_DEVTOOLS.
+#
+# etdump is linked IN ADDITION TO the ExecuTorch targets above, never instead of them: its exported
+# interface is `flatccrt;$<LINK_ONLY:executorch>`, and $<LINK_ONLY:> suppresses usage requirements,
+# so C10_USING_CUSTOM_GENERATED_MACROS does not arrive through it. Without that definition
+# etdump_flatcc.h reaches a cmake_macros.h that no tarball installs.
+if(ET_HAVE_DEVTOOLS)
+  target_link_libraries(et_runtime PUBLIC etdump)
+  target_compile_definitions(et_runtime PUBLIC ET_HAVE_DEVTOOLS=1)
+endif()
 
 # --- JNI shell shared library (loaded BY the JVM: JNI headers only, never libjvm/libjawt) ---
 # Built only for the shipping library, NOT for QA builds: the Catch2 units + leak harness are

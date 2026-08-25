@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A DJL ([Deep Java Library](https://djl.ai/)) engine plugin that runs ExecuTorch (`.pte`) models. DJL 0.36.0 only supports the deprecated TorchScript export API; this engine adds ExecuTorch as a *separate* DJL engine so PyTorch models exported via the newer ExecuTorch backend can run under DJL, and to allow gradual migration off TorchScript. CPU-only, limited NDArray support. Group/coordinates: `org.measly:djl-executorch-engine`.
 
-Supported platforms: `linux-x86_64`, `linux-aarch64` and `windows-x86_64` (all ship the `logging` runtime variant). `bare`/`devtools` runtime variants are Linux-only benchmarking builds.
+Supported platforms: `linux-x86_64`, `linux-aarch64` and `windows-x86_64`. `linux-x86_64` ships the `devtools` runtime variant — the event tracer behind opt-in profiling; `linux-aarch64` and `windows-x86_64` ship `logging` for now. Profiling is not provisioned on those platforms *yet* (never "unsupported"); `EtEngine.devtoolsAvailable()` is the contract, never the platform name. `bare` remains a Linux-only benchmarking build; `devtools` is a shipping variant on Linux, and `ET_RUNTIME_VARIANT` still overrides either for benchmarking.
 
 ## Two-layer architecture
 
@@ -38,7 +38,7 @@ Supported platforms: `linux-x86_64`, `linux-aarch64` and `windows-x86_64` (all s
 The engine links against the ExecuTorch runtime, but that runtime is **downloaded**, not compiled. CMake `FetchContent`s a hash-pinned, build-attested tarball published by the separate [`executorch-runtime-dist`](https://github.com/measly-java-learning/executorch-runtime-dist) repo. The pin lives in `native/cmake/EtRuntimePin.cmake` (**generated — do not hand-edit**; bump by replacing the whole file with the asset from the next `v<etver>-<pkgrev>` release, then re-applying the comment header). The SHA256 change is the supply-chain review gate. **After a pin bump, re-run `./native/gen_clangd_db.sh`** — the clangd database is refreshed only by that script, so it otherwise keeps resolving against the previous runtime's headers, silently and with no warning.
 
 - **Escape hatch**: set `ET_INSTALL=/path/to/et-install` to link an existing runtime tree; CMake then skips the download.
-- ExecuTorch runtime version is currently `1.4.1` (pin `1.4.1-2`); mirrored in `EtEngine.EXECUTORCH_VERSION`.
+- ExecuTorch runtime version is currently `1.4.1` (pin `1.4.1-3`); mirrored in `EtEngine.EXECUTORCH_VERSION`.
 - The pin file defines `et_runtime_dist_url(<variant> <row> <out_url> <out_sha>)` and
   `native/CMakeLists.txt` resolves rows through it. Do not rebuild `ET_RUNTIME_URL_<variant>_<row>`
   names by hand: an unpublished pair expands to an empty string and surfaces as an opaque
@@ -53,9 +53,10 @@ The engine links against the ExecuTorch runtime, but that runtime is **downloade
   **with** logging, so it is not a logging-free comparison point in `native/build_variants.sh` —
   only `bare` is.
 - A post-link CMake guard (`assert_xnnpack_registered.cmake`, Linux only) fails the build if the XNNPACK backend registration got GC'd out of the `.so`. Windows covers the same property at runtime via the Catch2 suite executing an XNNPACK-delegated `add.pte`.
-- The runtime's first-party custom op `etnp::lstm` (linux-x86_64 `logging` tarball only) is
-  whole-archived into the shim when the tarball ships `lib/cmake/ETNPExtras/ETNPExtras.cmake`
-  (auto-detected in `native/CMakeLists.txt`). Exercised end-to-end by `LstmModelIT`.
+- The runtime's first-party custom op `etnp::lstm` (linux-x86_64 tarball: both the `logging` and
+  `devtools` variants ship `lib/cmake/ETNPExtras/`) is whole-archived into the shim when the tarball
+  ships `lib/cmake/ETNPExtras/ETNPExtras.cmake` (auto-detected in `native/CMakeLists.txt`).
+  Exercised end-to-end by `LstmModelIT`.
 - **Windows links the `-static` (`/MT`) pin row** so the shipped DLL needs no VC++ redistributable.
   Windows publishes *two* rows for one platform, hence two variables: `ET_PLATFORM` is the platform
   identity (`windows-x86_64`) and `ET_RUNTIME_ROW` is the pin-row key (`windows-x86_64-static`). The
@@ -235,6 +236,8 @@ double for no new defect class.
   > under `disabled`.
 - `ai.djl.executorch.num_threads` (JVM flag) or `EtEngine.setIntraOpThreads(n)` sizes ExecuTorch's intra-op (XNNPACK) threadpool. Process-global, write-once: applied and sealed at the first model load; the effective native count is `EtEngine.getIntraOpThreads()`.
 - `Criteria.optOption("workspaceSharingMode", "disabled"|"per_model"|"global")` picks the XNNPACK workspace sharing mode **per model**; `ai.djl.executorch.workspace_sharing_mode` (JVM flag) is the default for models that don't specify. These two strings are published as `EtEngine.WORKSPACE_SHARING_MODE_OPTION` and `EtEngine.WORKSPACE_SHARING_MODE_PROPERTY`. Unlike `num_threads` this is neither process-global nor write-once — ExecuTorch resolves it per delegate at load, so modes compose and load order is irrelevant. An unrecognized *option* fails the load; an unrecognized *property* warns and is ignored. Absent both, no spec is sent and the runtime default (`global` for our pin) applies. See `docs/superpowers/specs/2026-08-08-workspace-sharing-mode-design.md`.
+
+- `Criteria.optOption(EtEngine.PROFILING_OPTION, "true")` attaches ExecuTorch's event tracer to **one model** at load; the ETDump grows across every forward until pulled via `((EtModel) zooModel.getWrappedModel()).etDump()`. There is deliberately **no JVM property** — a property would let one flag enable unbounded event accumulation for every model in the process without touching code, so enabling is a decision at the load site. `EtEngine.devtoolsAvailable()` is the platform contract: `linux-x86_64` is provisioned, `linux-aarch64`/`windows-x86_64` are not **yet** (never "unsupported"), and requesting profiling without the capability fails the load. See `docs/profiling.md`.
 - `EtEngineStats.snapshot()` is the production monitoring surface: effective config, process totals, and per-model counters/native footprint. A JMX MXBean (`org.measly.executorch:type=EtEngineStats`) auto-registers at the first model load; `ai.djl.executorch.jmx_enabled=false` (published as `EtEngine.JMX_ENABLED_PROPERTY`) opts out, and a registration failure is a logged warning, never a failed load. Two conventions matter when reading it: byte fields use **`-1` = unavailable** vs **`0` = genuinely zero** (`stagingBytes` is legitimately `0` for memory-planned models, i.e. nearly all of them), and `modelsLive` is an **upper bound** — the registry holds models weakly, so one dropped without `close()` still counts until the GC reclaims it. Forward counters are hot-path `volatile long`s written count→total→max, an order the `max <= total` invariant depends on. DJL's `Predictor.setMetrics(...)` is for profiling only: its `limit` defaults to uncapped, so it retains every sample forever. See `docs/superpowers/specs/2026-08-09-production-observability-design.md`.
 - `EtStatsSnapshot.getXnnpackWorkspaceBytes()` reports the XNNPACK delegate's arena size. It is the
   one byte field that is **not** a sum over live models: the pin sets

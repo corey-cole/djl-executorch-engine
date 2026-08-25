@@ -22,9 +22,22 @@ public final class EtNative {
      * @param ptePath path to the model file
      * @param workspaceSharingMode XNNPACK workspace sharing for this model: 0=Disabled, 1=PerModel,
      *     2=Global, -1 to send no spec and leave the runtime default in force
+     * @param profiling attach an ETDump event tracer to this model
      * @return the native handle
      */
-    public static native long loadModule(String ptePath, int workspaceSharingMode);
+    public static native long loadModule(String ptePath, int workspaceSharingMode, boolean profiling);
+
+    /**
+     * Finalized ETDump covering every forward since the last call.
+     *
+     * @param handle the native handle
+     * @return the ETDump bytes, or an empty array when the model is not profiled or has not run
+     * @throws IllegalStateException if {@code handle} is 0, i.e. the model has been closed
+     */
+    public static native byte[] etDump(long handle);
+
+    /** @return true when this build links a runtime whose event tracer is compiled in */
+    public static native boolean devtoolsAvailable();
 
     /**
      * Reads the static I/O metadata ExecuTorch captured for {@code forward} at load time.

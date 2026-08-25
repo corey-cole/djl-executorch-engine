@@ -1,13 +1,15 @@
 package org.measly.executorch.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 class EtModelCountersTest {
 
     private static EtModelCounters counters() {
-        return new EtModelCounters("add", "global", 4096L, 1_000_000L);
+        return new EtModelCounters("add", "global", 4096L, 1_000_000L, false);
     }
 
     @Test
@@ -48,5 +50,11 @@ class EtModelCountersTest {
         c.recordForward(0L);
         assertEquals(1L, c.forwardCount());
         assertEquals(0L, c.forwardTotalNanos());
+    }
+
+    @Test
+    void carriesTheProfilingFlagFromLoad() {
+        assertTrue(new EtModelCounters("add", "global", 4096L, 1_000_000L, true).profiling());
+        assertFalse(new EtModelCounters("add", "global", 4096L, 1_000_000L, false).profiling());
     }
 }

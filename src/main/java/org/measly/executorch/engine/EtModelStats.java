@@ -21,6 +21,7 @@ public final class EtModelStats {
 
     private final String name;
     private final String workspaceSharingMode;
+    private final boolean profiling;
     private final long plannedArenaBytes;
     private final long stagingBytes;
     private final long loadNanos;
@@ -31,6 +32,7 @@ public final class EtModelStats {
     EtModelStats(
             String name,
             String workspaceSharingMode,
+            boolean profiling,
             long plannedArenaBytes,
             long stagingBytes,
             long loadNanos,
@@ -39,6 +41,7 @@ public final class EtModelStats {
             long forwardMaxNanos) {
         this.name = name;
         this.workspaceSharingMode = workspaceSharingMode;
+        this.profiling = profiling;
         this.plannedArenaBytes = plannedArenaBytes;
         this.stagingBytes = stagingBytes;
         this.loadNanos = loadNanos;
@@ -55,6 +58,18 @@ public final class EtModelStats {
     /** @return the effective XNNPACK workspace sharing mode, or {@code unspecified} */
     public String getWorkspaceSharingMode() {
         return workspaceSharingMode;
+    }
+
+    /**
+     * Whether this model was loaded with an ExecuTorch event tracer attached.
+     *
+     * <p>A profiled model accumulates an ETDump across every forward until the owner pulls it, so a
+     * {@code true} here on a long-lived production model is worth investigating.
+     *
+     * @return true when profiling is enabled for this model
+     */
+    public boolean isProfiling() {
+        return profiling;
     }
 
     /**

@@ -48,7 +48,7 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
     private final EtMethodMeta meta;
     // Serializes the stats cold path against close(): toStats() reads the native handle and
     // queries staging bytes, close() destroys the handle, and a destroy between the read and the
-    // JNI call would be a use-after-free. The lock is taken only by close() and toStats(), never
+    // JNI call would be a use-after-free. The lock is taken only by close(), toStats(), and etDump(), never
     // by forwardInternal — the hot path stays lock-free.
     private final Object statsLock = new Object();
     // Attached by EtModel.load right after construction. Null only in the narrow window before
@@ -149,6 +149,24 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
         return handle == 0;
     }
 
+    /**
+     * Finalized ETDump for this model, or empty once closed.
+     *
+     * <p>Runs under {@link #statsLock}, the same monitor {@link #close()} holds while it destroys
+     * the native handle: a concurrent {@code close()} cannot free the handle between the non-zero
+     * check and {@code EtNative.etDump(...)}, so a pull can never hand a freed pointer to native
+     * code. The lock — not the volatile read — is what makes this safe; the volatile read alone
+     * gives visibility, not exclusion. Cold path; forward() stays lock-free.
+     *
+     * @return the ETDump bytes, never null
+     */
+    byte[] etDump() {
+        synchronized (statsLock) {
+            final long h = handle;
+            return h == 0 ? new byte[0] : EtNative.etDump(h);
+        }
+    }
+
     /** Attaches the counters this block updates on each forward. Called once, at load. */
     void attachCounters(EtModelCounters counters) {
         this.counters = counters;
@@ -183,6 +201,7 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
             return new EtModelStats(
                     c.name(),
                     c.workspaceSharingMode(),
+                    c.profiling(),
                     c.plannedArenaBytes(),
                     staging,
                     c.loadNanos(),

@@ -15,6 +15,7 @@ current guidance.
 | [executorch-build-notes.md](executorch-build-notes.md) | Building an ExecuTorch runtime from source (escape hatch) |
 | [executorch-host-buffer-contract-brief.md](executorch-host-buffer-contract-brief.md) | The host-buffer contract: when ExecuTorch copies an input and when it borrows |
 | [openvino-version-bump.md](openvino-version-bump.md) | Checklist for bumping the vendored OpenVINO runtime |
+| [profiling.md](profiling.md) | Opt-in per-model ExecuTorch event tracing: enabling it, pulling the ETDump, and inspecting it with the Python Inspector |
 
 Design specs and implementation plans are under [superpowers/](superpowers).
 

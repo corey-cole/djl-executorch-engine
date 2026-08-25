@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Build + run the native QA targets (Catch2 units + ASan/LSan leak harness) against the resolved
-# ExecuTorch runtime (default fetches the pinned logging tarball; runtime fetched by CMake, or set
-# ET_INSTALL). Not part of the shipping build — the QA targets are gated behind -DET_BUILD_QA=ON
-# and built with AddressSanitizer/LeakSanitizer, so they are a distinct build tree (native/asan)
-# from the Release .so (native/build via native/build.sh).
+# ExecuTorch runtime (default fetches the pinned tarball for the platform-keyed variant — devtools
+# on linux-x86_64, logging elsewhere — or set ET_INSTALL). Not part of the shipping build — the QA
+# targets are gated behind -DET_BUILD_QA=ON and built with AddressSanitizer/LeakSanitizer, so they
+# are a distinct build tree (native/asan) from the Release .so (native/build via native/build.sh).
 #
 # Prerequisites: a C++ compiler with -fsanitize=address, cmake + make, and network access (Catch2
 # and the ExecuTorch runtime tarball are fetched at configure time).
 #
-# CI env vars: ET_RUNTIME_VARIANT (default logging), ET_INSTALL (escape hatch). The QA targets are
-# JVM-free and the shared native/CMakeLists.txt skips the JNI shim under -DET_BUILD_QA=ON, so NO
-# JAVA_HOME/JDK is needed. In GitHub Actions, run this in the shared engine-build image as
-# native/build.sh (matching gcc-toolset toolchain).
+# CI env vars: ET_RUNTIME_VARIANT (default: platform-keyed — devtools on linux-x86_64),
+# ET_INSTALL (escape hatch). The QA targets are JVM-free and the shared native/CMakeLists.txt skips
+# the JNI shim under -DET_BUILD_QA=ON, so NO JAVA_HOME/JDK is needed. In GitHub Actions, run this
+# in the shared engine-build image as native/build.sh (matching gcc-toolset toolchain).
 set -euo pipefail
 
 # shellcheck source=native/container_env.sh
@@ -31,7 +31,15 @@ case "$(uname -s)" in
   *)            ET_HOST_OS=linux ;;
 esac
 
-ET_ARGS=(-DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT:-logging}")
+# Resolve the shipped runtime variant through the same rule build.sh and ubsan_gate.sh use -- the
+# QA tree must exercise the runtime that ships. variant_select.sh derives the platform identity
+# from the host and keys the default on ET_DEVTOOLS_SUPPORTED_PLATFORMS; build.sh is not
+# sourceable here (set -ex, immediate PRINT_* exits), so the shared helper is the single
+# definition. The default list is linux-x86_64, so Windows and aarch64 QA fall back to logging --
+# unchanged behaviour there.
+. "${BASH_SOURCE[0]%/*}/variant_select.sh"
+
+ET_ARGS=(-DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT}")
 [ -n "${ET_INSTALL:-}" ] && ET_ARGS+=(-DET_INSTALL="${ET_INSTALL}")
 
 if [ "${ET_HOST_OS}" = "windows" ]; then

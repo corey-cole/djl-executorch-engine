@@ -28,7 +28,6 @@ PIN="native/cmake/EtRuntimePin.cmake"
 # The engine's OpenVINO support set: what the JAVA layer can load, which is not the same question as
 # what the pin publishes. A platform belongs here once OpenVinoRuntime can extract its bundle and a
 # test proves it -- adding it is the LAST step of supporting a platform, never the first.
-# linux-aarch64 is absent because upstream publishes no bundle for it, not because of anything here.
 ET_OPENVINO_SUPPORTED_PLATFORMS="${ET_OPENVINO_SUPPORTED_PLATFORMS:-linux-x86_64 windows-x86_64}"
 
 # Sets OV_DECISION (stage | unsupported | unpublished) and, when staging, OV_URL / OV_SHA / OV_VER.
@@ -84,7 +83,13 @@ fi
 #     resolves it (FetchContent the pinned tarball, or -DET_INSTALL escape hatch). The runtime
 #     recipe now lives in measly-java-learning/executorch-runtime-dist; see
 #     docs/executorch-build-notes.md for the engine-side reasoning. ---
-ET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT:-logging}"
+# The shipped runtime variant is an engine-side decision keyed on the platform identity
+# (OUT_PLATFORM), not a mirror of what the pin publishes per row. The resolution rule and the
+# platform list's semantics live in native/variant_select.sh, shared with build_qa.sh and
+# ubsan_gate.sh so the three cannot drift. Explicit ET_RUNTIME_VARIANT still beats the list, so
+# benchmarking (bare) and the negative QA arm (logging) are unaffected.
+ET_PLATFORM_IDENTITY="${OUT_PLATFORM}"
+. "${BASH_SOURCE[0]%/*}/variant_select.sh"
 STAGE_SO="${STAGE_SO:-1}"
 NATIVE_BUILD_DIR="${NATIVE_BUILD_DIR:-native/build}"
 

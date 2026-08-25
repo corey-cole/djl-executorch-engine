@@ -50,12 +50,21 @@ public class EtModel extends BaseModel {
         // intra-op seal below so a bad option here fails fast, before anything irreversible happens.
         int workspaceSharingMode =
                 EtWorkspaceSharing.resolve(options, System.getProperty(EtWorkspaceSharing.PROPERTY));
+        // Per-model, like the sharing mode: resolved fresh on every load, nothing sealed. Throws
+        // IllegalArgumentException for a bad value, before anything irreversible happens.
+        boolean profiling = EtProfiling.resolve(options);
+        if (profiling && !EtNative.devtoolsAvailable()) {
+            throw new UnsupportedOperationException(
+                    "profiling requested but this platform's ExecuTorch runtime has no event tracer"
+                            + " compiled in; profiling is not provisioned here");
+        }
         // First load seals the process-global intra-op thread pool (applies pending/property value,
         // logs the outcome); later loads are no-ops. Must precede loadModule: delegate init during
         // load submits work to the pool.
         EtEngine.sealIntraOpThreads();
         logger.info(
-                "model {} workspaceSharingMode={}", getName(), EtWorkspaceSharing.name(workspaceSharingMode));
+                "model {} workspaceSharingMode={} profiling={}",
+                getName(), EtWorkspaceSharing.name(workspaceSharingMode), profiling);
         // Not unit-tested below this point: loadModule/methodMeta/destroy require the native library
         // (integration-tested via EtModelTest#loadAndForwardAddModel).
         // Before loadModule, never after: that call constructs the native runtime, whose ctor calls
@@ -67,7 +76,7 @@ public class EtModel extends BaseModel {
         // calls Module::load_forward() unconditionally, so the XNNPACK setup cost lands in load,
         // not in the first forward.
         final long loadStartNanos = System.nanoTime();
-        long handle = EtNative.loadModule(modelFile.toString(), workspaceSharingMode);
+        long handle = EtNative.loadModule(modelFile.toString(), workspaceSharingMode, profiling);
         EtMethodMeta meta;
         try {
             meta = EtNative.methodMeta(handle);
@@ -82,7 +91,8 @@ public class EtModel extends BaseModel {
                         getName(),
                         EtWorkspaceSharing.name(workspaceSharingMode),
                         meta.plannedArenaBytes,
-                        loadNanos);
+                        loadNanos,
+                        profiling);
         etBlock.attachCounters(counters);
         block = etBlock;
         // The registry holds the block weakly and these counters strongly, so a caller who drops
@@ -103,6 +113,32 @@ public class EtModel extends BaseModel {
             ((EtSymbolBlock) block).close();
         }
         super.close();
+    }
+
+    /**
+     * Finalized ETDump covering every forward since the last call, for offline analysis with
+     * ExecuTorch's Inspector.
+     *
+     * <p>Empty when this model was not loaded with {@link EtEngine#PROFILING_OPTION}, or when no
+     * forward has run since the last call. The dump grows across every forward until pulled, so a
+     * long-running profiled model should be drained periodically.
+     *
+     * <p><b>Threading:</b> pull only from the thread that owns the model, or with no forward in
+     * flight. A pull concurrent with a forward races on the native runtime's
+     * {@code dumpFinalized}/{@code everForwarded}/{@code lastDump} state and on {@code ETDumpGen},
+     * which upstream does not document as thread-safe; the lock {@link EtSymbolBlock#etDump()}
+     * takes serializes a pull against {@code close()} only, and {@code forwardInternal} is
+     * deliberately lock-free. The repo's one-model-per-thread {@code forward()} rule already
+     * implies this; the dump API makes it explicit.
+     *
+     * @return the ETDump bytes, never null
+     */
+    public byte[] etDump() {
+        EtSymbolBlock etBlock = (EtSymbolBlock) block;
+        if (etBlock == null || etBlock.isClosed()) {
+            return new byte[0];
+        }
+        return etBlock.etDump();
     }
 
     /**
