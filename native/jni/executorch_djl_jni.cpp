@@ -425,6 +425,12 @@ Java_org_measly_executorch_jni_EtNative_etDump(JNIEnv* env, jclass, jlong handle
     throwJava(env, "etDump failed", &e);
     return nullptr;
   }
+  // The dump is only pulled and reset on request, so it can in theory outgrow the jbyteArray
+  // limit; reject it with the same guard forward() uses for outputs rather than truncating.
+  if (measly::et::exceedsJniByteArrayLimit(dump.size())) {
+    throwJava(env, "ETDump exceeds the 2GB JNI array limit", nullptr);
+    return nullptr;
+  }
   // Empty array, never null: an unprofiled model has no dump, which is an answer, not an error.
   jbyteArray out = env->NewByteArray(static_cast<jsize>(dump.size()));
   if (out == nullptr) return nullptr;  // OOM already pending

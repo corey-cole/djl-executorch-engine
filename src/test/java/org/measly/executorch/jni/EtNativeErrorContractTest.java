@@ -1,6 +1,7 @@
 package org.measly.executorch.jni;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.ByteBuffer;
@@ -37,5 +38,28 @@ class EtNativeErrorContractTest {
         } finally {
             EtNative.destroy(handle);
         }
+    }
+
+    @Test
+    void etDumpOnUnprofiledModelReturnsNonNullEmptyArray() {
+        TestSupport.assumeNativeLibraryAvailable();
+        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1, false);
+        try {
+            // Not profiled: no dump is an answer, not an error -- pins the native empty-array
+            // (never null) contract for an unprofiled model.
+            byte[] dump = EtNative.etDump(handle);
+            assertNotNull(dump);
+            assertEquals(0, dump.length);
+        } finally {
+            EtNative.destroy(handle);
+        }
+    }
+
+    @Test
+    void devtoolsAvailableIsCallable() {
+        TestSupport.assumeNativeLibraryAvailable();
+        // The value is a build property, so nothing is asserted: the call exercises the new native
+        // signature under -Xcheck:jni, where a mismatch surfaces as a warning, not a test failure.
+        EtNative.devtoolsAvailable();
     }
 }
