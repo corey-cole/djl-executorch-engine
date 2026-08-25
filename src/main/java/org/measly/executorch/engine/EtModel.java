@@ -94,7 +94,8 @@ public class EtModel extends BaseModel {
                         getName(),
                         EtWorkspaceSharing.name(workspaceSharingMode),
                         meta.plannedArenaBytes,
-                        loadNanos);
+                        loadNanos,
+                        profiling);
         etBlock.attachCounters(counters);
         block = etBlock;
         // The registry holds the block weakly and these counters strongly, so a caller who drops

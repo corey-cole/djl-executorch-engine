@@ -201,6 +201,7 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
             return new EtModelStats(
                     c.name(),
                     c.workspaceSharingMode(),
+                    c.profiling(),
                     c.plannedArenaBytes(),
                     staging,
                     c.loadNanos(),

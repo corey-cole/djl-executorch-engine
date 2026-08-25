@@ -19,17 +19,23 @@ final class EtModelCounters {
     private final String workspaceSharingMode;
     private final long plannedArenaBytes;
     private final long loadNanos;
+    private final boolean profiling;
 
     private volatile long forwardCount;
     private volatile long forwardTotalNanos;
     private volatile long forwardMaxNanos;
 
     EtModelCounters(
-            String name, String workspaceSharingMode, long plannedArenaBytes, long loadNanos) {
+            String name,
+            String workspaceSharingMode,
+            long plannedArenaBytes,
+            long loadNanos,
+            boolean profiling) {
         this.name = name;
         this.workspaceSharingMode = workspaceSharingMode;
         this.plannedArenaBytes = plannedArenaBytes;
         this.loadNanos = loadNanos;
+        this.profiling = profiling;
     }
 
     /**
@@ -60,6 +66,10 @@ final class EtModelCounters {
 
     String workspaceSharingMode() {
         return workspaceSharingMode;
+    }
+
+    boolean profiling() {
+        return profiling;
     }
 
     long plannedArenaBytes() {
