@@ -521,3 +521,13 @@ TEST_CASE("openvino: a bundle in one flat directory loads and executes") {
   unsetEnvVar("OPENVINO_LIB_PATH");
 #endif
 }
+
+TEST_CASE("devtools: availability matches what this build linked") {
+  // The build either linked the event tracer or it did not; the query must say which, and must
+  // agree with the compile-time gate rather than guessing at runtime.
+#ifdef ET_HAVE_DEVTOOLS
+  REQUIRE(measly::et::devtoolsAvailable());
+#else
+  REQUIRE_FALSE(measly::et::devtoolsAvailable());
+#endif
+}

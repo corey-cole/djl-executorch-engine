@@ -154,6 +154,42 @@ list(PREPEND CMAKE_PREFIX_PATH "${ET_INSTALL}")
 set(tokenizers_DIR "${ET_INSTALL}/lib/cmake/tokenizers" CACHE PATH "" FORCE)
 find_package(executorch CONFIG REQUIRED PATHS "${ET_INSTALL}/lib/cmake/ExecuTorch")
 
+# Devtools (ETDump event tracer). Two signals, deliberately, because neither is sufficient alone.
+#
+# `TARGET etdump` says the runtime tarball shipped the library. It is NOT a promise the tracer was
+# compiled in: upstream's add_library(etdump)/install(TARGETS) are unguarded and the root
+# CMakeLists adds devtools/ in both branches of if(EXECUTORCH_BUILD_DEVTOOLS), so a tarball could
+# carry the target with EXECUTORCH_ENABLE_EVENT_TRACER=OFF. Tracing would then record nothing and
+# report success -- the worst failure available.
+#
+# BUILDINFO's event_tracer key is the distribution's own statement of what it built. It is absent
+# under the ET_INSTALL escape hatch, where the target is all we have.
+set(ET_EVENT_TRACER_DECLARED "unknown")
+if(EXISTS "${ET_INSTALL}/BUILDINFO")
+  file(STRINGS "${ET_INSTALL}/BUILDINFO" _et_buildinfo REGEX "^event_tracer=")
+  if(_et_buildinfo)
+    string(REGEX REPLACE "^event_tracer=" "" ET_EVENT_TRACER_DECLARED "${_et_buildinfo}")
+  endif()
+endif()
+
+if(TARGET etdump)
+  if(ET_EVENT_TRACER_DECLARED STREQUAL "off")
+    message(FATAL_ERROR
+      "Runtime ships the etdump target but BUILDINFO says event_tracer=off. Linking it would "
+      "produce a build that reports profiling support and records nothing. Refusing.")
+  endif()
+  set(ET_HAVE_DEVTOOLS ON)
+  message(STATUS "devtools: event tracer available (BUILDINFO event_tracer=${ET_EVENT_TRACER_DECLARED})")
+else()
+  if(ET_EVENT_TRACER_DECLARED STREQUAL "on")
+    message(FATAL_ERROR
+      "BUILDINFO says event_tracer=on but no etdump target was exported. The runtime package is "
+      "inconsistent; refusing rather than shipping a build whose capability is unclear.")
+  endif()
+  set(ET_HAVE_DEVTOOLS OFF)
+  message(STATUS "devtools: not provisioned in this runtime (platform=${ET_PLATFORM})")
+endif()
+
 # --- JNIEnv-free core: shared by the .so, the units, and the leak harness ---
 add_library(et_runtime STATIC ${CMAKE_CURRENT_SOURCE_DIR}/core/et_runtime.cpp)
 target_include_directories(et_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core)
@@ -173,6 +209,18 @@ target_link_libraries(et_runtime PUBLIC
   # because shared libraries may carry undefined symbols, which is why this only surfaced in QA.
   ${CMAKE_DL_LIBS}
 )
+
+# PUBLIC so the Catch2 units and the harnesses inherit both the link and the macro -- they link
+# et_runtime and compile code guarded on ET_HAVE_DEVTOOLS.
+#
+# etdump is linked IN ADDITION TO the ExecuTorch targets above, never instead of them: its exported
+# interface is `flatccrt;$<LINK_ONLY:executorch>`, and $<LINK_ONLY:> suppresses usage requirements,
+# so C10_USING_CUSTOM_GENERATED_MACROS does not arrive through it. Without that definition
+# etdump_flatcc.h reaches a cmake_macros.h that no tarball installs.
+if(ET_HAVE_DEVTOOLS)
+  target_link_libraries(et_runtime PUBLIC etdump)
+  target_compile_definitions(et_runtime PUBLIC ET_HAVE_DEVTOOLS=1)
+endif()
 
 # --- JNI shell shared library (loaded BY the JVM: JNI headers only, never libjvm/libjawt) ---
 # Built only for the shipping library, NOT for QA builds: the Catch2 units + leak harness are

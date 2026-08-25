@@ -134,6 +134,11 @@ uint32_t intraOpThreads();
 // stock runtime this returns -1 rather than failing to build, since it names the key by string.
 int64_t xnnpackWorkspaceBytes();
 
+// True when this build linked a runtime whose event tracer is compiled in, i.e. when profiling can
+// actually record. Compile-time constant: the capability is a property of the linked runtime, not
+// of anything discoverable at run time.
+bool devtoolsAvailable();
+
 // True if `ptePath`'s "forward" method is delegated to `backend` (e.g. "OpenvinoBackend").
 //
 // Reads METADATA ONLY: it builds a bare Module and asks method_meta, never load_forward(). That

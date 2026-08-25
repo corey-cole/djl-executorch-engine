@@ -421,6 +421,14 @@ bool isBackendRegistered(const std::string& backend) {
   return isBackendAvailable(backend.c_str());
 }
 
+bool devtoolsAvailable() {
+#ifdef ET_HAVE_DEVTOOLS
+  return true;
+#else
+  return false;
+#endif
+}
+
 bool pteUsesBackend(const std::string& ptePath, const std::string& backend) {
   Module probe(ptePath);
   const auto meta = probe.method_meta("forward");
