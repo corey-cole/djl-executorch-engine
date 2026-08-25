@@ -43,6 +43,23 @@ public final class TestSupport {
         }
     }
 
+    /**
+     * Concatenates {@code t}'s message with each of its causes' messages, so an assertion can
+     * explain a wrapped failure (e.g. a DJL load error) instead of showing only the outermost
+     * message.
+     */
+    public static String messageChain(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            if (sb.length() > 0) {
+                sb.append("Caused by: ");
+            }
+            String message = cur.getMessage();
+            sb.append(message == null ? cur.getClass().getName() : message);
+        }
+        return sb.toString();
+    }
+
     /** Absolute path to the spike test model. */
     public static String addPtePath() {
         return new File("native/spike/add.pte").getAbsolutePath();
