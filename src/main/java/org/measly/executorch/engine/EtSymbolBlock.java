@@ -48,7 +48,7 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
     private final EtMethodMeta meta;
     // Serializes the stats cold path against close(): toStats() reads the native handle and
     // queries staging bytes, close() destroys the handle, and a destroy between the read and the
-    // JNI call would be a use-after-free. The lock is taken only by close() and toStats(), never
+    // JNI call would be a use-after-free. The lock is taken only by close(), toStats(), and etDump(), never
     // by forwardInternal — the hot path stays lock-free.
     private final Object statsLock = new Object();
     // Attached by EtModel.load right after construction. Null only in the narrow window before

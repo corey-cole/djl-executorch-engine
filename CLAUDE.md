@@ -38,7 +38,7 @@ Supported platforms: `linux-x86_64`, `linux-aarch64` and `windows-x86_64`. `linu
 The engine links against the ExecuTorch runtime, but that runtime is **downloaded**, not compiled. CMake `FetchContent`s a hash-pinned, build-attested tarball published by the separate [`executorch-runtime-dist`](https://github.com/measly-java-learning/executorch-runtime-dist) repo. The pin lives in `native/cmake/EtRuntimePin.cmake` (**generated — do not hand-edit**; bump by replacing the whole file with the asset from the next `v<etver>-<pkgrev>` release, then re-applying the comment header). The SHA256 change is the supply-chain review gate. **After a pin bump, re-run `./native/gen_clangd_db.sh`** — the clangd database is refreshed only by that script, so it otherwise keeps resolving against the previous runtime's headers, silently and with no warning.
 
 - **Escape hatch**: set `ET_INSTALL=/path/to/et-install` to link an existing runtime tree; CMake then skips the download.
-- ExecuTorch runtime version is currently `1.4.1` (pin `1.4.1-2`); mirrored in `EtEngine.EXECUTORCH_VERSION`.
+- ExecuTorch runtime version is currently `1.4.1` (pin `1.4.1-3`); mirrored in `EtEngine.EXECUTORCH_VERSION`.
 - The pin file defines `et_runtime_dist_url(<variant> <row> <out_url> <out_sha>)` and
   `native/CMakeLists.txt` resolves rows through it. Do not rebuild `ET_RUNTIME_URL_<variant>_<row>`
   names by hand: an unpublished pair expands to an empty string and surfaces as an opaque
