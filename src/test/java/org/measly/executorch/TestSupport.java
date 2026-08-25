@@ -96,17 +96,26 @@ public final class TestSupport {
     }
 
     /**
-     * Skips the test (assumption) unless the native lib is loadable AND we are on linux-x86_64.
-     * The etnp::lstm custom op ships linux-only (no ETNPExtras.cmake in the Windows tarball), so
-     * on any other platform the shim legitimately lacks the op — a skip, not a failure.
+     * Skips the test (assumption) unless the native lib is loadable AND the shim links the
+     * {@code etnp::lstm} custom op. The op arrives with {@code lib/cmake/ETNPExtras/}, which the
+     * Linux runtime tarballs ship and the Windows one does not, so on Windows the shim legitimately
+     * lacks the op — a skip, not a failure.
+     *
+     * <p>Both Linux architectures qualify: the op is whole-archived wherever the tarball ships
+     * ETNPExtras, and CMake reports it as {@code etnp extras: LSTM op whole-archived}. Verified on
+     * linux-aarch64 at pin v1.4.1-3, where the golden vector matches.
+     *
+     * <p>This is a platform test standing in for a capability query, which is the wrong shape by
+     * this project's own rule — see issue for exposing custom-op registration the way
+     * {@code EtNative.backendRegistered} exposes backends (issue #64).
      */
     public static void assumeLstmModelAvailable() {
         loadNativeLibrary();
         String os = System.getProperty("os.name").toLowerCase();
-        String arch = System.getProperty("os.arch").toLowerCase();
-        boolean linuxX64 = os.contains("linux") && (arch.equals("amd64") || arch.equals("x86_64"));
-        if (!linuxX64) {
-            Assumptions.abort("etnp::lstm op is linux-x86_64 only; skipping on " + os + "/" + arch);
+        if (!os.contains("linux")) {
+            Assumptions.abort(
+                    "etnp::lstm ships with ETNPExtras, which the Windows runtime tarball does not"
+                            + " carry; skipping on " + os);
         }
     }
 

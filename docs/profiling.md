@@ -69,23 +69,33 @@ if (!EtEngine.devtoolsAvailable()) {
 }
 ```
 
-Today `linux-x86_64` ships a `devtools` runtime and answers `true`. `linux-aarch64` is **ready to
-be provisioned**: its devtools tarball ships the same layout as the x86_64 one —
-`lib/cmake/ETNPExtras/`, `lib/libetnp_ops_lstm.a`, and `lib/libopenvino_backend.a` (parity verified
-at pin v1.4.1-3) — so it joins by adding `linux-aarch64` to `ET_DEVTOOLS_SUPPORTED_PLATFORMS` plus a
-test run; the 2026-08-25 radxa run on the logging runtime, where `ProfilingIT`'s devtools-absent arm
-executed and passed, is that test baseline. `windows-x86_64` was verified on the 2026-08-25 winbox
-run: the MSVC build and the full JVM suite pass on the logging variant, `ProfilingIT`'s
-devtools-absent arm executes and passes there, and the static-CRT gate holds. The pin publishes
-Windows devtools rows as of v1.4.1-3 and the CMake variant guard already accepts `devtools` there
-(only the Linux-only `bare` benchmarking build is refused), so provisioning is now truly a list
-edit plus a test — but a Windows devtools build must use `flatcc_builder_aligned_free` for the
-ETDump buffer: the current `etDump()` uses `free()`, which is correct for POSIX only (the code
-comment already records this).
+**Every platform this project ships answers `true`.** `linux-x86_64`, `linux-aarch64`, and
+`windows-x86_64` all link a `devtools` runtime as of pin v1.4.1-3, so the query above is a guard
+for code that may run against an older engine or a hand-built shim, not a live platform split.
 
-Requesting profiling where the capability is absent fails the load with a message identifying the
-platform's runtime as lacking the event tracer; a model loaded without the option returns an empty
-dump rather than throwing. An unrecognized option value fails the load regardless of platform.
+The query still earns its place. `ET_DEVTOOLS_SUPPORTED_PLATFORMS` in `native/variant_select.sh` is
+an engine-side decision rather than a mirror of the pin, so a platform can leave the list — and a
+shim built with `ET_RUNTIME_VARIANT=logging`, which benchmarking and the negative QA arm both do,
+answers `false` on an otherwise provisioned platform. Never branch on the platform name.
+
+Verified on real hardware at pin v1.4.1-3, not inferred from the pin's contents:
+
+| platform | runtime | evidence |
+| --- | --- | --- |
+| `linux-x86_64` | `devtools`, `event_tracer=on` | native QA (ASan/LSan/UBSan) 45 cases / 210 assertions, leak harness 3/3; JVM suite green |
+| `linux-aarch64` | `devtools`, `event_tracer=on` | same QA figures on the radxa host; `ProfilingIT`'s devtools-**present** arm ran and passed |
+| `windows-x86_64` | `devtools` (static `/MT` row), `event_tracer=on` | MSVC build, static-CRT gate PASS, full JVM suite green, `openvinoTest` green; devtools-**present** arm ran and passed |
+
+Windows mattered most, because it is the only platform that can prove the ETDump buffer is released
+correctly: `get_etdump_data()` returns an aligned allocation, and flatcc allocates with
+`_aligned_malloc` under MSVC where `free()` is undefined behaviour. `etDump()` releases it through
+`flatcc_builder_aligned_free`, and on glibc both expansions are `free()` — so no Linux run can
+distinguish a correct release from an incorrect one. The Windows arm can, and does.
+
+Requesting profiling where the capability is absent still fails the load with a message identifying
+the runtime as lacking the event tracer.
+ A model loaded without the option returns an empty
+dump rather than throwing, and an unrecognized option value fails the load regardless of platform.
 
 ## Exporting an ETRecord
 
@@ -221,8 +231,10 @@ unprofiled model):
 
 - **Binary size:** the design-time measurement in [benchmarking.md](benchmarking.md) recorded
   `libexecutorch_djl.so` growing from 12,440,632 to 12,578,440 bytes, **+137,808 bytes (+1.11%)**.
-  The linux-x86_64 `.so` staged on this branch is 12,710,016 bytes (~12.7 MB) — the delta sits on a
-  slightly later baseline, so treat the percentage, not the absolute figure, as the stable number.
+  Windows measured the same order when it was provisioned: `executorch_djl.dll` went from 6,472,192
+  bytes on `logging` to 6,598,656 on `devtools`, **+126,464 bytes (+1.95%)** — a larger percentage
+  only because the DLL is half the size of the Linux `.so`. Treat the percentage band, not any
+  absolute figure, as the stable number; baselines move with every pin bump.
 - **Steady-state latency, no tracer attached:** bounded, not just undetected — devtools − logging
   measured +0.066% (0.0038 ms on a 5.72 ms MobileNetV2 forward) against a standard error of 0.0085
   ms, with a 95% confidence interval of about ±0.35% on the difference. At the shipped thread
