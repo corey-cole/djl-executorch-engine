@@ -152,11 +152,19 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
     /**
      * Finalized ETDump for this model, or empty once closed.
      *
+     * <p>Runs under {@link #statsLock}, the same monitor {@link #close()} holds while it destroys
+     * the native handle: a concurrent {@code close()} cannot free the handle between the non-zero
+     * check and {@code EtNative.etDump(...)}, so a pull can never hand a freed pointer to native
+     * code. The lock — not the volatile read — is what makes this safe; the volatile read alone
+     * gives visibility, not exclusion. Cold path; forward() stays lock-free.
+     *
      * @return the ETDump bytes, never null
      */
     byte[] etDump() {
-        final long h = handle;  // one volatile read, like toStats()
-        return h == 0 ? new byte[0] : EtNative.etDump(h);
+        synchronized (statsLock) {
+            final long h = handle;
+            return h == 0 ? new byte[0] : EtNative.etDump(h);
+        }
     }
 
     /** Attaches the counters this block updates on each forward. Called once, at load. */
