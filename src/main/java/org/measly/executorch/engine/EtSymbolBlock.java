@@ -149,6 +149,16 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
         return handle == 0;
     }
 
+    /**
+     * Finalized ETDump for this model, or empty once closed.
+     *
+     * @return the ETDump bytes, never null
+     */
+    byte[] etDump() {
+        final long h = handle;  // one volatile read, like toStats()
+        return h == 0 ? new byte[0] : EtNative.etDump(h);
+    }
+
     /** Attaches the counters this block updates on each forward. Called once, at load. */
     void attachCounters(EtModelCounters counters) {
         this.counters = counters;

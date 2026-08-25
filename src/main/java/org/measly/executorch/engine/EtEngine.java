@@ -56,6 +56,18 @@ public final class EtEngine extends Engine {
     public static final String WORKSPACE_SHARING_MODE_PROPERTY = EtWorkspaceSharing.PROPERTY;
 
     /**
+     * DJL per-model option enabling ExecuTorch event tracing for one model, e.g. {@code
+     * Criteria.optOption(EtEngine.PROFILING_OPTION, "true")}. Accepted values are {@code true} and
+     * {@code false}; anything else fails the load.
+     *
+     * <p>There is no JVM-wide property counterpart by design — see {@code EtProfiling}.
+     *
+     * <p>Requires a runtime whose event tracer is compiled in; {@link #devtoolsAvailable()} reports
+     * whether this platform has one, and requesting profiling without it fails the load.
+     */
+    public static final String PROFILING_OPTION = EtProfiling.OPTION_KEY;
+
+    /**
      * JVM flag controlling whether the engine registers its JMX MBean, e.g.
      * {@code -Dai.djl.executorch.jmx_enabled=false}. Registration happens once, at the first model
      * load, under the object name {@value EtEngineStats#OBJECT_NAME}. Any value other than
@@ -155,6 +167,15 @@ public final class EtEngine extends Engine {
      */
     public static int getIntraOpThreads() {
         return EtNative.intraOpThreads();
+    }
+
+    /**
+     * Whether this platform's shipped native library can record ExecuTorch profiling data.
+     *
+     * @return true when the linked runtime has the event tracer compiled in
+     */
+    public static boolean devtoolsAvailable() {
+        return EtNative.devtoolsAvailable();
     }
 
     /**

@@ -22,6 +22,8 @@ public class EtModel extends BaseModel {
 
     private static final String PTE_SUFFIX = ".pte";
 
+    private boolean profiling;
+
     EtModel(String name, NDManager manager) {
         super(name);
         this.manager = manager;
@@ -50,12 +52,22 @@ public class EtModel extends BaseModel {
         // intra-op seal below so a bad option here fails fast, before anything irreversible happens.
         int workspaceSharingMode =
                 EtWorkspaceSharing.resolve(options, System.getProperty(EtWorkspaceSharing.PROPERTY));
+        // Per-model, like the sharing mode: resolved fresh on every load, nothing sealed. Throws
+        // IllegalArgumentException for a bad value, before anything irreversible happens.
+        boolean profiling = EtProfiling.resolve(options);
+        if (profiling && !EtNative.devtoolsAvailable()) {
+            throw new UnsupportedOperationException(
+                    "profiling requested but this platform's ExecuTorch runtime has no event tracer"
+                            + " compiled in; profiling is not provisioned here");
+        }
+        this.profiling = profiling;
         // First load seals the process-global intra-op thread pool (applies pending/property value,
         // logs the outcome); later loads are no-ops. Must precede loadModule: delegate init during
         // load submits work to the pool.
         EtEngine.sealIntraOpThreads();
         logger.info(
-                "model {} workspaceSharingMode={}", getName(), EtWorkspaceSharing.name(workspaceSharingMode));
+                "model {} workspaceSharingMode={} profiling={}",
+                getName(), EtWorkspaceSharing.name(workspaceSharingMode), profiling);
         // Not unit-tested below this point: loadModule/methodMeta/destroy require the native library
         // (integration-tested via EtModelTest#loadAndForwardAddModel).
         // Before loadModule, never after: that call constructs the native runtime, whose ctor calls
@@ -67,7 +79,7 @@ public class EtModel extends BaseModel {
         // calls Module::load_forward() unconditionally, so the XNNPACK setup cost lands in load,
         // not in the first forward.
         final long loadStartNanos = System.nanoTime();
-        long handle = EtNative.loadModule(modelFile.toString(), workspaceSharingMode, false);
+        long handle = EtNative.loadModule(modelFile.toString(), workspaceSharingMode, profiling);
         EtMethodMeta meta;
         try {
             meta = EtNative.methodMeta(handle);
@@ -103,6 +115,24 @@ public class EtModel extends BaseModel {
             ((EtSymbolBlock) block).close();
         }
         super.close();
+    }
+
+    /**
+     * Finalized ETDump covering every forward since the last call, for offline analysis with
+     * ExecuTorch's Inspector.
+     *
+     * <p>Empty when this model was not loaded with {@link EtEngine#PROFILING_OPTION}, or when no
+     * forward has run since the last call. The dump grows across every forward until pulled, so a
+     * long-running profiled model should be drained periodically.
+     *
+     * @return the ETDump bytes, never null
+     */
+    public byte[] etDump() {
+        EtSymbolBlock etBlock = (EtSymbolBlock) block;
+        if (etBlock == null || etBlock.isClosed()) {
+            return new byte[0];
+        }
+        return etBlock.etDump();
     }
 
     /**
