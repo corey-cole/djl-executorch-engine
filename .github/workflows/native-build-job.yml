@@ -269,7 +269,7 @@ jobs:
       - name: Profiling tests
         shell: pwsh
         run: |
-          .\gradlew.bat test --tests 'org.measly.executorch.ProfilingIT'
+          .\gradlew.bat :test --tests 'org.measly.executorch.ProfilingIT'
           if ($LASTEXITCODE -ne 0) { throw "ProfilingIT failed (exit $LASTEXITCODE)" }
 
       # The staging sync is done in PowerShell rather than inside bash: a `bash -c` string chaining
