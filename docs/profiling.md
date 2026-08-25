@@ -46,6 +46,12 @@ fresh `byte[]` (never null):
   forward between them return equal bytes and the buffer never accumulates unboundedly.
 - Empty when the model was not loaded with `PROFILING_OPTION`, or when no forward has run since the
   last call.
+- **Threading:** pull only from the thread that owns the model, or with no forward in flight. A
+  pull concurrent with a forward races on the native dump state (`dumpFinalized`,
+  `everForwarded`, `lastDump`) and on `ETDumpGen`, which upstream does not document as
+  thread-safe; the lock `EtSymbolBlock.etDump()` takes serializes a pull against `close()` only,
+  and the forward path is deliberately lock-free. The repo's one-model-per-thread `forward()` rule
+  already implies it; the dump API makes it explicit.
 - There is no `writeEtDump(Path)` convenience — it is `Files.write(path, dump)` at the call site.
 
 The pulled bytes are a size-prefixed flatbuffer (root built with `start_as_root_with_size`, so the
@@ -71,9 +77,11 @@ test run; the 2026-08-25 radxa run on the logging runtime, where `ProfilingIT`'s
 executed and passed, is that test baseline. `windows-x86_64` was verified on the 2026-08-25 winbox
 run: the MSVC build and the full JVM suite pass on the logging variant, `ProfilingIT`'s
 devtools-absent arm executes and passes there, and the static-CRT gate holds. The pin publishes
-Windows devtools CRT rows, so provisioning is the same list edit plus a test — but a Windows
-devtools build must use `flatcc_builder_aligned_free` for the ETDump buffer: the current `etDump()`
-uses `free()`, which is correct for POSIX only (the code comment already records this).
+Windows devtools rows as of v1.4.1-3 and the CMake variant guard already accepts `devtools` there
+(only the Linux-only `bare` benchmarking build is refused), so provisioning is now truly a list
+edit plus a test — but a Windows devtools build must use `flatcc_builder_aligned_free` for the
+ETDump buffer: the current `etDump()` uses `free()`, which is correct for POSIX only (the code
+comment already records this).
 
 Requesting profiling where the capability is absent fails the load with a message identifying the
 platform's runtime as lacking the event tracer; a model loaded without the option returns an empty

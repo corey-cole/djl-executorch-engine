@@ -1,5 +1,6 @@
 package org.measly.executorch;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -68,8 +69,10 @@ class ProfilingIT {
 
             // Pulling again with no forward in between must not corrupt the builder. Upstream's
             // get_etdump_data() matches none of its guard branches once finalized, so the cached
-            // copy is what makes this safe.
-            assertEquals(four.length, etModel.etDump().length, "second pull must repeat the first");
+            // copy is what makes this safe. Content, not just length: re-running the builder's end
+            // sequence is far more likely to corrupt bytes than to change the size (Catch2 arm:
+            // REQUIRE(first == second)).
+            assertArrayEquals(four, etModel.etDump(), "second pull must repeat the first");
 
             // The forward after a pull starts a fresh dump: one Execute block, not five.
             assertEquals(5f, predictor.predict(new float[] {2f, 3f}), 1e-6);

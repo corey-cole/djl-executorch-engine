@@ -22,8 +22,6 @@ public class EtModel extends BaseModel {
 
     private static final String PTE_SUFFIX = ".pte";
 
-    private boolean profiling;
-
     EtModel(String name, NDManager manager) {
         super(name);
         this.manager = manager;
@@ -60,7 +58,6 @@ public class EtModel extends BaseModel {
                     "profiling requested but this platform's ExecuTorch runtime has no event tracer"
                             + " compiled in; profiling is not provisioned here");
         }
-        this.profiling = profiling;
         // First load seals the process-global intra-op thread pool (applies pending/property value,
         // logs the outcome); later loads are no-ops. Must precede loadModule: delegate init during
         // load submits work to the pool.
@@ -125,6 +122,14 @@ public class EtModel extends BaseModel {
      * <p>Empty when this model was not loaded with {@link EtEngine#PROFILING_OPTION}, or when no
      * forward has run since the last call. The dump grows across every forward until pulled, so a
      * long-running profiled model should be drained periodically.
+     *
+     * <p><b>Threading:</b> pull only from the thread that owns the model, or with no forward in
+     * flight. A pull concurrent with a forward races on the native runtime's
+     * {@code dumpFinalized}/{@code everForwarded}/{@code lastDump} state and on {@code ETDumpGen},
+     * which upstream does not document as thread-safe; the lock {@link EtSymbolBlock#etDump()}
+     * takes serializes a pull against {@code close()} only, and {@code forwardInternal} is
+     * deliberately lock-free. The repo's one-model-per-thread {@code forward()} rule already
+     * implies this; the dump API makes it explicit.
      *
      * @return the ETDump bytes, never null
      */

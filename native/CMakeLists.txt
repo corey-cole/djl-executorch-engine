@@ -81,7 +81,7 @@ endif()
 # resolved config and returns before any download or find_package.
 option(ET_PRINT_RESOLUTION "Print resolved runtime config and exit (host-test seam)" OFF)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/EtRuntimePin.cmake)
-set(ET_RUNTIME_VARIANT "logging" CACHE STRING "Runtime variant: logging (ship) | bare | devtools (bench)")
+set(ET_RUNTIME_VARIANT "logging" CACHE STRING "Runtime variant: logging (fallback) | bare (Linux-only bench) | devtools (shipped on linux-x86_64; platform-keyed via native/variant_select.sh)")
 set(ET_INSTALL "" CACHE PATH "Explicit ExecuTorch install prefix (escape hatch); empty => fetch the pinned tarball")
 # ET_PLATFORM is the platform IDENTITY; ET_RUNTIME_ROW is the pin-row LOOKUP KEY. They coincide on
 # Linux but not on Windows, which publishes two rows for one platform: `windows-x86_64` (/MD, dynamic
@@ -119,14 +119,15 @@ if(ET_INSTALL)
   set(_ET_RESOLVED_URL "")
 else()
   set(_ET_RESOLUTION "fetch")
-  # windows-x86_64 ships `logging` only; bare/devtools are Linux-only benchmarking builds that upstream
-  # never produced for Windows. Without this, the generic "No pin row" error below reads like a broken
-  # pin rather than a platform that never had those artifacts. Inside the fetch branch on purpose: the
-  # ET_INSTALL escape hatch consults no pin row, so the variant is irrelevant there.
-  if(ET_PLATFORM STREQUAL "windows-x86_64" AND NOT ET_RUNTIME_VARIANT STREQUAL "logging")
+  # windows-x86_64 ships `logging` and `devtools` (the pin publishes devtools Windows rows as of
+  # v1.4.1-3); `bare` remains Linux-only benchmarking that upstream never produced for Windows.
+  # Without this, the generic "No pin row" error below reads like a broken pin rather than a
+  # platform that never had those artifacts. Inside the fetch branch on purpose: the ET_INSTALL
+  # escape hatch consults no pin row, so the variant is irrelevant there.
+  if(ET_PLATFORM STREQUAL "windows-x86_64" AND ET_RUNTIME_VARIANT STREQUAL "bare")
     message(FATAL_ERROR
-      "windows-x86_64 ships the 'logging' variant only; got '${ET_RUNTIME_VARIANT}'. "
-      "bare/devtools are Linux-only (benchmarking; see native/build_variants.sh).")
+      "windows-x86_64 ships the 'logging' and 'devtools' variants only; got '${ET_RUNTIME_VARIANT}'. "
+      "bare is Linux-only benchmarking (see native/build_variants.sh).")
   endif()
   set(_ET_STEM "executorch-runtime-${ET_RUNTIME_ET_VERSION}-${ET_RUNTIME_VARIANT}-${ET_RUNTIME_ROW}")
   # The pin file's own selector: it FATAL_ERRORs on a row it does not define, so an unpublished

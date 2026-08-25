@@ -34,6 +34,12 @@ JOBS="${JOBS:-$(nproc)}"
 . "${REPO_ROOT}/native/container_env.sh"
 et_chown_outputs_on_exit "${BUILD_DIR}"
 
+# Resolve the shipped runtime variant through the shared rule (build.sh and build_qa.sh source the
+# same file). This gate must instrument the configuration that actually ships: without it the CMake
+# cache default (logging) would compile the etDump() body out -- ET_HAVE_DEVTOOLS undefined -- and
+# the get_etdump_data()/free() path this gate exists to cover would never run under UBSan.
+. "${REPO_ROOT}/native/variant_select.sh"
+
 MODE="${ET_UBSAN_MODE:-auto}"
 if [ "${MODE}" = "auto" ]; then
   if [ -n "${MEASLY_DJL_PINNED_IMAGE:-}" ]; then MODE=build; else MODE=all; fi
@@ -56,11 +62,14 @@ GRADLE_FLAGS="${GRADLE_FLAGS:---no-daemon}"
 export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
 
 if [ "${MODE}" = "build" ] || [ "${MODE}" = "all" ]; then
-  echo "--- Building the UBSan-instrumented shim ---"
+  echo "--- Building the UBSan-instrumented shim (variant ${ET_RUNTIME_VARIANT}) ---"
   rm -rf "${BUILD_DIR}"
   # No ET_BUILD_QA: that is what makes CMakeLists build the shim rather than skip it. JAVA_HOME is
-  # needed here for jni.h only -- we never link libjvm.
+  # needed here for jni.h only -- we never link libjvm. ET_RUNTIME_VARIANT is resolved above
+  # through variant_select.sh so the gate instruments the configuration that ships (devtools on
+  # linux-x86_64), not the CMake cache default.
   cmake -S native -B "${BUILD_DIR}" -G "Unix Makefiles" \
+    -DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT}" \
     -DET_UBSAN=ON -DCMAKE_BUILD_TYPE=Debug
   cmake --build "${BUILD_DIR}" --target executorch_djl -j"${JOBS}"
 

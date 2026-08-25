@@ -70,9 +70,14 @@ grep -q 'executorch-runtime-1.4.1-logging-linux-aarch64.tar.gz'   <<<"${out}" ||
 out="$(probe)"
 grep -q 'platform=linux-x86_64'                                  <<<"${out}" || fail "default platform not linux-x86_64"
 
-# windows-x86_64 has no bare/devtools pin row upstream. Fail with the real reason, not "no pin row".
+# windows-x86_64 ships logging and devtools (the pin publishes devtools Windows rows as of
+# v1.4.1-3), so devtools must resolve; `bare` has no Windows row upstream, so it must fail with
+# the real reason rather than "no pin row".
+out="$(probe -DET_PLATFORM=windows-x86_64 -DET_RUNTIME_VARIANT=devtools)"
+grep -q 'variant=devtools' <<<"${out}" || fail "windows devtools must resolve"
+grep -q 'stem=executorch-runtime-1.4.1-devtools-windows-x86_64-static' <<<"${out}" || fail "windows devtools stem wrong"
 out="$(probe_fails -DET_PLATFORM=windows-x86_64 -DET_RUNTIME_VARIANT=bare)"
-grep -q "ships the 'logging' variant only" <<<"${out}" || fail "windows+bare should fail with a named error"
+grep -q "ships the 'logging' and 'devtools' variants only" <<<"${out}" || fail "windows+bare should fail with a named error"
 
 # The escape hatch bypasses the pin entirely, so the variant constraint must NOT apply there.
 out="$(probe -DET_PLATFORM=windows-x86_64 -DET_RUNTIME_VARIANT=bare -DET_INSTALL=/tmp/my-et)"

@@ -31,26 +31,13 @@ case "$(uname -s)" in
   *)            ET_HOST_OS=linux ;;
 esac
 
-# Platform identity, mirroring build.sh's OUT_PLATFORM. The QA tree must exercise the runtime that
-# ships, so the variant is resolved from the same platform list build.sh uses (build.sh is not
-# sourceable here: set -ex, immediate PRINT_* exits). The default list is linux-x86_64, so Windows
-# and aarch64 QA fall back to logging -- unchanged behaviour there.
-if [ "${ET_HOST_OS}" = "windows" ]; then
-  OUT_PLATFORM="windows-x86_64"
-else
-  case "$(uname -m)" in
-    aarch64|arm64) OUT_PLATFORM="linux-aarch64" ;;
-    *)             OUT_PLATFORM="linux-x86_64"  ;;
-  esac
-fi
-
-ET_DEVTOOLS_SUPPORTED_PLATFORMS="${ET_DEVTOOLS_SUPPORTED_PLATFORMS-linux-x86_64}"
-if [ -z "${ET_RUNTIME_VARIANT:-}" ]; then
-  case " ${ET_DEVTOOLS_SUPPORTED_PLATFORMS} " in
-    *" ${OUT_PLATFORM} "*) ET_RUNTIME_VARIANT=devtools ;;
-    *)                      ET_RUNTIME_VARIANT=logging ;;
-  esac
-fi
+# Resolve the shipped runtime variant through the same rule build.sh and ubsan_gate.sh use -- the
+# QA tree must exercise the runtime that ships. variant_select.sh derives the platform identity
+# from the host and keys the default on ET_DEVTOOLS_SUPPORTED_PLATFORMS; build.sh is not
+# sourceable here (set -ex, immediate PRINT_* exits), so the shared helper is the single
+# definition. The default list is linux-x86_64, so Windows and aarch64 QA fall back to logging --
+# unchanged behaviour there.
+. "${BASH_SOURCE[0]%/*}/variant_select.sh"
 
 ET_ARGS=(-DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT}")
 [ -n "${ET_INSTALL:-}" ] && ET_ARGS+=(-DET_INSTALL="${ET_INSTALL}")

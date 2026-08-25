@@ -586,8 +586,12 @@ TEST_CASE("etdump: a forward after a pull starts a fresh dump, not a cumulative 
 }
 #endif  // ET_HAVE_DEVTOOLS
 
-TEST_CASE("etdump: requesting tracing without devtools fails the load") {
+// Compiled out of devtools builds entirely, like the block above: on a devtools build the load
+// succeeds, so this case could only register with zero assertions -- a passing report that proves
+// nothing. The devtools-present arm of this behaviour lives in ProfilingIT and the Catch2 cases
+// above.
 #ifndef ET_HAVE_DEVTOOLS
+TEST_CASE("etdump: requesting tracing without devtools fails the load") {
   REQUIRE_THROWS_AS(EtRuntime(ADD_PTE_PATH, -1, /*traceEvents=*/true), std::runtime_error);
-#endif
 }
+#endif

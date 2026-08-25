@@ -27,6 +27,8 @@ Writes into the current working directory:
   - mobilenet_v2_unplanned.pte  (same weights, alloc_graph_input=False: inputs are borrowed)
   - mobilenet_v2.pt   (torch.jit.trace -> torch.jit.save)  [.pt: DJL PyTorch resolves by model name]
   - versions.json     ({torch, torchvision, executorch} for reproducibility)
+  - mobilenet_v2.etrecord  (only with --etrecord: the ExecuTorch Inspector needs it to attribute
+                            runtime events to graph ops)
 
 The .pte uses the general single-tensor path, so NO model_spec.json is emitted.
 
@@ -43,7 +45,6 @@ from importlib.metadata import PackageNotFoundError, version
 import torch
 import torchvision
 from torch.export import export
-from executorch.devtools import generate_etrecord
 from executorch.exir import ExecutorchBackendConfig, to_edge_transform_and_lower
 from executorch.exir.passes import MemoryPlanningPass
 from executorch.backends.xnnpack.partition.xnnpack_partitioner import XnnpackPartitioner
@@ -79,6 +80,10 @@ def main() -> None:
     with open("mobilenet_v2.pte", "wb") as f:
         f.write(program.buffer)
     if args.etrecord:
+        # Imported here, not at module top: the default path (./gradlew :example:exportModels never
+        # passes --etrecord) must not depend on executorch.devtools importing. A broken devtools in
+        # the pinned env would otherwise take down the default export too.
+        from executorch.devtools import generate_etrecord
         generate_etrecord("mobilenet_v2.etrecord", lowered, program)
 
     # Same weights, alloc_graph_input=False: ExecuTorch borrows the input pointer
@@ -107,7 +112,8 @@ def main() -> None:
             indent=2,
         )
 
-    print("wrote mobilenet_v2.pte, mobilenet_v2_unplanned.pte, mobilenet_v2.pt, versions.json")
+    etrecord = ", mobilenet_v2.etrecord" if args.etrecord else ""
+    print(f"wrote mobilenet_v2.pte, mobilenet_v2_unplanned.pte, mobilenet_v2.pt, versions.json{etrecord}")
 
 
 if __name__ == "__main__":
