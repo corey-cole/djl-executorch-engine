@@ -261,8 +261,6 @@ is not a promise the tracer was compiled in -- upstream's etdump install rule is
 unguarded -- and BUILDINFO's event_tracer key is absent under ET_INSTALL, so
 neither is sufficient by itself.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01EigyktjCWXFw6ckATPKu23
 EOF
 )"
 ```
@@ -506,8 +504,6 @@ get_etdump_data() hands back a caller-owned allocation and leaves the builder
 finalized, where a second call would run the end sequence again -- so the copy is
 cached until the next forward, which is also when upstream resets the generator.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01EigyktjCWXFw6ckATPKu23
 EOF
 )"
 ```
@@ -576,8 +572,6 @@ etDump() copies out of a caller-owned flatcc allocation and frees it. That free
 is the most likely defect in the profiling path and LSan proves it for a few
 lines of harness code.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01EigyktjCWXFw6ckATPKu23
 EOF
 )"
 ```
@@ -702,8 +696,6 @@ feat(jni): carry the profiling flag into loadModule and return the ETDump
 etDump returns an empty array rather than null for an unprofiled model: having no
 dump is an answer, not an error.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01EigyktjCWXFw6ckATPKu23
 EOF
 )"
 ```
@@ -939,8 +931,6 @@ No JVM property counterpart, deliberately: one flag attaching a tracer to every
 model in a process would grow an unbounded buffer per model whose owner never
 pulls. The reasoning is stated in EtProfiling so it does not read as an oversight.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01EigyktjCWXFw6ckATPKu23
 EOF
 )"
 ```
@@ -1031,8 +1021,6 @@ feat(stats): report per-model profiling state in the snapshot
 A model quietly accumulating an ETDump in production is exactly what the
 monitoring surface should show.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01EigyktjCWXFw6ckATPKu23
 EOF
 )"
 ```
@@ -1209,8 +1197,6 @@ Where devtools is provisioned the dump must be well formed and must drain on
 pull; where it is not, the load must fail loudly. Each arm names itself in the
 log so a skip is never mistaken for a pass.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01EigyktjCWXFw6ckATPKu23
 EOF
 )"
 ```
@@ -1332,8 +1318,6 @@ under 0.35% steady state, so one artifact carries profiling rather than a second
 build-matrix row. The QA tree follows the shipped variant: a sanitizer gate
 against a runtime nobody ships would leave the ETDump free() unchecked.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01EigyktjCWXFw6ckATPKu23
 EOF
 )"
 ```
@@ -1398,8 +1382,6 @@ The Inspector needs it to attribute runtime events to graph ops. Off by default:
 an ETRecord embeds the program buffer and the graph modules, and this script's
 common case is producing a demo model.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01EigyktjCWXFw6ckATPKu23
 EOF
 )"
 ```
@@ -1454,8 +1436,6 @@ docs(profiling): document the option, the pull, and the Inspector procedure
 Also answers benchmarking.md's open gating question with the measured numbers,
 and corrects two platform claims that the devtools switch makes wrong.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01EigyktjCWXFw6ckATPKu23
 EOF
 )"
 ```
@@ -1514,8 +1494,6 @@ git add docs/profiling.md
 git commit -m "$(cat <<'EOF'
 docs(profiling): record the aarch64 and Windows verification outcome
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01EigyktjCWXFw6ckATPKu23
 EOF
 )"
 ```
