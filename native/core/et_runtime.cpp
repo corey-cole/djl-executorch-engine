@@ -295,9 +295,6 @@ size_t EtRuntime::stagingBytes() const {
 }
 
 ForwardResult EtRuntime::forward(std::span<const InputDesc> inputs) {
-  // A new forward re-opens the dump: upstream resets the generator on the first event block after
-  // a finalize, so the cached copy is stale from here on.
-  state_->dumpFinalized = false;
   // from_blob does not copy: for memory-planned inputs each InputDesc.data must stay valid through
   // module.forward(); for unplanned inputs the data is memcpy'd into the engine-owned staging slot
   // first, so the borrowed pointer lives as long as the RuntimeState, not the caller's buffer.
@@ -382,6 +379,10 @@ ForwardResult EtRuntime::forward(std::span<const InputDesc> inputs) {
   if (!result.ok()) {
     throw std::runtime_error("EtRuntime: forward() failed");
   }
+  // A forward that ran re-opens the dump: upstream resets the generator on the first event block
+  // after a finalize, so the cached copy is stale from here on. A forward that threw leaves the
+  // cache intact, so etDump() keeps returning the last completed dump.
+  state_->dumpFinalized = false;
   state_->everForwarded = true;
 
   auto fs = std::make_unique<ForwardState>();
