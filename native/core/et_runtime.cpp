@@ -337,27 +337,26 @@ ForwardResult EtRuntime::forward(std::span<const InputDesc> inputs) {
           std::to_string(static_cast<int>(state_->meta.inputScalarTypes[i])));
     }
 
+    // Byte count of this input; product of an empty shape is 1. Matches dtypeSize's conventions
+    // (the subset the harnesses build buffers for), so planned/unplanned classification is exact.
+    //
     // Every declared dimension must be non-negative, and their product with dtypeSize must not
-    // overflow size_t. static_cast<size_t>(d) on a negative int64_t wraps to a huge value, which
-    // can then overflow the running product below back down to something deceptively small --
-    // passing every check that follows while `shapes[i]` (assigned from the unwrapped in.shape
-    // above) still carries the original huge-or-negative dimension. from_blob would then hand
-    // ExecuTorch a tensor whose declared shape disagrees with what actually backs it (a staging
-    // slot sized off the model's real declared bound), a genuine over-read on a different axis
-    // than kStagingPadding covers. Checked here, once, for every caller alike -- the JNI shim and
-    // the native-only harnesses/tests both funnel through this one entry point.
+    // overflow size_t -- checked per-dimension, before it is folded into the running product.
+    // static_cast<size_t>(d) on a negative int64_t wraps to a huge value, which could otherwise
+    // overflow that product back down to something deceptively small -- passing every check that
+    // follows while `shapes[i]` (assigned from the unwrapped in.shape above) still carries the
+    // original huge-or-negative dimension. from_blob would then hand ExecuTorch a tensor whose
+    // declared shape disagrees with what actually backs it (a staging slot sized off the model's
+    // real declared bound), a genuine over-read on a different axis than kStagingPadding covers.
+    // Checked here, once, for every caller alike -- the JNI shim and the native-only
+    // harnesses/tests both funnel through this one entry point.
+    size_t actual = dtypeSize(in.scalarType);
     for (int64_t d : in.shape) {
       if (d < 0) {
         throw std::invalid_argument(
             "EtRuntime: input " + std::to_string(i) + nameSuffix(state_->meta, i) +
             " has a negative shape dimension (" + std::to_string(d) + ")");
       }
-    }
-
-    // Byte count of this input; product of an empty shape is 1. Matches dtypeSize's conventions
-    // (the subset the harnesses build buffers for), so planned/unplanned classification is exact.
-    size_t actual = dtypeSize(in.scalarType);
-    for (int64_t d : in.shape) {
       const size_t ud = static_cast<size_t>(d);
       if (ud != 0 && actual > SIZE_MAX / ud) {
         throw std::invalid_argument(
