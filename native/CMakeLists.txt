@@ -191,6 +191,26 @@ else()
   message(STATUS "devtools: not provisioned in this runtime (platform=${ET_PLATFORM})")
 endif()
 
+# optimized_native_cpu_ops_lib is generated upstream from merged.yaml (kernels/optimized/optimized.yaml
+# merged with kernels/portable/functions.yaml as FALLBACK_YAML — see
+# executorch/configurations/CMakeLists.txt), so it already registers every op portable_ops_lib does,
+# Eigen-backed where a specialization exists (opt_add_out, opt_log_softmax_out, ...) and the plain
+# portable kernel otherwise. It REPLACES portable_ops_lib in the link, never joins it: linking both
+# duplicates entries under the identical (name_, kernel_key_) key, which
+# operator_registry.cpp's register_kernels_internal() treats as a hard registration error —
+# ET_CHECK_MSG aborts the process at .so-load static-init time (confirmed: aten::_log_softmax.out
+# collided in ./gradlew test).
+#
+# Not every platform's tarball builds it, though: at this pin, Windows does not (issue #46 tracks
+# turning EXECUTORCH_BUILD_KERNELS_OPTIMIZED on there; a first attempt found the /MT build doesn't
+# yet compile). `if(TARGET ...)` is the established way this codebase (and upstream itself, e.g.
+# executorch/test/openvino/CMakeLists.txt) detects that, rather than branching on platform name.
+if(TARGET optimized_native_cpu_ops_lib)
+  set(ET_OPS_LIB optimized_native_cpu_ops_lib)
+else()
+  set(ET_OPS_LIB portable_ops_lib)
+endif()
+
 # --- JNIEnv-free core: shared by the .so, the units, and the leak harness ---
 add_library(et_runtime STATIC ${CMAKE_CURRENT_SOURCE_DIR}/core/et_runtime.cpp)
 target_include_directories(et_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core)
@@ -200,7 +220,7 @@ target_link_libraries(et_runtime PUBLIC
   extension_module_static
   extension_tensor
   xnnpack_backend
-  portable_ops_lib
+  ${ET_OPS_LIB}
   # Explicit, not transitive through xnnpack_backend: the core now calls
   # get_threadpool()/_unsafe_reset_threadpool itself (spec §5).
   extension_threadpool
@@ -308,6 +328,23 @@ if(NOT ET_BUILD_QA AND NOT ET_BUILD_BENCH)
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/assert_xnnpack_registered.cmake
       VERBATIM
       COMMENT "Asserting XNNPACK backend survived the link")
+
+    # Same regression shape as the XNNPACK guard above, for optimized_native_cpu_ops_lib: catches
+    # the target silently falling back out of the link (see native/CMakeLists.txt et_runtime link
+    # site and the script header for why a symbol-name check alone can't detect this one). Only
+    # meaningful when ET_OPS_LIB actually resolved to optimized_native_cpu_ops_lib -- on a platform
+    # where the runtime doesn't ship it (Windows, at this pin) the fallback to plain
+    # portable_ops_lib is expected and correct, not a regression, so the opt_*_out symbol count
+    # would legitimately be ~0 there.
+    if(ET_OPS_LIB STREQUAL "optimized_native_cpu_ops_lib")
+      add_custom_command(TARGET executorch_djl POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+          -DSO=$<TARGET_FILE:executorch_djl>
+          -DNM=${CMAKE_NM}
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/assert_optimized_ops_registered.cmake
+        VERBATIM
+        COMMENT "Asserting optimized ops kernels survived the link")
+    endif()
   endif()
 endif()
 
