@@ -15,6 +15,7 @@ using measly::et::dtypeSize;
 using measly::et::EtRuntime;
 using measly::et::InputDesc;
 using measly::et::MethodMeta;
+using measly::et::nameSuffix;
 
 // Class refs, field IDs and method IDs cached once in JNI_OnLoad. Lookups are relatively expensive
 // and FindClass is unsafe with an exception pending, so nothing here is resolved per call. The
@@ -71,16 +72,6 @@ static jclass g_illegalArgumentExceptionClass = nullptr;
 // exception is already pending (FindClass fails -> null passed to ThrowNew).
 static void throwJava(JNIEnv* env, const char* fallback, const std::exception* e) {
   env->ThrowNew(g_runtimeExceptionClass, e ? e->what() : fallback);
-}
-
-// " (name 'x')" for input i's exported tensor name, or "" when out of range or nameless. Mirrors
-// et_runtime.cpp's nameSuffix -- this shim has its own MethodMeta copy, not access to that TU's
-// static helper.
-static std::string nameSuffix(const MethodMeta& meta, size_t i) {
-  if (i >= meta.inputNames.size() || meta.inputNames[i].empty()) {
-    return "";
-  }
-  return " (name '" + meta.inputNames[i] + "')";
 }
 
 // Throw IllegalArgumentException from a JNI input check. FindClass is null-checked: it can

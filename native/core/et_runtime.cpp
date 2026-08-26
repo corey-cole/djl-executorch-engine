@@ -82,16 +82,6 @@ namespace {
 // reset guard. Guards the XNNPACK pthreadpool_t capture, so it must outlive all runtimes.
 std::atomic<bool> g_etRuntimeConstructed{false};
 
-// " (name 'x')" for input i's exported tensor name, or "" when out of range or nameless. Shared by
-// every per-input diagnostic in forward() so a mismatch is readable without a native debugging
-// session -- see MethodMeta::inputNames.
-std::string nameSuffix(const MethodMeta& meta, size_t i) {
-  if (i >= meta.inputNames.size() || meta.inputNames[i].empty()) {
-    return "";
-  }
-  return " (name '" + meta.inputNames[i] + "')";
-}
-
 // Builds the MethodMeta snapshot for the "forward" method. Same throws / -1 / 0 conventions as the
 // old EtRuntime::methodMeta() body: a non-tensor input keeps -1 / empty shape / 0.
 MethodMeta buildMethodMeta(Module& module) {
