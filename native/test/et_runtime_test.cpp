@@ -613,3 +613,58 @@ TEST_CASE("etdump: requesting tracing without devtools fails the load") {
   REQUIRE_THROWS_AS(EtRuntime(ADD_PTE_PATH, -1, /*traceEvents=*/true), std::runtime_error);
 }
 #endif
+
+// --- #71: a rank/shape mismatch at a delegated input, with the byte-count checks satisfied ---
+// Every OTHER guard in this file (dtype match, negative/overflow shape sanity, declared-byte-count
+// bound) looks only at total bytes -- none of them compares the caller's shape ARRANGEMENT against
+// what the exported, XNNPACK-delegated, statically-shaped subgraph actually expects. This closes
+// that as an open question rather than leaving it as a theoretical worry: for a statically-shaped
+// tensor, ExecuTorch's own resize_tensor (method.cpp:1240, via tensor_impl.cpp) compares the FULL
+// shape tuple -- rank AND every per-dimension value -- against what the exported graph declared,
+// and rejects any mismatch with Error::InvalidArgument before the delegate ever executes. Verified
+// across three distinct mismatch shapes and both memory-plan modes below. This is ExecuTorch's own
+// safety net, not anything this engine added -- these tests exist to prove it holds, not to guard
+// it themselves.
+//
+// What remains unverified: a genuinely DYNAMIC-shaped input (TensorInfo::nbytes() as an upper
+// bound rather than an exact value). resize_tensor is EXPECTED to accept varying shapes there --
+// that is the feature -- so a wrong-but-in-bound shape at a dynamic position would not hit this
+// same rejection path. No fixture in this repo exports a dynamic-shaped model; that sub-case is
+// still open.
+
+TEST_CASE("issue71: lin129 unplanned rejects a rank change (129 declared, fed as 3x43)") {
+  // Same total bytes (516) as the declared [129], different rank (1 -> 2).
+  EtRuntime rt(LIN129_PTE_PATH);
+  std::vector<float> x(129, 1.0f);
+  std::vector<InputDesc> inputs = {{x.data(), {3, 43}, 6}};
+  REQUIRE_THROWS_AS(rt.forward(inputs), std::runtime_error);
+}
+
+TEST_CASE("issue71: conv planned rejects a rank change (1x3x16x16 declared, fed as 4x192)") {
+  // Same total bytes (3072) as the declared [1,3,16,16], different rank (4 -> 2).
+  EtRuntime rt(CONV_PTE_PATH);
+  std::vector<float> x(1 * 3 * 16 * 16, 1.0f);
+  std::vector<InputDesc> inputs = {{x.data(), {4, 192}, 6}};
+  REQUIRE_THROWS_AS(rt.forward(inputs), std::runtime_error);
+}
+
+TEST_CASE("issue71: lin129 unplanned rejects a same-rank size mismatch (129 declared, fed as 100)") {
+  // Same rank (1), a SMALLER size that still passes the byte-count bound check on its own
+  // (100*4=400 <= the declared 129*4=516) -- the case closest to two same-rank vectors of
+  // different practical lengths swapped at the wrong position. The rank check above cannot catch
+  // this; ExecuTorch's per-dimension comparison does.
+  EtRuntime rt(LIN129_PTE_PATH);
+  std::vector<float> x(100, 1.0f);
+  std::vector<InputDesc> inputs = {{x.data(), {100}, 6}};
+  REQUIRE_THROWS_AS(rt.forward(inputs), std::runtime_error);
+}
+
+TEST_CASE("issue71: conv planned rejects permuted dims (1x3x16x16 declared, fed as 1x16x3x16)") {
+  // The most literal reading of "rank/order mismatch": same rank (4), same total bytes (768
+  // elements either way), dims 1 and 2 permuted. Confirms ExecuTorch compares the full shape
+  // tuple, not just rank or element count.
+  EtRuntime rt(CONV_PTE_PATH);
+  std::vector<float> x(1 * 3 * 16 * 16, 1.0f);
+  std::vector<InputDesc> inputs = {{x.data(), {1, 16, 3, 16}, 6}};
+  REQUIRE_THROWS_AS(rt.forward(inputs), std::runtime_error);
+}

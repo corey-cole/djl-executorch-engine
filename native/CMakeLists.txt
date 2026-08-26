@@ -356,6 +356,7 @@ if(ET_BUILD_QA)
     ADD_UNPLANNED_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/add_unplanned.pte"
     PRIM_INPUT_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/prim_input.pte"
     CONV_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/conv.pte"
+    LIN129_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/lin129.pte"
     OPENVINO_TINY_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../src/test/resources/models/openvino/openvino_tiny.pte")
   target_include_directories(et_runtime_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/jni)
 
