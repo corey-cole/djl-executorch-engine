@@ -155,6 +155,11 @@ Inspector procedure is documented in [profiling.md](profiling.md).
 
 ### Ship logging — RESOLVED 2026-07-04: ship the `logging` variant (the downloaded default)
 
+> **Superseded 2026-08-24 for the variant, not for the finding.** The measurement below stands:
+> logging's cost is real, repeatable, and confined to startup. What changed is the variant shipped —
+> the devtools measurement later in this file resolved to ship `devtools`, which is built *with*
+> logging, so the conclusion "ship with logging on" survived and only the tarball changed.
+
 Benchmarked `bare` / `logging` / `devtools` over `add.pte` (4 runs, linux-x86_64 desktop, the Release
 timing harness). Logging's cost is real, repeatable, and **confined to startup**:
 
@@ -193,10 +198,11 @@ including the current `1.4.1-3`), so it is not a logging-free comparison point i
 - Quantization recipe for the stretch comparison.
 - ~~**Profiling-overhead spike**~~ — **RESOLVED 2026-08-25: one artifact.** The
   devtools-enabled-but-not-tracing delta was negligible (+137,808 bytes of `.so`, +0.066% steady
-  state with a ±0.35% 95% CI bound); `linux-x86_64` ships a devtools runtime with profiling as a
-  per-model opt-in. See the [Profiling section](#profiling-executorch-devtools--decided-one-artifact-profiling-is-a-runtime-opt-in).
-- ~~**Ship logging or not (`EXECUTORCH_ENABLE_LOGGING`)**~~ — **RESOLVED 2026-07-04: ship logging**
-  (the `logging` variant stays the downloaded default). See [Decisions](#decisions) for the data.
+  state with a ±0.35% 95% CI bound); all three shipped platforms link a devtools runtime with
+  profiling as a per-model opt-in. See the [Profiling section](#profiling-executorch-devtools--decided-one-artifact-profiling-is-a-runtime-opt-in).
+- ~~**Ship logging or not (`EXECUTORCH_ENABLE_LOGGING`)**~~ — **RESOLVED 2026-07-04: ship logging.**
+  The shipped tarball is now `devtools` rather than `logging`, which is built *with* logging, so the
+  decision holds and only the variant changed. See [Decisions](#decisions) for the data.
 - **Harness docs for user `.pte` artifacts** *(partly addressed)* — the timing-harness binary
   already accepts a model path (`et_timing_harness <pte> [iters] [warmup]`); `bench.sh` just
   hardcodes `native/spike/add.pte`. The **MobileNetV2** benchmark has now landed as the `:example`

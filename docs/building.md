@@ -39,7 +39,8 @@ The wrapper runs the **pinned shared engine-build image** — a `manylinux_2_28`
 digest lives in `.engine-build-image` (see [Bumping the toolchain image](#bumping-the-toolchain-image)
 below) — and runs the build **inside it**, so the staged `.so` keeps its **glibc-2.28 floor**
 (RHEL8+). The image is pulled by digest, never built locally, and the first run pays the pull.
-Inside the container, CMake `FetchContent`s the pinned `logging` runtime, compiles the shim, and
+Inside the container, CMake `FetchContent`s the pinned runtime for this platform's variant
+(`devtools` on all three shipped platforms; see `native/variant_select.sh`), compiles the shim, and
 stages it into `src/main/resources/native/linux-x86_64/`. It is fast — there is no ExecuTorch
 build.
 
@@ -57,9 +58,9 @@ platform.)
 tree (e.g. one you built from source per `docs/executorch-build-notes.md`); CMake then skips the
 download.
 
-When the pinned runtime provides the first-party custom ops (the `logging` linux-x86_64 tarball
-ships an `etnp::lstm` op), the shim auto-detects the tarball's `ETNPExtras.cmake` and
-whole-archives the op in. The Windows tarball has no such extras, so the op is simply absent there.
+When the pinned runtime provides the first-party custom ops (both Linux tarballs ship an
+`etnp::lstm` op), the shim auto-detects the tarball's `ETNPExtras.cmake` and whole-archives the op
+in. The Windows tarball has no such extras, so the op is simply absent there.
 
 ### Bumping the toolchain image
 

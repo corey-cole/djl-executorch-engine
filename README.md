@@ -20,9 +20,9 @@ that work before you hand data to the translator.
 
 | Platform | Artifact | Runtime variant | QA |
 |---|---|---|---|
-| `linux-x86_64` | `libexecutorch_djl.so` | `logging` | Catch2 + leak harness under ASan + UBSan |
-| `linux-aarch64` | `libexecutorch_djl.so` | `logging` | Catch2 + leak harness under ASan + UBSan |
-| `windows-x86_64` | `executorch_djl.dll` | `logging` | Catch2 (MSVC has no LeakSanitizer) |
+| `linux-x86_64` | `libexecutorch_djl.so` | `devtools` | Catch2 + leak harness under ASan + UBSan |
+| `linux-aarch64` | `libexecutorch_djl.so` | `devtools` | Catch2 + leak harness under ASan + UBSan |
+| `windows-x86_64` | `executorch_djl.dll` | `devtools` | Catch2 (MSVC has no LeakSanitizer) |
 
 The native library ships in a per-platform classifier jar (`<artifact>-<platform>.jar`) and is extracted
 on first load to a content-addressed cache — `%LOCALAPPDATA%\executorch-djl\<sha256>\` on Windows,
