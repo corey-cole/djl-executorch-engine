@@ -9,7 +9,9 @@
 #include "et_runtime.h"
 #include "et_logging.h"
 #include "array_size_limits.h"
+#include "dtype_size.h"
 
+using measly::et::dtypeSize;
 using measly::et::EtRuntime;
 using measly::et::InputDesc;
 using measly::et::MethodMeta;
@@ -45,6 +47,7 @@ static jmethodID g_ctor = nullptr;
 
 static jclass g_etMethodMetaClass = nullptr;
 static jmethodID g_metaCtor = nullptr;
+static jclass g_stringClass = nullptr;
 
 static jclass g_byteBufferClass = nullptr;
 static jmethodID g_byteBufferWrap = nullptr;
@@ -124,8 +127,12 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   if (g_etMethodMetaClass == nullptr) {
     return JNI_ERR;
   }
-  g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I[ZJ)V");
+  g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I[ZJ[Ljava/lang/String;)V");
   if (g_metaCtor == nullptr) {
+    return JNI_ERR;
+  }
+  g_stringClass = cacheGlobalClass(env, "java/lang/String");
+  if (g_stringClass == nullptr) {
     return JNI_ERR;
   }
 
@@ -234,8 +241,20 @@ Java_org_measly_executorch_jni_EtNative_methodMeta(JNIEnv* env, jclass, jlong ha
     p[i] = meta.inputMemoryPlanned[i] ? JNI_TRUE : JNI_FALSE;
   }
   env->SetBooleanArrayRegion(planned, 0, n, p.data());
+  jobjectArray names = env->NewObjectArray(n, g_stringClass, nullptr);
+  if (names == nullptr) {
+    return nullptr;  // OOM: exception already pending
+  }
+  for (jsize i = 0; i < n; ++i) {
+    jstring name = env->NewStringUTF(meta.inputNames[i].c_str());
+    if (name == nullptr) {
+      return nullptr;  // OOM: exception already pending
+    }
+    env->SetObjectArrayElement(names, i, name);
+    env->DeleteLocalRef(name);
+  }
   return env->NewObject(g_etMethodMetaClass, g_metaCtor, static_cast<jint>(n), types, planned,
-                        static_cast<jlong>(meta.plannedArenaBytes));
+                        static_cast<jlong>(meta.plannedArenaBytes), names);
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL
@@ -286,6 +305,27 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
     if (addr == nullptr) {
       env->ThrowNew(g_illegalArgumentExceptionClass,
                     "EtTensor.data must be a direct ByteBuffer");
+      return nullptr;
+    }
+
+    // Guards the read side, not the write side: rt->forward() below sizes and pads its OWN
+    // destination (the staging slot, or ExecuTorch's memory-planned arena) correctly from the
+    // model's declared bound, but nothing before this point has ever checked that `jbuf` -- a
+    // buffer the caller built independently of that bound -- actually HAS the bytes its paired
+    // shape/dtype claim. Both the staging memcpy and ExecuTorch's own set_input copy read exactly
+    // that many bytes FROM this buffer, so an undersized one is a read past the end of JVM-owned
+    // memory, not an XNNPACK over-read: no amount of destination padding catches it, and it must be
+    // caught here, before either copy runs. GetDirectBufferCapacity is safe to call now: the
+    // GetDirectBufferAddress check above already proved this is a real direct buffer.
+    jlong cap = env->GetDirectBufferCapacity(jbuf);
+    size_t expected = dtypeSize(static_cast<int8_t>(st));
+    for (jlong d : sh) {
+      expected *= static_cast<size_t>(d);
+    }
+    if (cap < 0 || static_cast<size_t>(cap) < expected) {
+      throwIllegalArgument(env, ("EtTensor[" + std::to_string(i) + "].data has capacity " +
+                                  std::to_string(cap) + " bytes but its declared shape/dtype "
+                                  "implies " + std::to_string(expected) + " bytes").c_str());
       return nullptr;
     }
     inputs[i].data = addr;

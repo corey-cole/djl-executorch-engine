@@ -49,4 +49,22 @@ class EtMethodMetaTest {
             EtNative.destroy(handle);
         }
     }
+
+    @Test
+    void capturesInputNamesArray() {
+        // Whether a given .pte's tensors carry non-empty debug names is an export-time detail this
+        // test does not pin; what must hold regardless is that the array exists, is never null
+        // element-for-element, and lines up 1:1 with the other per-input arrays.
+        TestSupport.assumeNativeAvailable();
+        long handle = EtNative.loadModule(TestSupport.addPtePath(), -1, false);
+        try {
+            EtMethodMeta meta = EtNative.methodMeta(handle);
+            assertEquals(meta.numInputs, meta.inputNames.length);
+            for (String name : meta.inputNames) {
+                org.junit.jupiter.api.Assertions.assertNotNull(name);
+            }
+        } finally {
+            EtNative.destroy(handle);
+        }
+    }
 }

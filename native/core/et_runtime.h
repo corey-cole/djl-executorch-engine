@@ -38,6 +38,14 @@ struct MethodMeta {
   // 1 = memory-planned: ExecuTorch copies this input into its arena at set_input; 0 = borrowed
   // pointer. Non-tensor inputs are 0 (no TensorInfo exists).
   std::vector<uint8_t> inputMemoryPlanned;
+  // TensorInfo::name() per input: the exported graph's own record of what each positional input
+  // is, independent of and not validated against NDList order on the Java side. Empty string for
+  // a nameless tensor (TensorInfo::name() itself may return empty) and for a non-tensor input (no
+  // TensorInfo exists). Purely diagnostic today -- nothing matches inputs by name -- but it is
+  // what makes a positional mismatch (e.g. a source model with keyword-argument forward() whose
+  // torch.export flattening order does not match what a caller assumed) readable in an error
+  // message instead of requiring a native debugging session to notice.
+  std::vector<std::string> inputNames;
   // Declared byte count per input, from TensorInfo::nbytes() at load. Exact for a static shape,
   // an upper bound for a dynamic one; 0 for a non-tensor input. Staging slots are sized from this
   // at construction, so a slot only ever grows when an input exceeds its declared bound.
