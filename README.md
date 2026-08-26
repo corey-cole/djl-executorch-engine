@@ -49,9 +49,11 @@ dependencies {
 
 Swap `linux-x86_64` for `linux-aarch64` or `windows-x86_64` (or add several) as needed.
 
-Models lowered to the **OpenVINO** delegate need one more capability. The OpenVINO runtime is ~21 MB
-and ships as its own opt-in variant rather than inside the platform jar, so it is requested
-separately and only where it is published (`linux-x86_64`):
+Models lowered to the **OpenVINO** delegate need one more capability. The OpenVINO runtime is tens of
+megabytes and ships as its own opt-in variant rather than inside the platform jar, so it is requested
+separately — and only where a bundle is published, today `linux-x86_64` and `windows-x86_64`.
+`linux-aarch64` links the delegate but has no runtime bundle, so a model lowered to OpenVINO is
+runnable there the moment one is supplied; `EtNative.backendRegistered` is what tells the two apart:
 
 ```kotlin
 runtimeOnly("org.measly:djl-executorch-engine:<version>") {
