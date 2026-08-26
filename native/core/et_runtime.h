@@ -58,6 +58,16 @@ struct MethodMeta {
   size_t plannedArenaBytes = 0;
 };
 
+// " (name 'x')" for input i's exported tensor name, or "" when out of range or nameless. Shared by
+// every per-input diagnostic that can fire during marshalling -- EtRuntime::forward()'s own
+// exceptions and the JNI shim's, which has no access to a TU-local helper in et_runtime.cpp.
+inline std::string nameSuffix(const MethodMeta& meta, size_t i) {
+  if (i >= meta.inputNames.size() || meta.inputNames[i].empty()) {
+    return "";
+  }
+  return " (name '" + meta.inputNames[i] + "')";
+}
+
 struct ForwardState;  // pimpl
 struct RuntimeState;  // pimpl
 

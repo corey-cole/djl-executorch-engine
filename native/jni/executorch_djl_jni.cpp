@@ -15,6 +15,7 @@ using measly::et::dtypeSize;
 using measly::et::EtRuntime;
 using measly::et::InputDesc;
 using measly::et::MethodMeta;
+using measly::et::nameSuffix;
 
 // Class refs, field IDs and method IDs cached once in JNI_OnLoad. Lookups are relatively expensive
 // and FindClass is unsafe with an exception pending, so nothing here is resolved per call. The
@@ -265,6 +266,9 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
     return nullptr;
   }
   auto* rt = reinterpret_cast<EtRuntime*>(handle);
+  // Only used to name the input in the capacity-check diagnostic below; a plain accessor over
+  // already-captured members (see EtRuntime::methodMeta()), not a re-parse of the model.
+  const MethodMeta meta = rt->methodMeta();
 
   jsize nIn = env->GetArrayLength(jinputs);
   std::vector<InputDesc> inputs(nIn);
@@ -323,7 +327,8 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
       expected *= static_cast<size_t>(d);
     }
     if (cap < 0 || static_cast<size_t>(cap) < expected) {
-      throwIllegalArgument(env, ("EtTensor[" + std::to_string(i) + "].data has capacity " +
+      throwIllegalArgument(env, ("EtTensor[" + std::to_string(i) + "]" +
+                                  nameSuffix(meta, static_cast<size_t>(i)) + ".data has capacity " +
                                   std::to_string(cap) + " bytes but its declared shape/dtype "
                                   "implies " + std::to_string(expected) + " bytes").c_str());
       return nullptr;

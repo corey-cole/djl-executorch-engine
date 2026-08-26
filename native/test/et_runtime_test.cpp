@@ -304,6 +304,24 @@ TEST_CASE("forward: an input past its declared bound is rejected before the stag
   REQUIRE(guard.stagedInputCount() == 0);  // rejected before the memcpy
 }
 
+TEST_CASE("forward: a negative shape dimension is rejected before any size arithmetic") {
+  // static_cast<size_t>(-1) wraps to a huge value; caught before it can feed the byte-count
+  // multiplication at all, so this is a distinct guard from the overflow test below.
+  EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
+  float a = 2.0f, b = 3.0f;
+  std::vector<InputDesc> inputs = {{&a, {-1}, 6}, {&b, {1}, 6}};
+  REQUIRE_THROWS_AS(rt.forward(inputs), std::invalid_argument);
+}
+
+TEST_CASE("forward: a shape whose byte count overflows size_t is rejected") {
+  // A single INT64_MAX dimension times dtypeSize(FLOAT32)=4 overflows size_t on any platform this
+  // engine ships on (all 64-bit); must be caught rather than silently wrapping to something small.
+  EtRuntime rt(ADD_UNPLANNED_PTE_PATH);
+  float a = 2.0f, b = 3.0f;
+  std::vector<InputDesc> inputs = {{&a, {INT64_MAX}, 6}, {&b, {1}, 6}};
+  REQUIRE_THROWS_AS(rt.forward(inputs), std::invalid_argument);
+}
+
 TEST_CASE("forward: the declared-bound check applies to planned inputs too") {
   // ExecuTorch would catch this one on its own (it copies planned inputs itself, after validating),
   // but the diagnostic should not depend on which memory-plan mode the .pte happens to be in.
