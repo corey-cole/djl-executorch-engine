@@ -1,6 +1,7 @@
 #include "et_runtime.h"
 
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -80,6 +81,16 @@ namespace {
 // Set once any EtRuntime has been constructed (even by a throwing ctor); read by the intra-op
 // reset guard. Guards the XNNPACK pthreadpool_t capture, so it must outlive all runtimes.
 std::atomic<bool> g_etRuntimeConstructed{false};
+
+// " (name 'x')" for input i's exported tensor name, or "" when out of range or nameless. Shared by
+// every per-input diagnostic in forward() so a mismatch is readable without a native debugging
+// session -- see MethodMeta::inputNames.
+std::string nameSuffix(const MethodMeta& meta, size_t i) {
+  if (i >= meta.inputNames.size() || meta.inputNames[i].empty()) {
+    return "";
+  }
+  return " (name '" + meta.inputNames[i] + "')";
+}
 
 // Builds the MethodMeta snapshot for the "forward" method. Same throws / -1 / 0 conventions as the
 // old EtRuntime::methodMeta() body: a non-tensor input keeps -1 / empty shape / 0.
@@ -320,16 +331,40 @@ ForwardResult EtRuntime::forward(std::span<const InputDesc> inputs) {
     if (i < state_->meta.inputScalarTypes.size() &&
         in.scalarType != state_->meta.inputScalarTypes[i]) {
       throw std::invalid_argument(
-          "EtRuntime: input " + std::to_string(i) + " has ScalarType " +
-          std::to_string(static_cast<int>(in.scalarType)) + " but the model declares " +
+          "EtRuntime: input " + std::to_string(i) + nameSuffix(state_->meta, i) +
+          " has ScalarType " + std::to_string(static_cast<int>(in.scalarType)) +
+          " but the model declares " +
           std::to_string(static_cast<int>(state_->meta.inputScalarTypes[i])));
+    }
+
+    // Every declared dimension must be non-negative, and their product with dtypeSize must not
+    // overflow size_t. static_cast<size_t>(d) on a negative int64_t wraps to a huge value, which
+    // can then overflow the running product below back down to something deceptively small --
+    // passing every check that follows while `shapes[i]` (assigned from the unwrapped in.shape
+    // above) still carries the original huge-or-negative dimension. from_blob would then hand
+    // ExecuTorch a tensor whose declared shape disagrees with what actually backs it (a staging
+    // slot sized off the model's real declared bound), a genuine over-read on a different axis
+    // than kStagingPadding covers. Checked here, once, for every caller alike -- the JNI shim and
+    // the native-only harnesses/tests both funnel through this one entry point.
+    for (int64_t d : in.shape) {
+      if (d < 0) {
+        throw std::invalid_argument(
+            "EtRuntime: input " + std::to_string(i) + nameSuffix(state_->meta, i) +
+            " has a negative shape dimension (" + std::to_string(d) + ")");
+      }
     }
 
     // Byte count of this input; product of an empty shape is 1. Matches dtypeSize's conventions
     // (the subset the harnesses build buffers for), so planned/unplanned classification is exact.
     size_t actual = dtypeSize(in.scalarType);
     for (int64_t d : in.shape) {
-      actual *= static_cast<size_t>(d);
+      const size_t ud = static_cast<size_t>(d);
+      if (ud != 0 && actual > SIZE_MAX / ud) {
+        throw std::invalid_argument(
+            "EtRuntime: input " + std::to_string(i) + nameSuffix(state_->meta, i) +
+            "'s shape overflows when computing its byte count");
+      }
+      actual *= ud;
     }
 
     // The declared bound is the only thing that makes `actual` safe to act on: it is derived from
@@ -342,8 +377,9 @@ ForwardResult EtRuntime::forward(std::span<const InputDesc> inputs) {
     // both cases. Every declared input has a bound: the constructor rejects non-tensor inputs.
     if (i < state_->meta.inputNbytes.size() && actual > state_->meta.inputNbytes[i]) {
       throw std::invalid_argument(
-          "EtRuntime: input " + std::to_string(i) + " is " + std::to_string(actual) +
-          " bytes but the model declares at most " + std::to_string(state_->meta.inputNbytes[i]));
+          "EtRuntime: input " + std::to_string(i) + nameSuffix(state_->meta, i) + " is " +
+          std::to_string(actual) + " bytes but the model declares at most " +
+          std::to_string(state_->meta.inputNbytes[i]));
     }
 
     const void* blob = in.data;

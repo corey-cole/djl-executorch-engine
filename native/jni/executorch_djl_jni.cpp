@@ -73,6 +73,16 @@ static void throwJava(JNIEnv* env, const char* fallback, const std::exception* e
   env->ThrowNew(g_runtimeExceptionClass, e ? e->what() : fallback);
 }
 
+// " (name 'x')" for input i's exported tensor name, or "" when out of range or nameless. Mirrors
+// et_runtime.cpp's nameSuffix -- this shim has its own MethodMeta copy, not access to that TU's
+// static helper.
+static std::string nameSuffix(const MethodMeta& meta, size_t i) {
+  if (i >= meta.inputNames.size() || meta.inputNames[i].empty()) {
+    return "";
+  }
+  return " (name '" + meta.inputNames[i] + "')";
+}
+
 // Throw IllegalArgumentException from a JNI input check. FindClass is null-checked: it can
 // fail only when an exception is already pending, and that pending exception propagates instead.
 static void throwIllegalArgument(JNIEnv* env, const char* msg) {
@@ -265,6 +275,9 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
     return nullptr;
   }
   auto* rt = reinterpret_cast<EtRuntime*>(handle);
+  // Only used to name the input in the capacity-check diagnostic below; a plain accessor over
+  // already-captured members (see EtRuntime::methodMeta()), not a re-parse of the model.
+  const MethodMeta meta = rt->methodMeta();
 
   jsize nIn = env->GetArrayLength(jinputs);
   std::vector<InputDesc> inputs(nIn);
@@ -323,7 +336,8 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
       expected *= static_cast<size_t>(d);
     }
     if (cap < 0 || static_cast<size_t>(cap) < expected) {
-      throwIllegalArgument(env, ("EtTensor[" + std::to_string(i) + "].data has capacity " +
+      throwIllegalArgument(env, ("EtTensor[" + std::to_string(i) + "]" +
+                                  nameSuffix(meta, static_cast<size_t>(i)) + ".data has capacity " +
                                   std::to_string(cap) + " bytes but its declared shape/dtype "
                                   "implies " + std::to_string(expected) + " bytes").c_str());
       return nullptr;

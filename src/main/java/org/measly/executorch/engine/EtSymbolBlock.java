@@ -90,7 +90,7 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
             int st = EtDataTypes.toScalarType(et.getDataType());
             if (st != meta.inputScalarTypes[i]) {
                 throw new IllegalArgumentException(
-                        "Input " + i + " dtype " + et.getDataType()
+                        "Input " + i + nameSuffix(i) + " dtype " + et.getDataType()
                                 + " != model's expected ScalarType " + meta.inputScalarTypes[i]);
             }
             ByteBuffer buf = et.toByteBuffer();
@@ -116,6 +116,21 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
             ret.add(target.wrap(t.data, new Shape(t.shape), dt));
         }
         return ret;
+    }
+
+    /**
+     * {@code " (name 'x')"} for input {@code i}'s exported tensor name, or {@code ""} when out of
+     * range or nameless. Purely diagnostic -- nothing matches inputs by name -- but it is what
+     * makes a positional mismatch (e.g. a source model with keyword-argument {@code forward()}
+     * whose export flattening order does not match {@code NDList} order) readable in an error
+     * message instead of requiring a native debugging session to notice.
+     */
+    private String nameSuffix(int i) {
+        if (meta.inputNames == null || i >= meta.inputNames.length
+                || meta.inputNames[i] == null || meta.inputNames[i].isEmpty()) {
+            return "";
+        }
+        return " (name '" + meta.inputNames[i] + "')";
     }
 
     @Override
