@@ -130,8 +130,12 @@ build-flag delta at all and prints `warm_mean_ms=0.001` for every variant.
 
 **Decision: one artifact.** 138 KB and a bounded-under-0.35% steady-state cost do not justify a
 second build-matrix row, a second staging path, and a `LibUtils` selection rule. Profiling ships as
-a per-model runtime opt-in on the `linux-x86_64` artifact, gated on the `devtoolsAvailable()`
-capability query (`linux-aarch64` and `windows-x86_64` are not provisioned yet, not "unsupported").
+a per-model runtime opt-in on the shipped artifact, gated on the `devtoolsAvailable()` capability
+query rather than on a platform name. (This measurement provisioned `linux-x86_64` only;
+`linux-aarch64` and `windows-x86_64` followed once each was verified on real hardware, so all three
+now ship a devtools runtime — see [profiling.md](profiling.md) for the per-platform evidence. The
+one-artifact decision held for each of them, and the capability query is what made extending it a
+list edit rather than a redesign.)
 Note the boundary the measurement drew: attaching a tracer costs **real per-forward time** that was
 deliberately not measured here — which is exactly why the option is opt-in per model. The
 cross-cutting touch points this decision resolved: the build ships one devtools-enabled artifact on
