@@ -10,11 +10,21 @@
 #include <malloc.h>
 #endif
 
+#include <xnnpack.h>
+
 namespace measly::et {
 
-// XNNPACK's documented max out-of-bounds read allowance (xnnpack.h:24-32, XNN_EXTRA_BYTES = 16 x86/ARM, 128 Hexagon).
-// Delegate-internal header, not on our include path — hardcode the maximum with this comment.
+// XNN_EXTRA_BYTES (16 x86/ARM, 128 Hexagon) is XNNPACK's documented max out-of-bounds read past a
+// tensor's declared end; doubled here per ExecuTorch's own vendored runtime.c, which sizes its
+// XNNPACK arena with "mem_arena_size += 2 * XNN_EXTRA_BYTES" and comments "sparse microkernels can
+// read up to 2 * XNN_EXTRA_BYTES beyond array bounds". This shim never defines XNN_ARCH_HEXAGON, so
+// XNN_EXTRA_BYTES always resolves to 16 here -- the static_assert below proves that rather than
+// assuming it, and re-fires if a future pin ever grows the constant past what 128 covers.
 inline constexpr size_t kStagingPadding = 128;
+static_assert(kStagingPadding >= 2 * XNN_EXTRA_BYTES,
+              "kStagingPadding no longer covers XNNPACK's documented over-read "
+              "(XNN_EXTRA_BYTES, doubled for sparse microkernels per ExecuTorch's runtime.c) -- "
+              "bump kStagingPadding before shipping this pin");
 
 namespace detail {
 inline void* stagingAlloc(size_t size) {
