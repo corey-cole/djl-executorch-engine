@@ -25,19 +25,34 @@ public final class EtMethodMeta {
     public final long plannedArenaBytes;
 
     /**
+     * Per-input tensor name from the exported graph (ExecuTorch {@code TensorInfo::name()}),
+     * independent of and never validated against the order a caller assembles its {@code NDList}
+     * in. Empty string for a nameless tensor or a non-tensor input. Purely diagnostic: nothing in
+     * this engine matches inputs by name, so a positional mismatch between what a caller assumes
+     * and what the exported graph actually expects (e.g. a source model whose {@code forward()}
+     * takes keyword arguments, where {@code torch.export}'s flattening order need not match call
+     * order) is not caught here, but this is what makes such a mismatch readable in a diagnostic
+     * instead of requiring a native debugging session. Treat as read-only.
+     */
+    public final String[] inputNames;
+
+    /**
      * @param numInputs number of declared inputs
      * @param inputScalarTypes per-input ScalarType code, {@code -1} for a non-tensor input
      * @param inputMemoryPlanned per-input memory-planned flag
      * @param plannedArenaBytes ExecuTorch's planned activation arena in bytes
+     * @param inputNames per-input tensor name from the exported graph, {@code ""} if nameless
      */
     public EtMethodMeta(
             int numInputs,
             int[] inputScalarTypes,
             boolean[] inputMemoryPlanned,
-            long plannedArenaBytes) {
+            long plannedArenaBytes,
+            String[] inputNames) {
         this.numInputs = numInputs;
         this.inputScalarTypes = inputScalarTypes;
         this.inputMemoryPlanned = inputMemoryPlanned;
         this.plannedArenaBytes = plannedArenaBytes;
+        this.inputNames = inputNames;
     }
 }

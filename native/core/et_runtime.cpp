@@ -95,6 +95,7 @@ MethodMeta buildMethodMeta(Module& module) {
   out.inputShapes.resize(n);           // non-tensor inputs keep empty
   out.inputMemoryPlanned.resize(n, 0); // non-tensor inputs keep 0 (no TensorInfo exists)
   out.inputNbytes.resize(n, 0);        // non-tensor inputs keep 0
+  out.inputNames.resize(n);            // non-tensor inputs keep "" (default-constructed)
   // memory_planned_buffer_size returns Result<int64_t>; a failing entry contributes nothing rather
   // than failing the whole load, because an unreadable arena size must never break model loading.
   size_t arena = 0;
@@ -113,6 +114,7 @@ MethodMeta buildMethodMeta(Module& module) {
       out.inputShapes[i].assign(sizes.begin(), sizes.end());
       out.inputMemoryPlanned[i] = info->is_memory_planned() ? 1 : 0;
       out.inputNbytes[i] = info->nbytes();
+      out.inputNames[i] = std::string(info->name());
     }
   }
   return out;

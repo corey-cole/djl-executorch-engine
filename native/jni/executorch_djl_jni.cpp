@@ -47,6 +47,7 @@ static jmethodID g_ctor = nullptr;
 
 static jclass g_etMethodMetaClass = nullptr;
 static jmethodID g_metaCtor = nullptr;
+static jclass g_stringClass = nullptr;
 
 static jclass g_byteBufferClass = nullptr;
 static jmethodID g_byteBufferWrap = nullptr;
@@ -126,8 +127,12 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   if (g_etMethodMetaClass == nullptr) {
     return JNI_ERR;
   }
-  g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I[ZJ)V");
+  g_metaCtor = env->GetMethodID(g_etMethodMetaClass, "<init>", "(I[I[ZJ[Ljava/lang/String;)V");
   if (g_metaCtor == nullptr) {
+    return JNI_ERR;
+  }
+  g_stringClass = cacheGlobalClass(env, "java/lang/String");
+  if (g_stringClass == nullptr) {
     return JNI_ERR;
   }
 
@@ -236,8 +241,20 @@ Java_org_measly_executorch_jni_EtNative_methodMeta(JNIEnv* env, jclass, jlong ha
     p[i] = meta.inputMemoryPlanned[i] ? JNI_TRUE : JNI_FALSE;
   }
   env->SetBooleanArrayRegion(planned, 0, n, p.data());
+  jobjectArray names = env->NewObjectArray(n, g_stringClass, nullptr);
+  if (names == nullptr) {
+    return nullptr;  // OOM: exception already pending
+  }
+  for (jsize i = 0; i < n; ++i) {
+    jstring name = env->NewStringUTF(meta.inputNames[i].c_str());
+    if (name == nullptr) {
+      return nullptr;  // OOM: exception already pending
+    }
+    env->SetObjectArrayElement(names, i, name);
+    env->DeleteLocalRef(name);
+  }
   return env->NewObject(g_etMethodMetaClass, g_metaCtor, static_cast<jint>(n), types, planned,
-                        static_cast<jlong>(meta.plannedArenaBytes));
+                        static_cast<jlong>(meta.plannedArenaBytes), names);
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL
