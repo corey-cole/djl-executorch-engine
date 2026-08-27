@@ -214,7 +214,10 @@ EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode, bool 
   // Duplicated by the Java layer deliberately: EtNative is public and bypasses EtModel, and our own
   // tests call it directly.
   auto etMeta = state_->module.method_meta("forward");
-  if (etMeta.ok() && etMeta->uses_backend("OpenvinoBackend")) {
+  const bool etMetaOk = etMeta.ok();
+  const bool usesOpenvino = etMetaOk && etMeta->uses_backend("OpenvinoBackend");
+  const bool usesXnnpack = etMetaOk && etMeta->uses_backend("XnnpackBackend");
+  if (usesOpenvino) {
     if (!isBackendAvailable("OpenvinoBackend")) {
       throw std::runtime_error(
           "This .pte uses the OpenvinoBackend delegate, which this build does not provide. "
@@ -264,12 +267,11 @@ EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode, bool 
   // Mirrors the OpenVINO-availability guard above: catch a load that cannot possibly succeed as
   // an ordinary exception here, rather than as a process-fatal crash (XNNPACK) or a late, opaque
   // one (OpenVINO) further down the call chain.
-  if (etMeta.ok() &&
-      (etMeta->uses_backend("XnnpackBackend") || etMeta->uses_backend("OpenvinoBackend"))) {
+  if (usesXnnpack || usesOpenvino) {
     for (size_t i = 0; i < etMeta->num_outputs(); ++i) {
       auto outputInfo = etMeta->output_tensor_meta(i);
       if (outputInfo.ok() && !outputInfo->is_memory_planned()) {
-        if (etMeta->uses_backend("XnnpackBackend")) {
+        if (usesXnnpack) {
           throw std::runtime_error(
               "This .pte was exported with MemoryPlanningPass(alloc_graph_output=False) and uses "
               "the XnnpackBackend delegate. That combination reliably crashes inside XNNPACK "
