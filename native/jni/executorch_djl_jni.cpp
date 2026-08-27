@@ -14,6 +14,11 @@ using measly::et::EtRuntime;
 using measly::et::InputDesc;
 using measly::et::MethodMeta;
 
+// jlong is JNI's 64-bit signed integer type on every real JVM; int64_t is the C++ standard's.
+// Several hot-path shape conversions below reinterpret one as the other to avoid a redundant
+// temporary buffer and element-wise copy loop -- safe only because they're layout-identical.
+static_assert(sizeof(jlong) == sizeof(int64_t), "jlong/int64_t size mismatch");
+
 // Class refs, field IDs and method IDs cached once in JNI_OnLoad. Lookups are relatively expensive
 // and FindClass is unsafe with an exception pending, so nothing here is resolved per call. The
 // jclass values are global refs (see cacheGlobalClass) because a local ref would not survive the
@@ -294,9 +299,11 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
     jobject jbuf = env->GetObjectField(jt, g_fData);
 
     jsize nd = env->GetArrayLength(jshape);
-    std::vector<jlong> sh(nd);
-    env->GetLongArrayRegion(jshape, 0, nd, sh.data());
-    inputs[i].shape.assign(sh.begin(), sh.end());
+    // jlong and int64_t are both exactly 64-bit signed integers on every JVM (see the static_assert
+    // near the top of this file), so GetLongArrayRegion can write straight into InputDesc::shape --
+    // no temporary jlong buffer and no second element-wise copy needed.
+    inputs[i].shape.resize(static_cast<size_t>(nd));
+    env->GetLongArrayRegion(jshape, 0, nd, reinterpret_cast<jlong*>(inputs[i].shape.data()));
     inputs[i].scalarType = static_cast<int8_t>(st);
 
     void* addr = env->GetDirectBufferAddress(jbuf);
@@ -340,13 +347,10 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
       if (jshape == nullptr) {
         return nullptr;  // OOM: exception already pending
       }
-      {
-        std::vector<jlong> sh(ndim);
-        for (jsize k = 0; k < ndim; ++k) {
-          sh[k] = static_cast<jlong>(v.shape[k]);
-        }
-        env->SetLongArrayRegion(jshape, 0, ndim, sh.data());
-      }
+      // v.shape is int64_t, layout-identical to jlong (see the static_assert near the top of this
+      // file) -- no temporary jlong buffer or per-element conversion loop needed.
+      env->SetLongArrayRegion(jshape, 0, ndim,
+                               reinterpret_cast<const jlong*>(v.shape.data()));
       jsize nbytes = static_cast<jsize>(v.nbytes);
       jbyteArray jbytes = env->NewByteArray(nbytes);
       if (jbytes == nullptr) {
