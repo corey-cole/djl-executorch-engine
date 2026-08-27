@@ -95,6 +95,31 @@ public final class EtNative {
     public static native EtTensor[] forward(long handle, EtTensor[] inputs);
 
     /**
+     * SPIKE (branch {@code spike/flat-array-forward}): struct-of-arrays twin of {@link
+     * #forward(long, EtTensor[])}, prototyping whether cutting per-input JNI call count is worth
+     * the API complexity. Not wired into {@code EtSymbolBlock} or any supported path -- exercised
+     * only by a benchmark test, for an A/B measurement against the array-of-{@code EtTensor} form.
+     * Delete this method (and its JNI implementation) if the spike doesn't pan out.
+     *
+     * @param handle the native handle
+     * @param flatShapes every input's shape dimensions concatenated, outermost-first within each
+     *     input, inputs in position order
+     * @param shapeOffsets length {@code buffers.length + 1}; input {@code i}'s dimensions are
+     *     {@code flatShapes[shapeOffsets[i] .. shapeOffsets[i+1])}
+     * @param scalarTypes one ExecuTorch {@code ScalarType} code per input, in position order
+     * @param buffers one direct {@link java.nio.ByteBuffer} per input, in position order
+     * @return one {@link EtTensor} per model output, each a heap-buffer single copy out of
+     *     ExecuTorch's arena
+     * @throws IllegalStateException if {@code handle} is 0, i.e. the model has been closed
+     */
+    public static native EtTensor[] forwardFlat(
+            long handle,
+            long[] flatShapes,
+            int[] shapeOffsets,
+            int[] scalarTypes,
+            java.nio.ByteBuffer[] buffers);
+
+    /**
      * Releases the native module and its arena. Idempotent on the Java side is not guaranteed;
      * callers must not pass this handle to any other native method afterward.
      *

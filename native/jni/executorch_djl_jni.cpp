@@ -260,6 +260,64 @@ Java_org_measly_executorch_jni_EtNative_methodMeta(JNIEnv* env, jclass, jlong ha
                         static_cast<jlong>(meta.plannedArenaBytes), names);
 }
 
+// Shared by forward() and the forwardFlat() spike: runs rt->forward(inputs) and marshals the
+// result into a fresh EtTensor[]. Returns nullptr with a pending exception on any failure.
+static jobjectArray runForwardAndBuildOutputs(JNIEnv* env, EtRuntime* rt,
+                                               std::span<const InputDesc> inputs) {
+  try {
+    auto result = rt->forward(inputs);
+    auto outs = result.outputs();
+    jsize nOut = static_cast<jsize>(outs.size());
+    jobjectArray jout = env->NewObjectArray(nOut, g_etTensorClass, nullptr);
+    if (jout == nullptr) {
+      return nullptr;  // OOM: exception already pending
+    }
+
+    for (jsize i = 0; i < nOut; ++i) {
+      const auto& v = outs[i];
+      if (measly::et::exceedsJniByteArrayLimit(v.nbytes)) {
+        throwJava(env, "ExecuTorch output exceeds the 2GB JNI array limit", nullptr);
+        return nullptr;
+      }
+      jsize ndim = static_cast<jsize>(v.shape.size());
+      jlongArray jshape = env->NewLongArray(ndim);
+      if (jshape == nullptr) {
+        return nullptr;  // OOM: exception already pending
+      }
+      // v.shape is int64_t, layout-identical to jlong (see the static_assert near the top of this
+      // file) -- no temporary jlong buffer or per-element conversion loop needed.
+      env->SetLongArrayRegion(jshape, 0, ndim,
+                               reinterpret_cast<const jlong*>(v.shape.data()));
+      jsize nbytes = static_cast<jsize>(v.nbytes);
+      jbyteArray jbytes = env->NewByteArray(nbytes);
+      if (jbytes == nullptr) {
+        return nullptr;  // OOM: exception already pending
+      }
+      env->SetByteArrayRegion(jbytes, 0, nbytes, reinterpret_cast<const jbyte*>(v.data));
+      jobject jbuf = env->CallStaticObjectMethod(g_byteBufferClass, g_byteBufferWrap, jbytes);
+      if (env->ExceptionCheck()) {
+        return nullptr;  // ByteBuffer.wrap failed; exception pending
+      }
+
+      jobject obj = env->NewObject(g_etTensorClass, g_ctor, jshape,
+                                   static_cast<jint>(v.scalarType), jbuf);
+      if (obj == nullptr) {
+        return nullptr;  // OOM: exception already pending
+      }
+      env->SetObjectArrayElement(jout, i, obj);
+
+      env->DeleteLocalRef(jshape);
+      env->DeleteLocalRef(jbytes);
+      env->DeleteLocalRef(jbuf);
+      env->DeleteLocalRef(obj);
+    }
+    return jout;
+  } catch (const std::exception& e) {
+    throwJava(env, "ExecuTorch forward() failed", &e);
+    return nullptr;
+  }
+}
+
 extern "C" JNIEXPORT jobjectArray JNICALL
 Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handle,
                                                 jobjectArray jinputs) {
@@ -327,58 +385,61 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
     env->DeleteLocalRef(jt);
   }
 
-  try {
-    auto result = rt->forward(inputs);
-    auto outs = result.outputs();
-    jsize nOut = static_cast<jsize>(outs.size());
-    jobjectArray jout = env->NewObjectArray(nOut, g_etTensorClass, nullptr);
-    if (jout == nullptr) {
-      return nullptr;  // OOM: exception already pending
-    }
+  return runForwardAndBuildOutputs(env, rt, inputs);
+}
 
-    for (jsize i = 0; i < nOut; ++i) {
-      const auto& v = outs[i];
-      if (measly::et::exceedsJniByteArrayLimit(v.nbytes)) {
-        throwJava(env, "ExecuTorch output exceeds the 2GB JNI array limit", nullptr);
-        return nullptr;
-      }
-      jsize ndim = static_cast<jsize>(v.shape.size());
-      jlongArray jshape = env->NewLongArray(ndim);
-      if (jshape == nullptr) {
-        return nullptr;  // OOM: exception already pending
-      }
-      // v.shape is int64_t, layout-identical to jlong (see the static_assert near the top of this
-      // file) -- no temporary jlong buffer or per-element conversion loop needed.
-      env->SetLongArrayRegion(jshape, 0, ndim,
-                               reinterpret_cast<const jlong*>(v.shape.data()));
-      jsize nbytes = static_cast<jsize>(v.nbytes);
-      jbyteArray jbytes = env->NewByteArray(nbytes);
-      if (jbytes == nullptr) {
-        return nullptr;  // OOM: exception already pending
-      }
-      env->SetByteArrayRegion(jbytes, 0, nbytes, reinterpret_cast<const jbyte*>(v.data));
-      jobject jbuf = env->CallStaticObjectMethod(g_byteBufferClass, g_byteBufferWrap, jbytes);
-      if (env->ExceptionCheck()) {
-        return nullptr;  // ByteBuffer.wrap failed; exception pending
-      }
-
-      jobject obj = env->NewObject(g_etTensorClass, g_ctor, jshape,
-                                   static_cast<jint>(v.scalarType), jbuf);
-      if (obj == nullptr) {
-        return nullptr;  // OOM: exception already pending
-      }
-      env->SetObjectArrayElement(jout, i, obj);
-
-      env->DeleteLocalRef(jshape);
-      env->DeleteLocalRef(jbytes);
-      env->DeleteLocalRef(jbuf);
-      env->DeleteLocalRef(obj);
-    }
-    return jout;
-  } catch (const std::exception& e) {
-    throwJava(env, "ExecuTorch forward() failed", &e);
+// SPIKE (branch spike/flat-array-forward): struct-of-arrays twin of the forward() above. See
+// EtNative.forwardFlat's javadoc. Not called from any supported path.
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_org_measly_executorch_jni_EtNative_forwardFlat(JNIEnv* env, jclass, jlong handle,
+                                                     jlongArray jFlatShapes,
+                                                     jintArray jShapeOffsets,
+                                                     jintArray jScalarTypes,
+                                                     jobjectArray jBuffers) {
+  if (handle == 0) {
+    throwIllegalState(env, "forwardFlat() on a closed ExecuTorch model (native handle is 0)");
     return nullptr;
   }
+  auto* rt = reinterpret_cast<EtRuntime*>(handle);
+
+  jsize nIn = env->GetArrayLength(jBuffers);
+
+  // Shapes and scalar types read ONCE, in full -- this is the whole point of the spike: replacing
+  // per-input GetObjectField/GetArrayLength/GetLongArrayRegion with O(1) total array reads.
+  jsize totalDims = env->GetArrayLength(jFlatShapes);
+  std::vector<jlong> flatShapes(static_cast<size_t>(totalDims));
+  env->GetLongArrayRegion(jFlatShapes, 0, totalDims, flatShapes.data());
+  std::vector<jint> offsets(static_cast<size_t>(nIn) + 1);
+  env->GetIntArrayRegion(jShapeOffsets, 0, nIn + 1, offsets.data());
+  std::vector<jint> scalarTypes(static_cast<size_t>(nIn));
+  env->GetIntArrayRegion(jScalarTypes, 0, nIn, scalarTypes.data());
+
+  std::vector<InputDesc> inputs(nIn);
+  for (jsize i = 0; i < nIn; ++i) {
+    jobject jbuf = env->GetObjectArrayElement(jBuffers, i);
+    if (jbuf == nullptr) {
+      throwIllegalArgument(env, ("buffers[" + std::to_string(i) + "] is null").c_str());
+      return nullptr;
+    }
+    void* addr = env->GetDirectBufferAddress(jbuf);
+    if (addr == nullptr) {
+      env->ThrowNew(g_illegalArgumentExceptionClass, "buffers[i] must be a direct ByteBuffer");
+      return nullptr;
+    }
+    // jlong and int64_t are layout-identical (see the static_assert near the top of this file):
+    // assign straight out of the already-read flatShapes buffer, no further conversion.
+    const jint start = offsets[static_cast<size_t>(i)];
+    const jint end = offsets[static_cast<size_t>(i) + 1];
+    inputs[i].shape.assign(
+        reinterpret_cast<const int64_t*>(flatShapes.data()) + start,
+        reinterpret_cast<const int64_t*>(flatShapes.data()) + end);
+    inputs[i].scalarType = static_cast<int8_t>(scalarTypes[static_cast<size_t>(i)]);
+    inputs[i].data = addr;
+
+    env->DeleteLocalRef(jbuf);
+  }
+
+  return runForwardAndBuildOutputs(env, rt, inputs);
 }
 
 // Frees the runtime and its arena. A handle of 0 is safe -- `delete` on a null pointer is a defined
