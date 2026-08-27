@@ -31,10 +31,12 @@ class EtNativeErrorContractTest {
             // Heap ByteBuffer: GetDirectBufferAddress returns null, exercising the exact
             // forward() data-site check that issue #12 fixes.
             EtTensor tensor = new EtTensor(new long[] {1}, 6 /*Float*/, ByteBuffer.allocate(4));
+            FlatInputs in = FlatInputs.of(tensor);
             IllegalArgumentException ex = assertThrows(
                     IllegalArgumentException.class,
-                    () -> EtNative.forward(handle, new EtTensor[] {tensor}));
-            assertEquals("EtTensor.data must be a direct ByteBuffer", ex.getMessage());
+                    () -> EtNative.forward(
+                            handle, in.flatShapes, in.shapeOffsets, in.scalarTypes, in.buffers));
+            assertEquals("buffers[0] must be a direct ByteBuffer", ex.getMessage());
         } finally {
             EtNative.destroy(handle);
         }

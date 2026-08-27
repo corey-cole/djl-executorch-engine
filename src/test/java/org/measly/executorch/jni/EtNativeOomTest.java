@@ -26,9 +26,11 @@ class EtNativeOomTest {
             ByteBuffer input = ByteBuffer.allocateDirect(4).order(ByteOrder.nativeOrder());
             input.putFloat(0, 1f);
             EtTensor tensor = new EtTensor(new long[] {1}, 6 /*Float*/, input);
+            FlatInputs in = FlatInputs.of(tensor);
             assertThrows(
                     OutOfMemoryError.class,
-                    () -> EtNative.forward(handle, new EtTensor[] {tensor}));
+                    () -> EtNative.forward(
+                            handle, in.flatShapes, in.shapeOffsets, in.scalarTypes, in.buffers));
         } finally {
             EtNative.destroy(handle);
         }

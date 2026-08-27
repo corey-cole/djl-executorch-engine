@@ -20,9 +20,11 @@ class EtNativeZeroHandleTest {
         TestSupport.assumeNativeLibraryAvailable();
         ByteBuffer data = ByteBuffer.allocateDirect(4);
         EtTensor tensor = new EtTensor(new long[] {1}, 6 /*Float*/, data);
+        FlatInputs in = FlatInputs.of(tensor);
         assertThrows(
                 IllegalStateException.class,
-                () -> EtNative.forward(0L, new EtTensor[] {tensor}));
+                () -> EtNative.forward(
+                        0L, in.flatShapes, in.shapeOffsets, in.scalarTypes, in.buffers));
     }
 
     @Test

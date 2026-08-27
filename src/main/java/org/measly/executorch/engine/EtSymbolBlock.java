@@ -84,7 +84,12 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
             throw new IllegalArgumentException(
                     "ExecuTorch model expects " + meta.numInputs + " inputs, got " + count);
         }
-        EtTensor[] in = new EtTensor[count];
+        // Struct-of-arrays layout for EtNative.forward: shapes concatenated into one array with an
+        // offset per input, rather than one EtTensor object (and one shape long[]) per input.
+        long[][] shapes = new long[count][];
+        int[] scalarTypes = new int[count];
+        ByteBuffer[] buffers = new ByteBuffer[count];
+        int totalDims = 0;
         for (int i = 0; i < count; ++i) {
             EtNDArray et = manager.from(inputs.get(i));
             int st = EtDataTypes.toScalarType(et.getDataType());
@@ -100,10 +105,22 @@ public class EtSymbolBlock extends AbstractSymbolBlock implements AutoCloseable 
                 direct.rewind();
                 buf = direct;
             }
-            in[i] = new EtTensor(et.getShape().getShape(), st, buf);
+            long[] shape = et.getShape().getShape();
+            shapes[i] = shape;
+            scalarTypes[i] = st;
+            buffers[i] = buf;
+            totalDims += shape.length;
+        }
+        long[] flatShapes = new long[totalDims];
+        int[] shapeOffsets = new int[count + 1];
+        int offset = 0;
+        for (int i = 0; i < count; ++i) {
+            System.arraycopy(shapes[i], 0, flatShapes, offset, shapes[i].length);
+            offset += shapes[i].length;
+            shapeOffsets[i + 1] = offset;
         }
         final long startNanos = System.nanoTime();
-        EtTensor[] out = EtNative.forward(h, in);
+        EtTensor[] out = EtNative.forward(h, flatShapes, shapeOffsets, scalarTypes, buffers);
         EtModelCounters c = counters;
         if (c != null) {
             c.recordForward(System.nanoTime() - startNanos);
