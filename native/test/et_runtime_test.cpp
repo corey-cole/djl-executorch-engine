@@ -668,3 +668,15 @@ TEST_CASE("issue71: conv planned rejects permuted dims (1x3x16x16 declared, fed 
   std::vector<InputDesc> inputs = {{x.data(), {1, 16, 3, 16}, 6}};
   REQUIRE_THROWS_AS(rt.forward(inputs), std::runtime_error);
 }
+
+// This is the test that protects the process from issue #78: without this guard, constructing an
+// EtRuntime over an XNNPACK-delegated .pte exported with MemoryPlanningPass(alloc_graph_output=
+// False) reaches load_forward() and reliably SIGSEGVs inside a fused XNNPACK kernel (see
+// docs/superpowers/plans/2026-08-26-unplanned-sigsegv-root-cause.md). The fixture used here has
+// the DEFAULT (planned) input and only alloc_graph_output=False -- the investigation's isolating
+// reproduction that confirmed alloc_graph_input is irrelevant to this crash.
+TEST_CASE("issue78: an XNNPACK-delegated unplanned-output .pte is refused before load_forward()") {
+  REQUIRE_THROWS_WITH(
+      [] { EtRuntime rt(TABULAR_LIKE_PLANNED_IN_UNPLANNED_OUT_PTE_PATH); }(),
+      Catch::Matchers::ContainsSubstring("alloc_graph_output=False"));
+}

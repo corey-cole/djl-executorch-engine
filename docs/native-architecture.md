@@ -86,6 +86,14 @@ our pointer is borrowed only for the duration of that copy. The borrow is honour
 path as zero-copy without that qualification is wrong, and was wrong in this repository's own docs
 until it was audited.
 
+`alloc_graph_output` is a separate flag governing the graph's *output* rather than its input, and
+it is not benign the way the distinction above is: `alloc_graph_output=False` on an
+XNNPACK-delegated graph is a reliable SIGSEGV inside a fused delegate kernel, independent of
+`alloc_graph_input`. `EtRuntime`'s constructor rejects such a `.pte` before `load_forward()` can
+reach the crash. See the `alloc_graph_output=False` paragraph in `CLAUDE.md` and
+`docs/executorch-host-buffer-contract-brief.md` §W10 for the guard and the investigation that found
+it.
+
 Both cases occur here, which is why §4 is not describing dead code. The models this repository ships
 and exports for real work are planned — `native/spike/add.pte`, the MobileNetV2 export in
 `example/`. The unplanned fixtures exist specifically to exercise the borrow path:

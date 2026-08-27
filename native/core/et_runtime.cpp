@@ -242,6 +242,28 @@ EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode, bool 
           "'. It must be the full path to the library FILE, not the directory containing it.");
     }
   }
+  // Refuse an XNNPACK-delegated model exported with alloc_graph_output=False, BEFORE
+  // load_forward() -- which is delegate init and, for this exact combination, a reliable
+  // AddressSanitizer SEGV (a write to a near-null address deep inside a fused XNNPACK kernel,
+  // e.g. xnn_f32_vgelu_ukernel__*), independent of alloc_graph_input. See "Root cause:
+  // alloc_graph_output=False" in
+  // docs/superpowers/plans/2026-08-26-unplanned-sigsegv-root-cause.md (branch
+  // investigate/unplanned-sigsegv-root-cause) for the reproduction and crash signature.
+  //
+  // Mirrors the OpenVINO guard above: catch a load that cannot possibly succeed as an ordinary
+  // exception here, rather than as a process-fatal crash inside load_forward().
+  if (etMeta.ok() && etMeta->uses_backend("XnnpackBackend")) {
+    for (size_t i = 0; i < etMeta->num_outputs(); ++i) {
+      auto outputInfo = etMeta->output_tensor_meta(i);
+      if (outputInfo.ok() && !outputInfo->is_memory_planned()) {
+        throw std::runtime_error(
+            "This .pte was exported with MemoryPlanningPass(alloc_graph_output=False) and uses "
+            "the XnnpackBackend delegate. That combination reliably crashes inside XNNPACK "
+            "(a near-null write deep in a delegate kernel), independent of alloc_graph_input. "
+            "Re-export with the default alloc_graph_output=True to run here.");
+      }
+    }
+  }
   if (state_->module.load_forward() != executorch::runtime::Error::Ok) {
     throw std::runtime_error("EtRuntime: failed to load \"forward\" from .pte: " + ptePath);
   }

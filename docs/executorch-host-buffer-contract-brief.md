@@ -34,6 +34,7 @@ exists in both its non-delegated (`add_unplanned.pte`) and delegated (`clamp5.pt
 | W5 — establish the cost | **complete — run 2026-08-06, results in §8/W5.** Input A/B: no measurable difference (12.7 vs 13.0 ms/op, CIs overlap). Output: the W6 direct path is 24–87% *slower* than heap at ≥256 KB and OOM-kills without an external GC trigger |
 | W6 — direct-buffer outputs | **prototyped and rejected on the W5 numbers — not on this branch.** The prototype lives unmerged on `feature/w5-w6-direct-outputs` as the record; §8/W5 has the measurements and the two blocking defects (per-op `operator new`/`delete` of the full output; a free path with no backpressure). Reopening it means beating the heap path's `-gc false` numbers first |
 | W9 — shared aligned-buffer abstraction | open |
+| W10 — `alloc_graph_output=False` (issue #78) | **load-time guard shipped** (`EtRuntime` ctor rejects an XNNPACK-delegated unplanned-output `.pte`); upstream mechanism still unconfirmed, see `docs/superpowers/plans/2026-08-26-unplanned-sigsegv-root-cause.md` |
 
 ---
 
@@ -1076,6 +1077,38 @@ genuine overlap is ~60 lines and the JNI half is per-engine ABI surface;
 ExecuTorch's need is narrower still (outputs only, no alignment contract to
 honor), which if anything strengthens "duplicate." Expect a short confirmation.
 Assessment only; no execution.
+
+### W10 — `alloc_graph_output=False` (issue #78) — stub, mechanism not yet confirmed
+
+**This is a different sibling flag from everything else in this brief.** W1–W9 above are all
+about `alloc_graph_input` — whether a graph *input* is borrowed or copied. `alloc_graph_output`
+governs the graph's *output* instead, and it turns out to be a substantially more dangerous knob:
+setting it `False` on an XNNPACK-delegated model is a reliable, deterministic SIGSEGV, independent
+of whatever `alloc_graph_input` is set to.
+
+Full writeup, reproduction steps, and evidence live in
+`docs/superpowers/plans/2026-08-26-unplanned-sigsegv-root-cause.md` (branch
+`investigate/unplanned-sigsegv-root-cause`, not yet merged as of this stub) — read that document
+for the actual investigation. Summary for readers of this brief:
+
+- **Crash:** AddressSanitizer SEGV, a **write** to a near-null address (`0x7`), inside XNNPACK's
+  own fused kernel (`xnn_f32_vgelu_ukernel__avx512f_rational_12_10_div_u32` in the reproduction),
+  reached through the ordinary `Module::forward()` path — not a bug in this engine's own
+  marshalling code.
+- **Trigger:** `MemoryPlanningPass(alloc_graph_output=False)` on any XNNPACK-delegated graph.
+  Reproduced with default (planned) input and unplanned output alone — `alloc_graph_input` is not
+  a factor.
+- **Mitigation shipped:** `EtRuntime`'s constructor (`native/core/et_runtime.cpp`) rejects a
+  `.pte` whose "forward" output is not memory-planned when the method uses `XnnpackBackend`,
+  before `load_forward()` (delegate init) can reach the crash — the same "catch it as an ordinary
+  exception, not a process-fatal crash" pattern as the OpenVINO missing-runtime guard beside it.
+  Test: `native/test/et_runtime_test.cpp`, `"issue78: an XNNPACK-delegated unplanned-output .pte
+  is refused before load_forward()"`.
+- **Still open:** the investigation's own "next step" — confirming the exact mechanism in
+  XNNPACK's output-binding code (`backends/xnnpack/runtime/XNNExecutor.cpp` or equivalent) that
+  makes this a write-to-null rather than a clean failure. The guard above doesn't need that
+  mechanism to be safe (it refuses the whole hazardous combination outright), but a confirmed
+  mechanism is what would make a well-scoped upstream bug report possible.
 
 ---
 

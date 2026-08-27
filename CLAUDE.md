@@ -29,7 +29,17 @@ Supported platforms: `linux-x86_64`, `linux-aarch64` and `windows-x86_64`. **All
   `clamp5.pte`, and `lin129.pte`. `example/build/models/mobilenet_v2_unplanned.pte` exercises the
   same path but is not shipped — it's a gitignored build output that
   `tools/scripts/export_mobilenet.py` generates on demand. See `docs/native-architecture.md` §3 and
-  `docs/executorch-host-buffer-contract-brief.md`.
+  `docs/executorch-host-buffer-contract-brief.md`. **`alloc_graph_output=False` is a separate,
+  substantially more dangerous flag** — not just "different behavior" the way the input borrow is,
+  an active crash trigger. It reliably SIGSEGVs inside XNNPACK (a write to a near-null address deep
+  in a fused delegate kernel) on any XNNPACK-delegated `.pte`, **independent of `alloc_graph_input`**
+  — a model with the default (planned) input and only `alloc_graph_output=False` crashes identically.
+  `EtRuntime`'s constructor rejects any `.pte` whose "forward" output is not memory-planned before
+  `load_forward()` can reach it, the same way it rejects an unavailable OpenVINO delegate — see the
+  guard beside the OpenVINO checks in `native/core/et_runtime.cpp`. See
+  `docs/superpowers/plans/2026-08-26-unplanned-sigsegv-root-cause.md` (on branch
+  `investigate/unplanned-sigsegv-root-cause`, not yet merged) for the full investigation, and
+  `docs/executorch-host-buffer-contract-brief.md` for the stub writeup.
 - `jni/executorch_djl_jni.cpp` + `jni/et_logging.cpp` — the JNI shim (`executorch_djl` shared library). `et_logging.cpp` is a PAL bridge that forwards native `ET_LOG` output to slf4j via `EtNative.nativeLog` (level codes: 0=debug 1=info 2=warn 3=error).
 - `harness/` — `et_timing_harness` (Release benchmark) and `et_leak_harness` (ASan/LSan). `test/et_runtime_test.cpp` — Catch2 units. These link only the JNIEnv-free core, so QA/bench configures need no JDK.
 
