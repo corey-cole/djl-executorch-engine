@@ -31,12 +31,15 @@ Supported platforms: `linux-x86_64`, `linux-aarch64` and `windows-x86_64`. **All
   `tools/scripts/export_mobilenet.py` generates on demand. See `docs/native-architecture.md` §3 and
   `docs/executorch-host-buffer-contract-brief.md`. **`alloc_graph_output=False` is a separate,
   substantially more dangerous flag** — not just "different behavior" the way the input borrow is,
-  an active crash trigger. It reliably SIGSEGVs inside XNNPACK (a write to a near-null address deep
-  in a fused delegate kernel) on any XNNPACK-delegated `.pte`, **independent of `alloc_graph_input`**
-  — a model with the default (planned) input and only `alloc_graph_output=False` crashes identically.
-  `EtRuntime`'s constructor rejects any `.pte` whose "forward" output is not memory-planned before
-  `load_forward()` can reach it, the same way it rejects an unavailable OpenVINO delegate — see the
-  guard beside the OpenVINO checks in `native/core/et_runtime.cpp`. See
+  an active crash trigger, **and it hits both delegates, not just XNNPACK.** On an XNNPACK-delegated
+  `.pte` it reliably SIGSEGVs (a write to a near-null address deep in a fused delegate kernel),
+  **independent of `alloc_graph_input`** — a model with the default (planned) input and only
+  `alloc_graph_output=False` crashes identically. On an OpenVINO-delegated `.pte` it does **not**
+  crash — it fails cleanly at `forward()` with an opaque `CALL_DELEGATE execute failed` error,
+  confirmed locally against `native/spike/export_openvino_planned_in_unplanned_out.py`. `EtRuntime`'s
+  constructor rejects any delegated `.pte` whose "forward" output is not memory-planned before
+  `load_forward()` can reach either failure mode, the same way it rejects an unavailable OpenVINO
+  delegate — see the guard beside the OpenVINO checks in `native/core/et_runtime.cpp`. See
   `docs/superpowers/plans/2026-08-26-unplanned-sigsegv-root-cause.md` (on branch
   `investigate/unplanned-sigsegv-root-cause`, not yet merged) for the full investigation, and
   `docs/executorch-host-buffer-contract-brief.md` for the stub writeup.

@@ -89,8 +89,9 @@ until it was audited.
 `alloc_graph_output` is a separate flag governing the graph's *output* rather than its input, and
 it is not benign the way the distinction above is: `alloc_graph_output=False` on an
 XNNPACK-delegated graph is a reliable SIGSEGV inside a fused delegate kernel, independent of
-`alloc_graph_input`. `EtRuntime`'s constructor rejects such a `.pte` before `load_forward()` can
-reach the crash. See the `alloc_graph_output=False` paragraph in `CLAUDE.md` and
+`alloc_graph_input`. The same flag on an OpenVINO-delegated graph does not crash but fails opaquely
+at `forward()` (`CALL_DELEGATE execute failed`). `EtRuntime`'s constructor rejects either `.pte`
+before `load_forward()` can reach the failure. See the `alloc_graph_output=False` paragraph in `CLAUDE.md` and
 `docs/executorch-host-buffer-contract-brief.md` §W10 for the guard and the investigation that found
 it.
 

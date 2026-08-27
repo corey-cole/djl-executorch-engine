@@ -542,6 +542,30 @@ TEST_CASE("openvino: a bundle in one flat directory loads and executes") {
 #endif
 }
 
+// Companion to "issue78: an XNNPACK-delegated unplanned-output .pte is refused before
+// load_forward()" above, for the other delegate. Confirmed locally (not in this suite, since it
+// needs a real OpenVINO bundle behind ET_OPENVINO_SMOKE_LIB) that WITHOUT this guard, forward()
+// on this fixture fails with an opaque "CALL_DELEGATE execute failed at instruction 0: 0x1" --
+// not a crash the way XNNPACK's is, but a late failure this guard turns into a clear one at
+// construction, consistent with the "load throws" contract. Gated on ET_OPENVINO_SMOKE_LIB
+// because the guard branch this exercises sits after the OPENVINO_LIB_PATH availability check
+// above, which needs a real library file to get past.
+TEST_CASE("issue78: an OpenVINO-delegated unplanned-output .pte is refused before load_forward()") {
+#ifndef ET_OPENVINO_LINKED
+  SKIP("this build links no OpenVINO delegate");
+#else
+  const char* smoke = std::getenv("ET_OPENVINO_SMOKE_LIB");
+  if (smoke == nullptr || smoke[0] == '\0') {
+    SKIP("set ET_OPENVINO_SMOKE_LIB to a bundle's OpenVINO C library file");
+  }
+  setEnvVar("OPENVINO_LIB_PATH", smoke);
+  REQUIRE_THROWS_WITH(
+      [] { EtRuntime rt(OPENVINO_PLANNED_IN_UNPLANNED_OUT_PTE_PATH); }(),
+      Catch::Matchers::ContainsSubstring("alloc_graph_output=False"));
+  unsetEnvVar("OPENVINO_LIB_PATH");
+#endif
+}
+
 TEST_CASE("devtools: availability matches what this build linked") {
   // The build either linked the event tracer or it did not; the query must say which, and must
   // agree with the compile-time gate rather than guessing at runtime.

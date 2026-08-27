@@ -242,25 +242,45 @@ EtRuntime::EtRuntime(const std::string& ptePath, int workspaceSharingMode, bool 
           "'. It must be the full path to the library FILE, not the directory containing it.");
     }
   }
-  // Refuse an XNNPACK-delegated model exported with alloc_graph_output=False, BEFORE
-  // load_forward() -- which is delegate init and, for this exact combination, a reliable
-  // AddressSanitizer SEGV (a write to a near-null address deep inside a fused XNNPACK kernel,
-  // e.g. xnn_f32_vgelu_ukernel__*), independent of alloc_graph_input. See "Root cause:
-  // alloc_graph_output=False" in
+  // Refuse a delegated model exported with alloc_graph_output=False, BEFORE load_forward() --
+  // which is delegate init. See "Root cause: alloc_graph_output=False" in
   // docs/superpowers/plans/2026-08-26-unplanned-sigsegv-root-cause.md (branch
   // investigate/unplanned-sigsegv-root-cause) for the reproduction and crash signature.
   //
-  // Mirrors the OpenVINO guard above: catch a load that cannot possibly succeed as an ordinary
-  // exception here, rather than as a process-fatal crash inside load_forward().
-  if (etMeta.ok() && etMeta->uses_backend("XnnpackBackend")) {
+  // The two delegates fail this combination differently, which is why the guard is one check with
+  // a backend-specific message rather than one shared string:
+  //   - XnnpackBackend: a reliable AddressSanitizer SEGV (a write to a near-null address deep
+  //     inside a fused XNNPACK kernel, e.g. xnn_f32_vgelu_ukernel__*), independent of
+  //     alloc_graph_input. Process-fatal -- this branch is the difference between a crash and an
+  //     exception.
+  //   - OpenvinoBackend: does NOT crash. It fails cleanly at forward() with
+  //     "CALL_DELEGATE execute failed at instruction 0: 0x1", caught as an ordinary
+  //     std::runtime_error -- confirmed locally against native/spike/
+  //     export_openvino_planned_in_unplanned_out.py (planned input, alloc_graph_output=False
+  //     alone). Not a safety issue the way XNNPACK's is, but it breaks this codebase's "load
+  //     throws" contract: without this branch the failure surfaces at the first forward() instead
+  //     of at construction, with an opaque delegate-internal message.
+  //
+  // Mirrors the OpenVINO-availability guard above: catch a load that cannot possibly succeed as
+  // an ordinary exception here, rather than as a process-fatal crash (XNNPACK) or a late, opaque
+  // one (OpenVINO) further down the call chain.
+  if (etMeta.ok() &&
+      (etMeta->uses_backend("XnnpackBackend") || etMeta->uses_backend("OpenvinoBackend"))) {
     for (size_t i = 0; i < etMeta->num_outputs(); ++i) {
       auto outputInfo = etMeta->output_tensor_meta(i);
       if (outputInfo.ok() && !outputInfo->is_memory_planned()) {
+        if (etMeta->uses_backend("XnnpackBackend")) {
+          throw std::runtime_error(
+              "This .pte was exported with MemoryPlanningPass(alloc_graph_output=False) and uses "
+              "the XnnpackBackend delegate. That combination reliably crashes inside XNNPACK "
+              "(a near-null write deep in a delegate kernel), independent of alloc_graph_input. "
+              "Re-export with the default alloc_graph_output=True to run here.");
+        }
         throw std::runtime_error(
             "This .pte was exported with MemoryPlanningPass(alloc_graph_output=False) and uses "
-            "the XnnpackBackend delegate. That combination reliably crashes inside XNNPACK "
-            "(a near-null write deep in a delegate kernel), independent of alloc_graph_input. "
-            "Re-export with the default alloc_graph_output=True to run here.");
+            "the OpenvinoBackend delegate. That combination fails at forward() (CALL_DELEGATE "
+            "execute failed), independent of alloc_graph_input. Re-export with the default "
+            "alloc_graph_output=True to run here.");
       }
     }
   }
