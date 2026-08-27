@@ -34,6 +34,7 @@ exists in both its non-delegated (`add_unplanned.pte`) and delegated (`clamp5.pt
 | W5 — establish the cost | **complete — run 2026-08-06, results in §8/W5.** Input A/B: no measurable difference (12.7 vs 13.0 ms/op, CIs overlap). Output: the W6 direct path is 24–87% *slower* than heap at ≥256 KB and OOM-kills without an external GC trigger |
 | W6 — direct-buffer outputs | **prototyped and rejected on the W5 numbers — not on this branch.** The prototype lives unmerged on `feature/w5-w6-direct-outputs` as the record; §8/W5 has the measurements and the two blocking defects (per-op `operator new`/`delete` of the full output; a free path with no backpressure). Reopening it means beating the heap path's `-gc false` numbers first |
 | W9 — shared aligned-buffer abstraction | open |
+| W10 — `alloc_graph_output=False` (issue #78) | **load-time guard shipped for both delegates** (`EtRuntime` ctor rejects an unplanned-output `.pte` using `XnnpackBackend` or `OpenvinoBackend`); XNNPACK crashes (SIGSEGV), OpenVINO fails cleanly at `forward()` (confirmed this session) — both mechanisms still unconfirmed, see `docs/superpowers/plans/2026-08-26-unplanned-sigsegv-root-cause.md` |
 
 ---
 
@@ -1076,6 +1077,51 @@ genuine overlap is ~60 lines and the JNI half is per-engine ABI surface;
 ExecuTorch's need is narrower still (outputs only, no alignment contract to
 honor), which if anything strengthens "duplicate." Expect a short confirmation.
 Assessment only; no execution.
+
+### W10 — `alloc_graph_output=False` (issue #78) — stub, XNNPACK mechanism not yet confirmed
+
+**This is a different sibling flag from everything else in this brief.** W1–W9 above are all
+about `alloc_graph_input` — whether a graph *input* is borrowed or copied. `alloc_graph_output`
+governs the graph's *output* instead, and it turns out to be a substantially more dangerous knob,
+**on both delegates this engine supports**: setting it `False` is a reliable, deterministic SIGSEGV
+under XNNPACK and a clean-but-opaque `forward()` failure under OpenVINO, independent of whatever
+`alloc_graph_input` is set to in either case.
+
+Full writeup, reproduction steps, and evidence for the XNNPACK crash live in
+`docs/superpowers/plans/2026-08-26-unplanned-sigsegv-root-cause.md` (branch
+`investigate/unplanned-sigsegv-root-cause`, not yet merged as of this stub) — read that document
+for the actual investigation. Summary for readers of this brief:
+
+- **XNNPACK crash:** AddressSanitizer SEGV, a **write** to a near-null address (`0x7`), inside
+  XNNPACK's own fused kernel (`xnn_f32_vgelu_ukernel__avx512f_rational_12_10_div_u32` in the
+  reproduction), reached through the ordinary `Module::forward()` path — not a bug in this engine's
+  own marshalling code. Trigger: `MemoryPlanningPass(alloc_graph_output=False)` on any
+  XNNPACK-delegated graph. Reproduced with default (planned) input and unplanned output alone —
+  `alloc_graph_input` is not a factor.
+- **OpenVINO failure (confirmed, this session):** the same flag on an OpenVINO-delegated graph does
+  **not** crash. `native/spike/export_openvino_planned_in_unplanned_out.py` (default/planned input,
+  `alloc_graph_output=False` alone, `OpenvinoPartitioner`) loads and initializes the delegate
+  cleanly, then `forward()` fails with `"CALL_DELEGATE execute failed at instruction 0: 0x1"`,
+  caught as an ordinary `std::runtime_error` — no crash, no process poisoning. Confirmed locally
+  against the pinned OpenVINO bundle (`ET_RUNTIME_OPENVINO_SHA256_linux-x86_64` in
+  `native/cmake/EtRuntimePin.cmake`); not yet run through `et_leak_harness` or under ASan (the
+  bundle's `libtbbbind_2_5.so`'s `RTLD_DEEPBIND` dlopen is incompatible with the sanitizer runtime —
+  the same constraint the "loads and executes" Catch2 test already documents — so this was
+  confirmed against a plain, non-instrumented build instead).
+- **Mitigation shipped:** `EtRuntime`'s constructor (`native/core/et_runtime.cpp`) rejects a
+  `.pte` whose "forward" output is not memory-planned when the method uses `XnnpackBackend` **or**
+  `OpenvinoBackend`, before `load_forward()` (delegate init) can reach either failure mode — the
+  same "catch it as an ordinary exception, not a process-fatal crash (or a late, opaque one)"
+  pattern as the OpenVINO missing-runtime guard beside it. Tests: `native/test/et_runtime_test.cpp`,
+  `"issue78: an XNNPACK-delegated unplanned-output .pte is refused before load_forward()"` and
+  `"issue78: an OpenVINO-delegated unplanned-output .pte is refused before load_forward()"`.
+- **Still open:** the investigation's own "next step" — confirming the exact mechanism in
+  XNNPACK's output-binding code (`backends/xnnpack/runtime/XNNExecutor.cpp` or equivalent) that
+  makes this a write-to-null rather than a clean failure. The OpenVINO mechanism (why
+  `CALL_DELEGATE` returns error code `0x1` specifically) is likewise unconfirmed. The guard above
+  doesn't need either mechanism to be safe (it refuses the whole hazardous combination outright on
+  both delegates), but a confirmed
+  mechanism is what would make a well-scoped upstream bug report possible.
 
 ---
 

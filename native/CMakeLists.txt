@@ -394,7 +394,9 @@ if(ET_BUILD_QA)
     PRIM_INPUT_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/prim_input.pte"
     CONV_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/conv.pte"
     LIN129_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/lin129.pte"
-    OPENVINO_TINY_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../src/test/resources/models/openvino/openvino_tiny.pte")
+    OPENVINO_TINY_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../src/test/resources/models/openvino/openvino_tiny.pte"
+    TABULAR_LIKE_PLANNED_IN_UNPLANNED_OUT_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/tabular_like_planned_in_unplanned_out.pte"
+    OPENVINO_PLANNED_IN_UNPLANNED_OUT_PTE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/spike/openvino_planned_in_unplanned_out.pte")
   target_include_directories(et_runtime_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/jni)
 
   add_executable(et_leak_harness ${CMAKE_CURRENT_SOURCE_DIR}/harness/et_leak_harness.cpp)
