@@ -217,6 +217,28 @@ delegate at load time, so modes compose freely and load order is irrelevant. An 
 >
 > Ratios on larger hosts are unmeasured.
 
+### Allocator (`LD_PRELOAD`)
+
+Not an engine option — a JVM launch-time choice, since the engine is a shared library loaded into
+your process and doesn't own the process-wide allocator. If your workload calls `forward()` at high
+frequency, swapping glibc's malloc for `mimalloc` or `tcmalloc` measurably lowers per-call latency:
+
+```
+LD_PRELOAD=/path/to/libmimalloc.so java -jar your-app.jar
+```
+
+Measured on a 41-input model, 20000 calls, warmed up, Linux/x86_64:
+
+| Allocator | Per-call latency | vs. glibc |
+|---|---|---|
+| glibc (default) | ~25.6us | — |
+| tcmalloc | ~21.6us | ~16% faster |
+| mimalloc | ~19.7us | ~23% faster |
+
+This is opt-in and left to you deliberately: `LD_PRELOAD` overrides the allocator for the *entire*
+JVM process, not just this engine's allocations, so it can affect other native libraries loaded in
+the same process. Test it against your own workload before adopting it in production.
+
 ## Monitoring
 
 `EtEngineStats.snapshot()` returns an immutable `EtStatsSnapshot`: effective configuration, process
