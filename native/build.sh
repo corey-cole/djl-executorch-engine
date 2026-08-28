@@ -166,14 +166,26 @@ rm -rf "${NATIVE_BUILD_DIR}"
 # the pinned ${ET_RUNTIME_VARIANT} tarball.
 ET_INSTALL_ARG=()
 [ -n "${ET_INSTALL:-}" ] && ET_INSTALL_ARG=(-DET_INSTALL="${ET_INSTALL}")
-# MSVC encodes the CRT flavour into every object and the linker refuses to mix them. The pinned runtime
-# tarball is built Release with the STATIC CRT (/MT — see its BUILDINFO cmake_flags:
+# Release, on every platform. Two independent reasons converge on the same flag:
+#
+# MSVC encodes the CRT flavour into every object and the linker refuses to mix them. The pinned
+# runtime tarball is built Release with the STATIC CRT (/MT — see its BUILDINFO cmake_flags:
 # CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded), so the shim must be Release too or the link dies with
 # LNK2038 '_ITERATOR_DEBUG_LEVEL' mismatches. Release is about the debug/release CRT split only; the
 # static-vs-dynamic choice is made by CMAKE_MSVC_RUNTIME_LIBRARY in native/CMakeLists.txt, not here.
-# GCC/ELF has no such ABI tag, so the Linux leg stays as-is (unset) and its artifact is unchanged.
-BUILD_TYPE_ARG=()
-[ "${ET_HOST_OS}" = "windows" ] && BUILD_TYPE_ARG=(-DCMAKE_BUILD_TYPE=Release)
+# This half is Windows-specific: GCC/ELF has no such ABI tag.
+#
+# GCC/Clang have no such tag either, but CMAKE_BUILD_TYPE unset is NOT a no-op there: with no
+# -DCMAKE_BUILD_TYPE, CMake adds no -O flag at all, and the compiler's own default with no -O given
+# is -O0 -- verified by reading the actual compile command out of compile_commands.json, which
+# carried no -O anywhere. This was true of every Linux/macOS shim build until this line, INCLUDING
+# the one native-build-job.yml stages into the released JAR: the shipped library was built
+# unoptimized. Measured end-to-end through EtSymbolBlock on a 41-input model: ~104.9us at the old
+# (accidental) -O0 vs ~39.9us at -O3, roughly 2.6x. et_runtime.cpp/executorch_djl_jni.cpp have no
+# reliance on assert() (NDEBUG-stripped by Release) -- every check throws explicitly -- and the QA
+# (build_qa.sh) and UBSan (ubsan_gate.sh) configs already set their own independent
+# CMAKE_BUILD_TYPE, so this is untouched there.
+BUILD_TYPE_ARG=(-DCMAKE_BUILD_TYPE=Release)
 cmake -B "${NATIVE_BUILD_DIR}" -S native -G Ninja \
   -DET_RUNTIME_VARIANT="${ET_RUNTIME_VARIANT}" "${BUILD_TYPE_ARG[@]}" "${ET_INSTALL_ARG[@]}"
 cmake --build "${NATIVE_BUILD_DIR}" -j"${JOBS}"
