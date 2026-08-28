@@ -26,26 +26,23 @@ static_assert(sizeof(jlong) == sizeof(int64_t), "jlong/int64_t size mismatch");
 //
 // DANGER: the descriptor strings passed to GetFieldID/GetMethodID below are string literals and no
 // compiler on either side checks them. Change a Java field or constructor without updating its
-// descriptor here and the lookup returns null. For the six IDs cached into the globals below --
-// g_fShape, g_fScalarType, g_fData, g_ctor, g_metaCtor, g_byteBufferWrap -- null fails JNI_OnLoad
-// with JNI_ERR, which surfaces as an UnsatisfiedLinkError when EtNative's static initializer runs
-// System.load: a RUNTIME failure at class init, not a build failure.
+// descriptor here and the lookup returns null. For the IDs cached into the globals below --
+// g_ctor, g_metaCtor, g_byteBufferWrap -- null fails JNI_OnLoad with JNI_ERR, which surfaces as an
+// UnsatisfiedLinkError when EtNative's static initializer runs System.load: a RUNTIME failure at
+// class init, not a build failure.
 //
-// The seventh descriptor in JNI_OnLoad is the dangerous one. The "nativeLog" lookup for the logging
-// bridge is null-checked and then deliberately IGNORED -- the pending exception is cleared and the
-// load is allowed to succeed, because logging must never fail a model load. So a descriptor drift
-// on EtNative.nativeLog produces no error anywhere: the bridge is simply never installed and native
-// ET_LOG output goes silently dead while everything else keeps working. If native logging has
-// vanished for no apparent reason, suspect that literal first. A local
+// The nativeLog descriptor in JNI_OnLoad is the dangerous one. The "nativeLog" lookup for the
+// logging bridge is null-checked and then deliberately IGNORED -- the pending exception is cleared
+// and the load is allowed to succeed, because logging must never fail a model load. So a
+// descriptor drift on EtNative.nativeLog produces no error anywhere: the bridge is simply never
+// installed and native ET_LOG output goes silently dead while everything else keeps working. If
+// native logging has vanished for no apparent reason, suspect that literal first. A local
 // `./gradlew test` hides it only because Java and the shim get rebuilt from the same tree; the real
 // exposure is a staged per-platform binary (the .dll, or a resource .so someone did not rebuild)
 // that is a revision behind the Java classes. Treat the Java declaration and the literal here as a
 // single edit. Not hypothetical: adding EtMethodMeta.plannedArenaBytes required changing
 // "(I[I[Z)V" to "(I[I[ZJ)V" (commit 717eda2).
 static jclass g_etTensorClass = nullptr;
-static jfieldID g_fShape = nullptr;
-static jfieldID g_fScalarType = nullptr;
-static jfieldID g_fData = nullptr;
 static jmethodID g_ctor = nullptr;
 
 static jclass g_etMethodMetaClass = nullptr;
@@ -118,11 +115,11 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   if (g_etTensorClass == nullptr) {
     return JNI_ERR;  // class not found -> System.load fails clearly
   }
-  g_fShape = env->GetFieldID(g_etTensorClass, "shape", "[J");
-  g_fScalarType = env->GetFieldID(g_etTensorClass, "scalarType", "I");
-  g_fData = env->GetFieldID(g_etTensorClass, "data", "Ljava/nio/ByteBuffer;");
+  // shape/scalarType/data field IDs are no longer cached here: forward() takes a struct-of-arrays
+  // input layout and never reads fields off an input EtTensor. g_ctor remains -- it is still used
+  // to construct each OUTPUT EtTensor.
   g_ctor = env->GetMethodID(g_etTensorClass, "<init>", "([JILjava/nio/ByteBuffer;)V");
-  if (g_fShape == nullptr || g_fScalarType == nullptr || g_fData == nullptr || g_ctor == nullptr) {
+  if (g_ctor == nullptr) {
     return JNI_ERR;
   }
 
@@ -260,73 +257,10 @@ Java_org_measly_executorch_jni_EtNative_methodMeta(JNIEnv* env, jclass, jlong ha
                         static_cast<jlong>(meta.plannedArenaBytes), names);
 }
 
-extern "C" JNIEXPORT jobjectArray JNICALL
-Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handle,
-                                                jobjectArray jinputs) {
-  if (handle == 0) {
-    throwIllegalState(env, "forward() on a closed ExecuTorch model (native handle is 0)");
-    return nullptr;
-  }
-  auto* rt = reinterpret_cast<EtRuntime*>(handle);
-
-  jsize nIn = env->GetArrayLength(jinputs);
-  std::vector<InputDesc> inputs(nIn);
-  // The direct ByteBuffers reached through jinputs must stay live for the whole call:
-  // GetDirectBufferAddress hands back a raw pointer into JVM-managed off-heap memory, and that
-  // memory is only reachable through the DirectByteBuffer object. Both consumers read it inside
-  // rt->forward() -- a memory-planned input is memcpy'd by ExecuTorch at set_input (the export
-  // default), an unplanned one is memcpy'd into our staging slot first -- so the addresses must stay
-  // valid until forward() returns. They do, because jinputs is a parameter local ref alive for the
-  // whole frame and its elements are reachable from it. That reachability is what makes the
-  // DeleteLocalRef calls at the bottom of this loop safe.
-  //
-  // Each GetObjectArrayElement / GetObjectField below mints a LOCAL reference, and a frame is only
-  // guaranteed 16 free local slots by the JNI spec (real JVMs grant far more, which is what lets an
-  // omission here go unnoticed). Three refs per input would exhaust that guarantee at six inputs, so
-  // the loop releases all three before iterating. Keep it that way if you add another ref.
-  for (jsize i = 0; i < nIn; ++i) {
-    jobject jt = env->GetObjectArrayElement(jinputs, i);
-    if (jt == nullptr) {
-      throwIllegalArgument(env, ("EtTensor[" + std::to_string(i) + "] is null").c_str());
-      return nullptr;
-    }
-    auto jshape = static_cast<jlongArray>(env->GetObjectField(jt, g_fShape));
-    if (jshape == nullptr) {
-      throwIllegalArgument(env, "EtTensor.shape is null");
-      return nullptr;
-    }
-    jint st = env->GetIntField(jt, g_fScalarType);
-    jobject jbuf = env->GetObjectField(jt, g_fData);
-
-    jsize nd = env->GetArrayLength(jshape);
-    // jlong and int64_t are both exactly 64-bit signed integers on every JVM (see the static_assert
-    // near the top of this file), so GetLongArrayRegion can write straight into InputDesc::shape --
-    // no temporary jlong buffer and no second element-wise copy needed.
-    inputs[i].shape.resize(static_cast<size_t>(nd));
-    env->GetLongArrayRegion(jshape, 0, nd, reinterpret_cast<jlong*>(inputs[i].shape.data()));
-    inputs[i].scalarType = static_cast<int8_t>(st);
-
-    void* addr = env->GetDirectBufferAddress(jbuf);
-    if (addr == nullptr) {
-      env->ThrowNew(g_illegalArgumentExceptionClass,
-                    "EtTensor.data must be a direct ByteBuffer");
-      return nullptr;
-    }
-
-    // No capacity check against the declared shape/dtype here: every EtTensor reachable through
-    // the supported DJL surface is built by EtNDManager.create(), which (a) runs DJL's own
-    // BaseNDManager.validateBuffer() before ever copying, and (b) always allocates its destination
-    // buffer to exactly shape.size() * dtype bytes -- so a buffer undersized for its paired
-    // shape/dtype cannot reach this point through any documented entry point. The only way to
-    // construct one is calling this internal org.measly.executorch.jni package directly, which
-    // package-info.java documents as unsupported, no-compatibility-guarantee API.
-    inputs[i].data = addr;
-
-    env->DeleteLocalRef(jshape);
-    env->DeleteLocalRef(jbuf);
-    env->DeleteLocalRef(jt);
-  }
-
+// Shared by forward(): runs rt->forward(inputs) and marshals the result into a fresh EtTensor[].
+// Returns nullptr with a pending exception on any failure.
+static jobjectArray runForwardAndBuildOutputs(JNIEnv* env, EtRuntime* rt,
+                                               std::span<const InputDesc> inputs) {
   try {
     auto result = rt->forward(inputs);
     auto outs = result.outputs();
@@ -379,6 +313,63 @@ Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handl
     throwJava(env, "ExecuTorch forward() failed", &e);
     return nullptr;
   }
+}
+
+// Struct-of-arrays input layout: shapes and scalar types are read once each, in full, rather than
+// per-input field-by-field. The only per-input JNI work left is a buffer lookup, which can't be
+// avoided since GetDirectBufferAddress needs to be called once per buffer regardless. See
+// EtNative.forward's javadoc.
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_org_measly_executorch_jni_EtNative_forward(JNIEnv* env, jclass, jlong handle,
+                                                 jlongArray jFlatShapes,
+                                                 jintArray jShapeOffsets,
+                                                 jintArray jScalarTypes,
+                                                 jobjectArray jBuffers) {
+  if (handle == 0) {
+    throwIllegalState(env, "forward() on a closed ExecuTorch model (native handle is 0)");
+    return nullptr;
+  }
+  auto* rt = reinterpret_cast<EtRuntime*>(handle);
+
+  jsize nIn = env->GetArrayLength(jBuffers);
+
+  // Shapes and scalar types read ONCE, in full: O(1) total array reads instead of per-input
+  // GetObjectField/GetArrayLength/GetLongArrayRegion.
+  jsize totalDims = env->GetArrayLength(jFlatShapes);
+  std::vector<jlong> flatShapes(static_cast<size_t>(totalDims));
+  env->GetLongArrayRegion(jFlatShapes, 0, totalDims, flatShapes.data());
+  std::vector<jint> offsets(static_cast<size_t>(nIn) + 1);
+  env->GetIntArrayRegion(jShapeOffsets, 0, nIn + 1, offsets.data());
+  std::vector<jint> scalarTypes(static_cast<size_t>(nIn));
+  env->GetIntArrayRegion(jScalarTypes, 0, nIn, scalarTypes.data());
+
+  std::vector<InputDesc> inputs(nIn);
+  for (jsize i = 0; i < nIn; ++i) {
+    jobject jbuf = env->GetObjectArrayElement(jBuffers, i);
+    if (jbuf == nullptr) {
+      throwIllegalArgument(env, ("buffers[" + std::to_string(i) + "] is null").c_str());
+      return nullptr;
+    }
+    void* addr = env->GetDirectBufferAddress(jbuf);
+    if (addr == nullptr) {
+      throwIllegalArgument(env, ("buffers[" + std::to_string(i) +
+                                  "] must be a direct ByteBuffer").c_str());
+      return nullptr;
+    }
+    // jlong and int64_t are layout-identical (see the static_assert near the top of this file):
+    // assign straight out of the already-read flatShapes buffer, no further conversion.
+    const jint start = offsets[static_cast<size_t>(i)];
+    const jint end = offsets[static_cast<size_t>(i) + 1];
+    inputs[i].shape.assign(
+        reinterpret_cast<const int64_t*>(flatShapes.data()) + start,
+        reinterpret_cast<const int64_t*>(flatShapes.data()) + end);
+    inputs[i].scalarType = static_cast<int8_t>(scalarTypes[static_cast<size_t>(i)]);
+    inputs[i].data = addr;
+
+    env->DeleteLocalRef(jbuf);
+  }
+
+  return runForwardAndBuildOutputs(env, rt, inputs);
 }
 
 // Frees the runtime and its arena. A handle of 0 is safe -- `delete` on a null pointer is a defined

@@ -84,15 +84,32 @@ public final class EtNative {
     public static native long stagingBytes(long handle);
 
     /**
-     * Runs the model's {@code forward} method on {@code inputs}.
+     * Runs the model's {@code forward} method on a struct-of-arrays input layout.
+     *
+     * <p>Shapes and scalar types are read on the native side once each, in full, rather than
+     * per-input field-by-field -- the only per-input JNI work left is a buffer lookup, which
+     * cannot be avoided since each buffer needs its own address. Measured ~5% faster than an
+     * array-of-{@code EtTensor} predecessor of this method on a 41-input model (see git history:
+     * {@code spike/flat-array-forward}).
      *
      * @param handle the native handle
-     * @param inputs one {@link EtTensor} per declared input, in position order
+     * @param flatShapes every input's shape dimensions concatenated, outermost-first within each
+     *     input, inputs in position order
+     * @param shapeOffsets length {@code buffers.length + 1}; input {@code i}'s dimensions are
+     *     {@code flatShapes[shapeOffsets[i] .. shapeOffsets[i+1])}
+     * @param scalarTypes one ExecuTorch {@code ScalarType} code per input, in position order
+     * @param buffers one direct {@link java.nio.ByteBuffer} per input, in position order; a null
+     *     element is rejected the same way a null {@code EtTensor} element used to be
      * @return one {@link EtTensor} per model output, each a heap-buffer single copy out of
      *     ExecuTorch's arena
      * @throws IllegalStateException if {@code handle} is 0, i.e. the model has been closed
      */
-    public static native EtTensor[] forward(long handle, EtTensor[] inputs);
+    public static native EtTensor[] forward(
+            long handle,
+            long[] flatShapes,
+            int[] shapeOffsets,
+            int[] scalarTypes,
+            java.nio.ByteBuffer[] buffers);
 
     /**
      * Releases the native module and its arena. Idempotent on the Java side is not guaranteed;

@@ -21,8 +21,9 @@ class EtNativeTest {
         TestSupport.assumeNativeAvailable();
         long handle = EtNative.loadModule(TestSupport.addPtePath(), -1, false);
         try {
+            FlatInputs in = FlatInputs.of(floatScalar(2f), floatScalar(3f));
             EtTensor[] out = EtNative.forward(
-                    handle, new EtTensor[] {floatScalar(2f), floatScalar(3f)});
+                    handle, in.flatShapes, in.shapeOffsets, in.scalarTypes, in.buffers);
             assertEquals(1, out.length);
             assertArrayEquals(new long[] {1}, out[0].shape);
             assertEquals(6, out[0].scalarType);
@@ -44,8 +45,9 @@ class EtNativeTest {
                         + " the empty dump only discriminates where the tracer could have recorded");
         long handle = EtNative.loadModule(TestSupport.addPtePath(), -1);
         try {
+            FlatInputs in = FlatInputs.of(floatScalar(2f), floatScalar(3f));
             EtTensor[] out = EtNative.forward(
-                    handle, new EtTensor[] {floatScalar(2f), floatScalar(3f)});
+                    handle, in.flatShapes, in.shapeOffsets, in.scalarTypes, in.buffers);
             assertEquals(5f, out[0].data.order(ByteOrder.nativeOrder()).getFloat(0), 1e-6);
             // Had the overload passed profiling=true, this forward would have recorded an
             // Execute block and the dump would be non-empty.
