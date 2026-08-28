@@ -89,14 +89,19 @@ assumptions about VS edition or a specific machine):
   `include/win32/jni_md.h` and never links `libjvm`. CI binds JDK 8 deliberately (oldest supported
   `jni.h` = widest runtime compatibility), but any JDK's headers work.
 
-Key ABI constraint: the build passes `-DCMAKE_BUILD_TYPE=Release` on Windows because MSVC encodes
-the CRT flavour into every object and refuses to mix them. The pinned runtime tarball is built
-Release (`/MD`), so a non-Release shim fails to link with `LNK2038` `RuntimeLibrary`/
-`_ITERATOR_DEBUG_LEVEL` mismatches. GCC/ELF has no such ABI tag, so the Linux leg leaves the build
-type unset. MSVC does **not** reliably diagnose a CRT mismatch (no `LNK2038`, not even an
-`LNK4098`), so `native/tests/check_windows_crt.sh` is the real gate; it runs over both the shim tree
-and the QA tree. Output is `executorch_djl.dll` (no `lib` prefix), staged into
-`src/main/resources/native/windows-x86_64/`.
+`-DCMAKE_BUILD_TYPE=Release` is passed on every platform, for two independent reasons. On Windows
+it's an ABI constraint: MSVC encodes the CRT flavour into every object and refuses to mix them, and
+the pinned runtime tarball is built Release (`/MD`), so a non-Release shim fails to link with
+`LNK2038` `RuntimeLibrary`/`_ITERATOR_DEBUG_LEVEL` mismatches. MSVC does **not** reliably diagnose a
+CRT mismatch (no `LNK2038`, not even an `LNK4098`), so `native/tests/check_windows_crt.sh` is the
+real gate; it runs over both the shim tree and the QA tree.
+
+GCC/ELF has no such ABI tag, but leaving `CMAKE_BUILD_TYPE` unset on Linux is not a no-op either:
+with none given, CMake adds no `-O` flag and the compiler's own default is `-O0` — every
+Linux/macOS shim build was unoptimized until this was fixed, **including the artifact CI stages
+into the released JAR**. Measured end-to-end through `EtSymbolBlock` on a 41-input model: ~104.9us
+at the old (accidental) `-O0` vs ~39.9us at `-O3`, roughly 2.6x. Output is `executorch_djl.dll` (no
+`lib` prefix), staged into `src/main/resources/native/windows-x86_64/`.
 
 ## 5. Running the tests
 
