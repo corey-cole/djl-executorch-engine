@@ -193,10 +193,10 @@ public class DumpProfiledModel {
 
 **3. Inspect.** The Inspector ships in the `executorch` PyPI package (`executorch.devtools`); run
 the same executorch version as the pinned runtime (`EtEngine.EXECUTORCH_VERSION`, currently
-`1.4.1`), because the ETDump schema is a compatibility surface across versions:
+`1.5.1`), because the ETDump schema is a compatibility surface across versions:
 
 ```bash
-uv run --python 3.11 --with executorch==1.4.1 python inspect_etdump.py
+uv run --python 3.11 --with executorch==1.5.1 python inspect_etdump.py
 ```
 
 with `inspect_etdump.py`:
