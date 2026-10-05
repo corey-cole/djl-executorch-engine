@@ -51,7 +51,7 @@ Supported platforms: `linux-x86_64`, `linux-aarch64` and `windows-x86_64`. **All
 The engine links against the ExecuTorch runtime, but that runtime is **downloaded**, not compiled. CMake `FetchContent`s a hash-pinned, build-attested tarball published by the separate [`executorch-runtime-dist`](https://github.com/measly-java-learning/executorch-runtime-dist) repo. The pin lives in `native/cmake/EtRuntimePin.cmake` (**generated — do not hand-edit**; bump by replacing the whole file with the asset from the next `v<etver>-<pkgrev>` release, then re-applying the comment header). The SHA256 change is the supply-chain review gate. **After a pin bump, re-run `./native/gen_clangd_db.sh`** — the clangd database is refreshed only by that script, so it otherwise keeps resolving against the previous runtime's headers, silently and with no warning.
 
 - **Escape hatch**: set `ET_INSTALL=/path/to/et-install` to link an existing runtime tree; CMake then skips the download.
-- ExecuTorch runtime version is currently `1.4.1` (pin `1.4.1-3`); mirrored in `EtEngine.EXECUTORCH_VERSION`.
+- ExecuTorch runtime version is currently `1.5.1` (pin `1.5.1-1`); mirrored in `EtEngine.EXECUTORCH_VERSION`.
 - The pin file defines `et_runtime_dist_url(<variant> <row> <out_url> <out_sha>)` and
   `native/CMakeLists.txt` resolves rows through it. Do not rebuild `ET_RUNTIME_URL_<variant>_<row>`
   names by hand: an unpublished pair expands to an empty string and surfaces as an opaque
@@ -91,7 +91,7 @@ The engine links against the ExecuTorch runtime, but that runtime is **downloade
 
 ### glibc floor (important for releases)
 
-ExecuTorch 1.4.1 pins `torch==2.13.0`, whose wheel needs **glibc ≥ 2.28**. So the shipped `.so` must be built inside a `manylinux_2_28` container to keep that floor (covers RHEL/Rocky 8+, Ubuntu 20.04+, Debian 11+). Building on the host produces a `.so` linked against host glibc that **breaks the floor** — fine for local `./gradlew test`, never for a release.
+ExecuTorch 1.5.1 pins `torch==2.14.0`, whose wheel needs **glibc ≥ 2.28** (it is tagged `manylinux_2_28`; the floor was first measured on 2.13.0). So the shipped `.so` must be built inside a `manylinux_2_28` container to keep that floor (covers RHEL/Rocky 8+, Ubuntu 20.04+, Debian 11+). Building on the host produces a `.so` linked against host glibc that **breaks the floor** — fine for local `./gradlew test`, never for a release.
 
 ## Build & test
 
