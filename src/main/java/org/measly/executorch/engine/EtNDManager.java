@@ -57,7 +57,9 @@ public class EtNDManager extends BaseNDManager {
         }
         int size = Math.toIntExact(shape.size());
         BaseNDManager.validateBuffer(data, dataType, size);
-        ByteBuffer bb = allocateDirect(size * dataType.getNumOfBytes());
+        // multiplyExact, matching DJL's own fix for GHSA-cqqg-r2fh-7jjm: validateBuffer counts
+        // elements for a typed buffer, so a byte count past int range would otherwise wrap.
+        ByteBuffer bb = allocateDirect(Math.multiplyExact(size, dataType.getNumOfBytes()));
         copyInto(bb, data, dataType);
         bb.rewind();
         return new EtNDArray(this, alternativeManager, bb, shape, dataType);
