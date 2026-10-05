@@ -1,6 +1,6 @@
 # ExecuTorch Engine for DJL
 
-As of its most recent version (0.36.0), [DJL](https://djl.ai/) can only load PyTorch models exported
+As of its most recent version (0.38.0), [DJL](https://djl.ai/) can only load PyTorch models exported
 through the TorchScript API, which PyTorch deprecated several point releases ago.  The successor to TorchScript
 is the Dynamo API which can support multiple pluggable backends.  One of these backends is 
 the [ExecuTorch](https://executorch.ai/) backend — a lightweight, cross-language runtime built for
